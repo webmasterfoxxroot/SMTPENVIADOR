@@ -1,0 +1,51 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+smtpenviador
+
+# Test binary
+*.test
+
+# Output
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace
+go.work
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Node
+node_modules/
+dashboard/dist/
+dashboard/node_modules/
+
+# Docker volumes
+postgres_data/
+redis_data/
+
+# Temp files
+tmp/
+temp/
