@@ -4,14 +4,13 @@ FROM golang:1.21-alpine AS builder
 WORKDIR /app
 
 # Install dependencies
-RUN apk add --no-cache gcc musl-dev
+RUN apk add --no-cache gcc musl-dev git
 
-# Copy go mod files
-COPY go.mod go.sum* ./
-RUN go mod download
-
-# Copy source code
+# Copy source code first
 COPY . .
+
+# Download dependencies and generate go.sum
+RUN go mod tidy
 
 # Build binary
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o smtpenviador ./cmd/main.go
