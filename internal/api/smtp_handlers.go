@@ -553,10 +553,16 @@ func (s *Server) addSMTPSendersBulk(c *fiber.Ctx) error {
 	smtpID := c.Params("id")
 
 	var req struct {
-		Senders []SenderRequest `json:"senders"`
+		Senders      []SenderRequest `json:"senders"`
+		ClearExisting bool           `json:"clear_existing"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	// Clear existing senders if requested
+	if req.ClearExisting {
+		s.db.Exec(`DELETE FROM smtp_senders WHERE smtp_id = $1`, smtpID)
 	}
 
 	added := 0
@@ -568,15 +574,18 @@ func (s *Server) addSMTPSendersBulk(c *fiber.Ctx) error {
 		_, err := s.db.Exec(`
 			INSERT INTO smtp_senders (id, smtp_id, email, name, reply_to, active)
 			VALUES ($1, $2, $3, $4, $5, $6)
-			ON CONFLICT (smtp_id, email) DO NOTHING
+			ON CONFLICT (smtp_id, email) DO UPDATE SET name = $4, reply_to = $5
 		`, id, smtpID, sender.Email, sender.Name, sender.ReplyTo, true)
 		if err == nil {
 			added++
 		}
 	}
 
+	// Refresh engine SMTP pool to load new senders
+	s.engine.RefreshSMTPs()
+
 	return c.Status(201).JSON(fiber.Map{
-		"message": "Senders added",
+		"message": "Senders saved",
 		"added":   added,
 	})
 }

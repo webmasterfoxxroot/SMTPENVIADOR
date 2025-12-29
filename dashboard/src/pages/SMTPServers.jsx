@@ -27,19 +27,63 @@ function SMTPModal({ smtp, onClose, onSave }) {
     active: true,
     ...smtp
   })
+  const [senders, setSenders] = useState('')
   const [loading, setLoading] = useState(false)
+  const [loadingSenders, setLoadingSenders] = useState(false)
+
+  // Load existing senders when editing
+  useEffect(() => {
+    if (smtp?.id) {
+      loadSenders()
+    }
+  }, [smtp?.id])
+
+  const loadSenders = async () => {
+    try {
+      const response = await api.get(`/smtp/${smtp.id}/senders`)
+      const senderList = response.data.data || []
+      const senderText = senderList.map(s => {
+        if (s.name) return `${s.email}|${s.name}`
+        return s.email
+      }).join('\n')
+      setSenders(senderText)
+    } catch (error) {
+      console.error('Error loading senders:', error)
+    }
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoading(true)
     try {
+      let smtpId = smtp?.id
+
       if (smtp?.id) {
         await api.put(`/smtp/${smtp.id}`, form)
-        toast.success('SMTP atualizado!')
       } else {
-        await api.post('/smtp', form)
-        toast.success('SMTP criado!')
+        const response = await api.post('/smtp', form)
+        smtpId = response.data.id
       }
+
+      // Save senders if we have an SMTP ID
+      if (smtpId) {
+        const senderLines = senders.trim().split('\n').filter(line => line.trim())
+        const senderData = senderLines.map(line => {
+          const parts = line.trim().split('|')
+          return {
+            email: parts[0].trim(),
+            name: parts[1]?.trim() || ''
+          }
+        })
+
+        // Always call bulk endpoint with clear_existing to sync senders
+        await api.post(`/smtp/${smtpId}/senders/bulk`, {
+          senders: senderData,
+          clear_existing: true
+        })
+      }
+
+      toast.success(smtp?.id ? 'SMTP atualizado!' : 'SMTP criado!')
       onSave()
     } catch (error) {
       toast.error(error.response?.data?.error || 'Erro ao salvar')
@@ -170,6 +214,20 @@ function SMTPModal({ smtp, onClose, onSave }) {
                 Ativo
               </label>
             </div>
+          </div>
+
+          <div>
+            <label className="label">Remetentes (um por linha)</label>
+            <textarea
+              value={senders}
+              onChange={(e) => setSenders(e.target.value)}
+              className="input min-h-[120px] font-mono text-sm"
+              placeholder={"email@exemplo.com\nemail2@exemplo.com|Nome do Remetente\nemail3@exemplo.com|Outro Nome"}
+              rows={5}
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Formato: email ou email|nome (ex: contato@empresa.com|Empresa XYZ)
+            </p>
           </div>
 
           <div className="flex justify-end gap-3 pt-4">
