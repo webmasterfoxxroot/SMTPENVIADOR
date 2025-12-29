@@ -65,14 +65,19 @@ func (w *Worker) processJob() {
 		return
 	}
 
+	log.Printf("📬 Worker %d: Processing job for %s", w.id, job.To)
+
 	// Get SMTP connection
 	smtp := w.smtpPool.GetNextSMTP()
 	if smtp == nil {
 		// No SMTPs available, push job back and wait
+		log.Printf("⚠️ Worker %d: No SMTP available, pushing job back", w.id)
 		w.queue.Push(job)
 		time.Sleep(1 * time.Second)
 		return
 	}
+
+	log.Printf("📤 Worker %d: Using SMTP %s to send to %s", w.id, smtp.Name, job.To)
 
 	// Check rate limit
 	if !w.queue.CheckRateLimit(smtp.ID, smtp.MaxPerMinute) {
@@ -116,9 +121,11 @@ func (w *Worker) processJob() {
 		// Retry logic
 		if job.Retries < 3 {
 			job.Retries++
+			log.Printf("🔄 Worker %d: Retry %d for %s", w.id, job.Retries, job.To)
 			w.queue.Push(job)
 		} else {
 			w.queue.PushFailed(job, err.Error())
+			w.updateCampaignFailedCount(job.CampaignID)
 		}
 
 		log.Printf("❌ Worker %d: Failed to send to %s: %v", w.id, job.To, err)
@@ -130,6 +137,19 @@ func (w *Worker) processJob() {
 	w.queue.IncrementStat("sent", 1)
 	w.updateEmailStatus(job.ID, "sent", "")
 	w.updateSMTPStats(smtp.ID, true)
+	w.updateCampaignSentCount(job.CampaignID)
+
+	log.Printf("✅ Worker %d: Sent email to %s via %s", w.id, job.To, smtp.Name)
+}
+
+// updateCampaignSentCount updates the campaign sent_count
+func (w *Worker) updateCampaignSentCount(campaignID string) {
+	w.db.Exec(`UPDATE campaigns SET sent_count = sent_count + 1 WHERE id = $1`, campaignID)
+}
+
+// updateCampaignFailedCount updates the campaign failed_count
+func (w *Worker) updateCampaignFailedCount(campaignID string) {
+	w.db.Exec(`UPDATE campaigns SET failed_count = failed_count + 1 WHERE id = $1`, campaignID)
 }
 
 // processVariables replaces variables in content

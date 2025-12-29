@@ -389,6 +389,9 @@ func (s *Server) testSMTP(c *fiber.Ctx) error {
 	// Update status to online
 	s.db.Exec(`UPDATE smtp_servers SET status = 'online', last_check = NOW() WHERE id = $1`, id)
 
+	// Refresh engine SMTP pool to update in-memory status
+	s.engine.RefreshSMTPs()
+
 	return c.JSON(fiber.Map{
 		"message": "SMTP connection successful",
 		"status":  "online",
