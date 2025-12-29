@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"crypto/tls"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -289,7 +290,7 @@ func (s *SMTPConnection) Send(params SendParams) error {
 	headers := make(map[string]string)
 	headers["From"] = formatAddress(params.FromName, params.From)
 	headers["To"] = formatAddress(params.ToName, params.To)
-	headers["Subject"] = params.Subject
+	headers["Subject"] = encodeRFC2047(params.Subject)
 	headers["MIME-Version"] = "1.0"
 	headers["Content-Type"] = `multipart/alternative; boundary="boundary-smtpenviador"`
 
@@ -528,10 +529,29 @@ func (s *SMTPConnection) Close() {
 	}
 }
 
-// formatAddress formats email address with name
+// formatAddress formats email address with name (RFC 2047 encoded)
 func formatAddress(name, email string) string {
 	if name == "" {
 		return email
 	}
-	return fmt.Sprintf("%s <%s>", name, email)
+	// Encode name with RFC 2047 Base64 encoding to handle UTF-8 characters
+	encodedName := encodeRFC2047(name)
+	return fmt.Sprintf("%s <%s>", encodedName, email)
+}
+
+// encodeRFC2047 encodes a string using RFC 2047 Base64 for email headers
+func encodeRFC2047(s string) string {
+	// Check if encoding is needed (non-ASCII characters)
+	needsEncoding := false
+	for _, r := range s {
+		if r > 127 {
+			needsEncoding = true
+			break
+		}
+	}
+	if !needsEncoding {
+		return s
+	}
+	// Use Base64 encoding for UTF-8
+	return "=?UTF-8?B?" + base64.StdEncoding.EncodeToString([]byte(s)) + "?="
 }
