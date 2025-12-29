@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/smtp"
@@ -246,46 +247,102 @@ func (s *Server) testSMTP(c *fiber.Ctx) error {
 
 	var host, username, password string
 	var port int
-	var tls bool
+	var useTLS bool
 
 	err := s.db.QueryRow(`
 		SELECT host, port, username, password, tls FROM smtp_servers WHERE id = $1
-	`, id).Scan(&host, &port, &username, &password, &tls)
+	`, id).Scan(&host, &port, &username, &password, &useTLS)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "SMTP server not found"})
 	}
 
-	// Test connection
 	addr := fmt.Sprintf("%s:%d", host, port)
-	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
-	if err != nil {
-		s.db.Exec(`UPDATE smtp_servers SET status = 'offline', last_check = NOW() WHERE id = $1`, id)
-		return c.Status(400).JSON(fiber.Map{
-			"error":   "Connection failed",
-			"details": err.Error(),
-		})
-	}
-	defer conn.Close()
+	var client *smtp.Client
 
-	// Test SMTP AUTH
-	auth := smtp.PlainAuth("", username, password, host)
-	client, err := smtp.NewClient(conn, host)
-	if err != nil {
-		s.db.Exec(`UPDATE smtp_servers SET status = 'error', last_check = NOW() WHERE id = $1`, id)
-		return c.Status(400).JSON(fiber.Map{
-			"error":   "SMTP client failed",
-			"details": err.Error(),
-		})
+	// Port 465 uses implicit TLS (SMTPS), other ports use STARTTLS
+	if port == 465 {
+		// Direct TLS connection
+		tlsConfig := &tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: true, // Allow self-signed certs
+		}
+		conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", addr, tlsConfig)
+		if err != nil {
+			s.db.Exec(`UPDATE smtp_servers SET status = 'offline', last_check = NOW() WHERE id = $1`, id)
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "TLS connection failed",
+				"details": err.Error(),
+			})
+		}
+		defer conn.Close()
+
+		client, err = smtp.NewClient(conn, host)
+		if err != nil {
+			s.db.Exec(`UPDATE smtp_servers SET status = 'error', last_check = NOW() WHERE id = $1`, id)
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "SMTP client failed",
+				"details": err.Error(),
+			})
+		}
+	} else {
+		// Regular connection with optional STARTTLS
+		conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+		if err != nil {
+			s.db.Exec(`UPDATE smtp_servers SET status = 'offline', last_check = NOW() WHERE id = $1`, id)
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "Connection failed",
+				"details": err.Error(),
+			})
+		}
+		defer conn.Close()
+
+		client, err = smtp.NewClient(conn, host)
+		if err != nil {
+			s.db.Exec(`UPDATE smtp_servers SET status = 'error', last_check = NOW() WHERE id = $1`, id)
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "SMTP client failed",
+				"details": err.Error(),
+			})
+		}
+
+		// Say hello first
+		if err := client.Hello("localhost"); err != nil {
+			s.db.Exec(`UPDATE smtp_servers SET status = 'error', last_check = NOW() WHERE id = $1`, id)
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "SMTP HELO failed",
+				"details": err.Error(),
+			})
+		}
+
+		// Use STARTTLS if enabled
+		if useTLS {
+			tlsConfig := &tls.Config{
+				ServerName:         host,
+				InsecureSkipVerify: true, // Allow self-signed certs
+			}
+			if err := client.StartTLS(tlsConfig); err != nil {
+				s.db.Exec(`UPDATE smtp_servers SET status = 'error', last_check = NOW() WHERE id = $1`, id)
+				return c.Status(400).JSON(fiber.Map{
+					"error":   "STARTTLS failed",
+					"details": err.Error(),
+				})
+			}
+		}
 	}
 	defer client.Close()
 
+	// Test SMTP AUTH
+	auth := smtp.PlainAuth("", username, password, host)
 	if err := client.Auth(auth); err != nil {
-		s.db.Exec(`UPDATE smtp_servers SET status = 'error', last_check = NOW() WHERE id = $1`, id)
-		return c.Status(400).JSON(fiber.Map{
-			"error":   "Authentication failed",
-			"details": err.Error(),
-		})
+		// Try LOGIN auth if PLAIN fails
+		if err2 := client.Auth(LoginAuth(username, password)); err2 != nil {
+			s.db.Exec(`UPDATE smtp_servers SET status = 'error', last_check = NOW() WHERE id = $1`, id)
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "Authentication failed",
+				"details": err.Error(),
+			})
+		}
 	}
 
 	// Update status to online
@@ -295,6 +352,33 @@ func (s *Server) testSMTP(c *fiber.Ctx) error {
 		"message": "SMTP connection successful",
 		"status":  "online",
 	})
+}
+
+// LoginAuth implements LOGIN authentication
+type loginAuth struct {
+	username, password string
+}
+
+func LoginAuth(username, password string) smtp.Auth {
+	return &loginAuth{username, password}
+}
+
+func (a *loginAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	return "LOGIN", []byte{}, nil
+}
+
+func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
+	if more {
+		switch string(fromServer) {
+		case "Username:":
+			return []byte(a.username), nil
+		case "Password:":
+			return []byte(a.password), nil
+		default:
+			return nil, fmt.Errorf("unknown from server: %s", string(fromServer))
+		}
+	}
+	return nil, nil
 }
 
 // refreshSMTPs reloads SMTP servers into the engine

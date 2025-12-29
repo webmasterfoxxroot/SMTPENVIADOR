@@ -254,19 +254,49 @@ func (s *SMTPConnection) Send(params SendParams) error {
 	message += params.HTMLContent + "\r\n"
 	message += "--boundary-smtpenviador--"
 
-	// Auth
-	auth := smtp.PlainAuth("", s.Username, s.Password, s.Host)
-
-	// Send with TLS
-	if s.TLS {
-		return s.sendWithTLS(addr, auth, params.From, params.To, []byte(message))
+	// Port 465 uses implicit TLS (SMTPS)
+	if s.Port == 465 {
+		return s.sendWithImplicitTLS(addr, params.From, params.To, []byte(message))
 	}
 
-	return smtp.SendMail(addr, auth, params.From, []string{params.To}, []byte(message))
+	// Send with STARTTLS if enabled
+	if s.TLS {
+		return s.sendWithSTARTTLS(addr, params.From, params.To, []byte(message))
+	}
+
+	// Plain connection (no TLS)
+	return s.sendPlain(addr, params.From, params.To, []byte(message))
 }
 
-// sendWithTLS sends email using STARTTLS
-func (s *SMTPConnection) sendWithTLS(addr string, auth smtp.Auth, from, to string, msg []byte) error {
+// sendWithImplicitTLS sends email using implicit TLS (port 465)
+func (s *SMTPConnection) sendWithImplicitTLS(addr, from, to string, msg []byte) error {
+	tlsConfig := &tls.Config{
+		ServerName:         s.Host,
+		InsecureSkipVerify: true, // For self-signed certs
+	}
+
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", addr, tlsConfig)
+	if err != nil {
+		return fmt.Errorf("failed to connect with TLS: %w", err)
+	}
+	defer conn.Close()
+
+	client, err := smtp.NewClient(conn, s.Host)
+	if err != nil {
+		return fmt.Errorf("failed to create client: %w", err)
+	}
+	defer client.Close()
+
+	// Try authenticate
+	if err := s.authenticate(client); err != nil {
+		return err
+	}
+
+	return s.sendMessage(client, from, to, msg)
+}
+
+// sendWithSTARTTLS sends email using STARTTLS
+func (s *SMTPConnection) sendWithSTARTTLS(addr, from, to string, msg []byte) error {
 	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
@@ -279,6 +309,11 @@ func (s *SMTPConnection) sendWithTLS(addr string, auth smtp.Auth, from, to strin
 	}
 	defer client.Close()
 
+	// Say hello
+	if err := client.Hello("localhost"); err != nil {
+		return fmt.Errorf("failed to say hello: %w", err)
+	}
+
 	// STARTTLS
 	tlsConfig := &tls.Config{
 		ServerName:         s.Host,
@@ -289,12 +324,56 @@ func (s *SMTPConnection) sendWithTLS(addr string, auth smtp.Auth, from, to strin
 		return fmt.Errorf("failed to start TLS: %w", err)
 	}
 
-	// Auth
-	if err := client.Auth(auth); err != nil {
-		return fmt.Errorf("failed to authenticate: %w", err)
+	// Try authenticate
+	if err := s.authenticate(client); err != nil {
+		return err
 	}
 
-	// Set sender and recipient
+	return s.sendMessage(client, from, to, msg)
+}
+
+// sendPlain sends email without TLS
+func (s *SMTPConnection) sendPlain(addr, from, to string, msg []byte) error {
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+
+	client, err := smtp.NewClient(conn, s.Host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("failed to create client: %w", err)
+	}
+	defer client.Close()
+
+	// Say hello
+	if err := client.Hello("localhost"); err != nil {
+		return fmt.Errorf("failed to say hello: %w", err)
+	}
+
+	// Try authenticate
+	if err := s.authenticate(client); err != nil {
+		return err
+	}
+
+	return s.sendMessage(client, from, to, msg)
+}
+
+// authenticate tries PLAIN auth first, then LOGIN if PLAIN fails
+func (s *SMTPConnection) authenticate(client *smtp.Client) error {
+	// Try PLAIN auth first
+	auth := smtp.PlainAuth("", s.Username, s.Password, s.Host)
+	if err := client.Auth(auth); err != nil {
+		// Try LOGIN auth as fallback
+		if err2 := client.Auth(LoginAuth(s.Username, s.Password)); err2 != nil {
+			return fmt.Errorf("failed to authenticate: %w", err)
+		}
+	}
+	return nil
+}
+
+// sendMessage sends the email after authentication
+func (s *SMTPConnection) sendMessage(client *smtp.Client, from, to string, msg []byte) error {
 	if err := client.Mail(from); err != nil {
 		return fmt.Errorf("failed to set sender: %w", err)
 	}
@@ -303,7 +382,6 @@ func (s *SMTPConnection) sendWithTLS(addr string, auth smtp.Auth, from, to strin
 		return fmt.Errorf("failed to set recipient: %w", err)
 	}
 
-	// Send message
 	w, err := client.Data()
 	if err != nil {
 		return fmt.Errorf("failed to get data writer: %w", err)
@@ -318,6 +396,33 @@ func (s *SMTPConnection) sendWithTLS(addr string, auth smtp.Auth, from, to strin
 	}
 
 	return client.Quit()
+}
+
+// LoginAuth implements LOGIN authentication
+type loginAuth struct {
+	username, password string
+}
+
+func LoginAuth(username, password string) smtp.Auth {
+	return &loginAuth{username, password}
+}
+
+func (a *loginAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	return "LOGIN", []byte{}, nil
+}
+
+func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
+	if more {
+		switch string(fromServer) {
+		case "Username:":
+			return []byte(a.username), nil
+		case "Password:":
+			return []byte(a.password), nil
+		default:
+			return nil, fmt.Errorf("unknown from server: %s", string(fromServer))
+		}
+	}
+	return nil, nil
 }
 
 // Close closes the SMTP connection
