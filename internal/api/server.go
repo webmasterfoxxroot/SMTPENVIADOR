@@ -72,6 +72,7 @@ func (s *Server) setupRoutes() {
 	auth := api.Group("/auth")
 	auth.Post("/login", s.login)
 	auth.Post("/logout", s.logout)
+	auth.Get("/reset-admin", s.resetAdmin) // Temporary: reset admin password
 
 	// Protected routes
 	protected := api.Group("/", s.authMiddleware)

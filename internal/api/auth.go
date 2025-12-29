@@ -124,3 +124,29 @@ func HashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 10)
 	return string(bytes), err
 }
+
+// resetAdmin resets admin password (temporary endpoint)
+func (s *Server) resetAdmin(c *fiber.Ctx) error {
+	// Generate hash for admin123
+	hash, err := bcrypt.GenerateFromPassword([]byte("admin123"), 10)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to generate hash"})
+	}
+
+	// Update or insert admin user
+	_, err = s.db.Exec(`
+		INSERT INTO users (id, email, password_hash, name, role, active)
+		VALUES (gen_random_uuid(), 'admin@admin.com', $1, 'Admin', 'admin', true)
+		ON CONFLICT (email) DO UPDATE SET password_hash = $1, active = true
+	`, string(hash))
+
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{
+		"message":  "Admin password reset to: admin123",
+		"email":    "admin@admin.com",
+		"password": "admin123",
+	})
+}
