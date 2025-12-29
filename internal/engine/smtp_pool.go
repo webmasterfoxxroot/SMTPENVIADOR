@@ -286,13 +286,19 @@ func (s *SMTPConnection) Send(params SendParams) error {
 
 	addr := fmt.Sprintf("%s:%d", s.Host, s.Port)
 
+	// Generate unique boundary and message ID
+	boundary := fmt.Sprintf("----=_Part_%d_%d", time.Now().UnixNano(), time.Now().Unix())
+	messageID := fmt.Sprintf("<%d.%d@%s>", time.Now().UnixNano(), time.Now().Unix(), s.Host)
+
 	// Create message
 	headers := make(map[string]string)
 	headers["From"] = formatAddress(params.FromName, params.From)
 	headers["To"] = formatAddress(params.ToName, params.To)
+	headers["Date"] = time.Now().Format("Mon, 02 Jan 2006 15:04:05 -0700")
+	headers["Message-Id"] = messageID
 	headers["Subject"] = encodeRFC2047(params.Subject)
 	headers["MIME-Version"] = "1.0"
-	headers["Content-Type"] = `multipart/alternative; boundary="boundary-smtpenviador"`
+	headers["Content-Type"] = fmt.Sprintf("multipart/alternative; boundary=\"%s\"", boundary)
 
 	if params.ReplyTo != "" {
 		headers["Reply-To"] = params.ReplyTo
@@ -306,19 +312,19 @@ func (s *SMTPConnection) Send(params SendParams) error {
 	message += "\r\n"
 
 	// Text part - use base64 encoding for UTF-8 safety
-	message += "--boundary-smtpenviador\r\n"
-	message += "Content-Type: text/plain; charset=\"UTF-8\"\r\n"
+	message += "--" + boundary + "\r\n"
+	message += "Content-Type: text/plain; charset=utf-8\r\n"
 	message += "Content-Transfer-Encoding: base64\r\n\r\n"
 	if params.TextContent != "" {
 		message += base64.StdEncoding.EncodeToString([]byte(params.TextContent)) + "\r\n"
 	}
 
 	// HTML part - use base64 encoding for UTF-8 safety
-	message += "--boundary-smtpenviador\r\n"
-	message += "Content-Type: text/html; charset=\"UTF-8\"\r\n"
+	message += "--" + boundary + "\r\n"
+	message += "Content-Type: text/html; charset=utf-8\r\n"
 	message += "Content-Transfer-Encoding: base64\r\n\r\n"
 	message += base64.StdEncoding.EncodeToString([]byte(params.HTMLContent)) + "\r\n"
-	message += "--boundary-smtpenviador--"
+	message += "--" + boundary + "--"
 
 	// Handle different TLS modes
 	switch s.TLSMode {
