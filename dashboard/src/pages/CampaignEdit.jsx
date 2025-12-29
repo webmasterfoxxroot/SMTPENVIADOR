@@ -14,9 +14,6 @@ function CampaignEdit() {
   const [form, setForm] = useState({
     name: '',
     subject: '',
-    from_name: '',
-    from_email: '',
-    reply_to: '',
     html_content: '',
     text_content: '',
     list_id: '',
@@ -126,45 +123,6 @@ function CampaignEdit() {
                 ))}
               </select>
             </div>
-          </div>
-        </div>
-
-        <div className="card">
-          <h2 className="text-lg font-semibold mb-4">Remetente</h2>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="label">Nome do Remetente</label>
-              <input
-                type="text"
-                value={form.from_name}
-                onChange={(e) => setForm({ ...form, from_name: e.target.value })}
-                className="input"
-                placeholder="Minha Empresa"
-                required
-              />
-            </div>
-            <div>
-              <label className="label">Email do Remetente</label>
-              <input
-                type="email"
-                value={form.from_email}
-                onChange={(e) => setForm({ ...form, from_email: e.target.value })}
-                className="input"
-                placeholder="contato@empresa.com"
-                required
-              />
-            </div>
-            <div>
-              <label className="label">Responder Para (opcional)</label>
-              <input
-                type="email"
-                value={form.reply_to}
-                onChange={(e) => setForm({ ...form, reply_to: e.target.value })}
-                className="input"
-                placeholder="respostas@empresa.com"
-              />
-            </div>
             <div>
               <label className="label">Taxa de Envio (emails/min, 0 = ilimitado)</label>
               <input
@@ -174,6 +132,9 @@ function CampaignEdit() {
                 className="input"
                 min="0"
               />
+              <p className="text-xs text-gray-500 mt-1">
+                O remetente será usado automaticamente do SMTP que estiver enviando
+              </p>
             </div>
           </div>
         </div>

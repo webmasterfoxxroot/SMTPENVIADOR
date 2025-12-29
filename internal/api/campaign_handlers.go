@@ -97,8 +97,8 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
 	}
 
-	// Validate
-	if req.Name == "" || req.Subject == "" || req.FromEmail == "" || req.HTMLContent == "" {
+	// Validate - from_email not required anymore (comes from SMTP senders)
+	if req.Name == "" || req.Subject == "" || req.HTMLContent == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "Missing required fields"})
 	}
 
