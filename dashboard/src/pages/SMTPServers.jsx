@@ -20,7 +20,7 @@ function SMTPModal({ smtp, onClose, onSave }) {
     port: 587,
     username: '',
     password: '',
-    tls: true,
+    tls_mode: 'starttls',
     max_per_minute: 1000,
     max_per_hour: 50000,
     max_connections: 5,
@@ -146,25 +146,30 @@ function SMTPModal({ smtp, onClose, onSave }) {
             </div>
           </div>
 
-          <div className="flex items-center gap-6">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={form.tls}
-                onChange={(e) => setForm({ ...form, tls: e.target.checked })}
-                className="w-4 h-4"
-              />
-              Usar TLS/STARTTLS
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={form.active}
-                onChange={(e) => setForm({ ...form, active: e.target.checked })}
-                className="w-4 h-4"
-              />
-              Ativo
-            </label>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Modo TLS</label>
+              <select
+                value={form.tls_mode}
+                onChange={(e) => setForm({ ...form, tls_mode: e.target.value })}
+                className="input"
+              >
+                <option value="none">Nenhum (sem criptografia)</option>
+                <option value="starttls">STARTTLS (porta 587/25)</option>
+                <option value="tls">TLS Implícito (porta 465/outras)</option>
+              </select>
+            </div>
+            <div className="flex items-end pb-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.active}
+                  onChange={(e) => setForm({ ...form, active: e.target.checked })}
+                  className="w-4 h-4"
+                />
+                Ativo
+              </label>
+            </div>
           </div>
 
           <div className="flex justify-end gap-3 pt-4">
@@ -284,6 +289,7 @@ function SMTPServers() {
               <tr>
                 <th>Nome</th>
                 <th>Host</th>
+                <th>TLS</th>
                 <th>Status</th>
                 <th>Limite</th>
                 <th>Enviados</th>
@@ -297,6 +303,9 @@ function SMTPServers() {
                   <td className="font-medium">{smtp.name}</td>
                   <td className="text-gray-600">
                     {smtp.host}:{smtp.port}
+                  </td>
+                  <td className="text-gray-600 text-sm">
+                    {smtp.tls_mode === 'tls' ? 'TLS' : smtp.tls_mode === 'starttls' ? 'STARTTLS' : 'Nenhum'}
                   </td>
                   <td>{getStatusBadge(smtp.status)}</td>
                   <td className="text-gray-600">

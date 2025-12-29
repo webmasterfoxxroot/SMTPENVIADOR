@@ -23,7 +23,7 @@ CREATE TABLE smtp_servers (
     port INTEGER NOT NULL DEFAULT 587,
     username VARCHAR(255) NOT NULL,
     password VARCHAR(255) NOT NULL,
-    tls BOOLEAN DEFAULT true,
+    tls_mode VARCHAR(20) DEFAULT 'starttls', -- none, starttls, tls (implicit)
     max_per_minute INTEGER DEFAULT 1000,
     max_per_hour INTEGER DEFAULT 50000,
     max_connections INTEGER DEFAULT 5,

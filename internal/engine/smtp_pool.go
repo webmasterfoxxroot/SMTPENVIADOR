@@ -29,7 +29,7 @@ type SMTPConnection struct {
 	Port           int
 	Username       string
 	Password       string
-	TLS            bool
+	TLSMode        string // none, starttls, tls
 	MaxPerMinute   int
 	MaxPerHour     int
 	MaxConnections int
@@ -68,7 +68,7 @@ func (p *SMTPPool) LoadServers() error {
 	defer p.mu.Unlock()
 
 	rows, err := p.db.Query(`
-		SELECT id, name, host, port, username, password, tls,
+		SELECT id, name, host, port, username, password, tls_mode,
 		       max_per_minute, max_per_hour, max_connections, active, status
 		FROM smtp_servers WHERE active = true
 	`)
@@ -87,7 +87,7 @@ func (p *SMTPPool) LoadServers() error {
 		var s SMTPConnection
 		err := rows.Scan(
 			&s.ID, &s.Name, &s.Host, &s.Port, &s.Username, &s.Password,
-			&s.TLS, &s.MaxPerMinute, &s.MaxPerHour, &s.MaxConnections,
+			&s.TLSMode, &s.MaxPerMinute, &s.MaxPerHour, &s.MaxConnections,
 			&s.Active, &s.Status,
 		)
 		if err != nil {
@@ -95,7 +95,7 @@ func (p *SMTPPool) LoadServers() error {
 			continue
 		}
 		p.servers = append(p.servers, &s)
-		log.Printf("📧 Loaded SMTP: %s (%s:%d)", s.Name, s.Host, s.Port)
+		log.Printf("📧 Loaded SMTP: %s (%s:%d) TLS: %s", s.Name, s.Host, s.Port, s.TLSMode)
 	}
 
 	log.Printf("✅ Loaded %d SMTP servers", len(p.servers))
@@ -254,18 +254,15 @@ func (s *SMTPConnection) Send(params SendParams) error {
 	message += params.HTMLContent + "\r\n"
 	message += "--boundary-smtpenviador--"
 
-	// Port 465 uses implicit TLS (SMTPS)
-	if s.Port == 465 {
+	// Handle different TLS modes
+	switch s.TLSMode {
+	case "tls":
 		return s.sendWithImplicitTLS(addr, params.From, params.To, []byte(message))
-	}
-
-	// Send with STARTTLS if enabled
-	if s.TLS {
+	case "starttls":
 		return s.sendWithSTARTTLS(addr, params.From, params.To, []byte(message))
+	default: // "none" or empty
+		return s.sendPlain(addr, params.From, params.To, []byte(message))
 	}
-
-	// Plain connection (no TLS)
-	return s.sendPlain(addr, params.From, params.To, []byte(message))
 }
 
 // sendWithImplicitTLS sends email using implicit TLS (port 465)

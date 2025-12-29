@@ -17,7 +17,7 @@ type SMTPRequest struct {
 	Port           int    `json:"port"`
 	Username       string `json:"username"`
 	Password       string `json:"password"`
-	TLS            bool   `json:"tls"`
+	TLSMode        string `json:"tls_mode"` // none, starttls, tls
 	MaxPerMinute   int    `json:"max_per_minute"`
 	MaxPerHour     int    `json:"max_per_hour"`
 	MaxConnections int    `json:"max_connections"`
@@ -27,7 +27,7 @@ type SMTPRequest struct {
 // listSMTPs returns all SMTP servers
 func (s *Server) listSMTPs(c *fiber.Ctx) error {
 	rows, err := s.db.Query(`
-		SELECT id, name, host, port, username, tls,
+		SELECT id, name, host, port, username, tls_mode,
 		       max_per_minute, max_per_hour, max_connections,
 		       active, status, last_check, total_sent, total_failed,
 		       created_at, updated_at
@@ -41,13 +41,13 @@ func (s *Server) listSMTPs(c *fiber.Ctx) error {
 
 	var servers []fiber.Map
 	for rows.Next() {
-		var id, name, host, username, status string
+		var id, name, host, username, status, tlsMode string
 		var port, maxPerMinute, maxPerHour, maxConnections int
-		var tls, active bool
+		var active bool
 		var totalSent, totalFailed int64
 		var lastCheck, createdAt, updatedAt *time.Time
 
-		err := rows.Scan(&id, &name, &host, &port, &username, &tls,
+		err := rows.Scan(&id, &name, &host, &port, &username, &tlsMode,
 			&maxPerMinute, &maxPerHour, &maxConnections,
 			&active, &status, &lastCheck, &totalSent, &totalFailed,
 			&createdAt, &updatedAt)
@@ -61,7 +61,7 @@ func (s *Server) listSMTPs(c *fiber.Ctx) error {
 			"host":            host,
 			"port":            port,
 			"username":        username,
-			"tls":             tls,
+			"tls_mode":        tlsMode,
 			"max_per_minute":  maxPerMinute,
 			"max_per_hour":    maxPerHour,
 			"max_connections": maxConnections,
@@ -96,6 +96,13 @@ func (s *Server) createSMTP(c *fiber.Ctx) error {
 	if req.Port == 0 {
 		req.Port = 587
 	}
+	if req.TLSMode == "" {
+		req.TLSMode = "starttls"
+	}
+	// Validate TLS mode
+	if req.TLSMode != "none" && req.TLSMode != "starttls" && req.TLSMode != "tls" {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid tls_mode. Use: none, starttls, or tls"})
+	}
 	if req.MaxPerMinute == 0 {
 		req.MaxPerMinute = 1000
 	}
@@ -109,10 +116,10 @@ func (s *Server) createSMTP(c *fiber.Ctx) error {
 	id := uuid.New().String()
 
 	_, err := s.db.Exec(`
-		INSERT INTO smtp_servers (id, name, host, port, username, password, tls,
+		INSERT INTO smtp_servers (id, name, host, port, username, password, tls_mode,
 		                          max_per_minute, max_per_hour, max_connections, active)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-	`, id, req.Name, req.Host, req.Port, req.Username, req.Password, req.TLS,
+	`, id, req.Name, req.Host, req.Port, req.Username, req.Password, req.TLSMode,
 		req.MaxPerMinute, req.MaxPerHour, req.MaxConnections, req.Active)
 
 	if err != nil {
@@ -132,19 +139,19 @@ func (s *Server) createSMTP(c *fiber.Ctx) error {
 func (s *Server) getSMTP(c *fiber.Ctx) error {
 	id := c.Params("id")
 
-	var name, host, username, status string
+	var name, host, username, status, tlsMode string
 	var port, maxPerMinute, maxPerHour, maxConnections int
-	var tls, active bool
+	var active bool
 	var totalSent, totalFailed int64
 	var lastCheck, createdAt, updatedAt *time.Time
 
 	err := s.db.QueryRow(`
-		SELECT name, host, port, username, tls,
+		SELECT name, host, port, username, tls_mode,
 		       max_per_minute, max_per_hour, max_connections,
 		       active, status, last_check, total_sent, total_failed,
 		       created_at, updated_at
 		FROM smtp_servers WHERE id = $1
-	`, id).Scan(&name, &host, &port, &username, &tls,
+	`, id).Scan(&name, &host, &port, &username, &tlsMode,
 		&maxPerMinute, &maxPerHour, &maxConnections,
 		&active, &status, &lastCheck, &totalSent, &totalFailed,
 		&createdAt, &updatedAt)
@@ -159,7 +166,7 @@ func (s *Server) getSMTP(c *fiber.Ctx) error {
 		"host":            host,
 		"port":            port,
 		"username":        username,
-		"tls":             tls,
+		"tls_mode":        tlsMode,
 		"max_per_minute":  maxPerMinute,
 		"max_per_hour":    maxPerHour,
 		"max_connections": maxConnections,
@@ -182,27 +189,32 @@ func (s *Server) updateSMTP(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
 	}
 
+	// Validate TLS mode if provided
+	if req.TLSMode != "" && req.TLSMode != "none" && req.TLSMode != "starttls" && req.TLSMode != "tls" {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid tls_mode. Use: none, starttls, or tls"})
+	}
+
 	query := `
 		UPDATE smtp_servers SET
 			name = $1, host = $2, port = $3, username = $4,
-			tls = $5, max_per_minute = $6, max_per_hour = $7,
+			tls_mode = $5, max_per_minute = $6, max_per_hour = $7,
 			max_connections = $8, active = $9
 		WHERE id = $10
 	`
 	args := []interface{}{req.Name, req.Host, req.Port, req.Username,
-		req.TLS, req.MaxPerMinute, req.MaxPerHour, req.MaxConnections, req.Active, id}
+		req.TLSMode, req.MaxPerMinute, req.MaxPerHour, req.MaxConnections, req.Active, id}
 
 	// If password provided, update it too
 	if req.Password != "" {
 		query = `
 			UPDATE smtp_servers SET
 				name = $1, host = $2, port = $3, username = $4, password = $5,
-				tls = $6, max_per_minute = $7, max_per_hour = $8,
+				tls_mode = $6, max_per_minute = $7, max_per_hour = $8,
 				max_connections = $9, active = $10
 			WHERE id = $11
 		`
 		args = []interface{}{req.Name, req.Host, req.Port, req.Username, req.Password,
-			req.TLS, req.MaxPerMinute, req.MaxPerHour, req.MaxConnections, req.Active, id}
+			req.TLSMode, req.MaxPerMinute, req.MaxPerHour, req.MaxConnections, req.Active, id}
 	}
 
 	result, err := s.db.Exec(query, args...)
@@ -245,13 +257,12 @@ func (s *Server) deleteSMTP(c *fiber.Ctx) error {
 func (s *Server) testSMTP(c *fiber.Ctx) error {
 	id := c.Params("id")
 
-	var host, username, password string
+	var host, username, password, tlsMode string
 	var port int
-	var useTLS bool
 
 	err := s.db.QueryRow(`
-		SELECT host, port, username, password, tls FROM smtp_servers WHERE id = $1
-	`, id).Scan(&host, &port, &username, &password, &useTLS)
+		SELECT host, port, username, password, tls_mode FROM smtp_servers WHERE id = $1
+	`, id).Scan(&host, &port, &username, &password, &tlsMode)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "SMTP server not found"})
@@ -260,9 +271,10 @@ func (s *Server) testSMTP(c *fiber.Ctx) error {
 	addr := fmt.Sprintf("%s:%d", host, port)
 	var client *smtp.Client
 
-	// Port 465 uses implicit TLS (SMTPS), other ports use STARTTLS
-	if port == 465 {
-		// Direct TLS connection
+	// Handle different TLS modes
+	switch tlsMode {
+	case "tls":
+		// Implicit TLS connection (like port 465)
 		tlsConfig := &tls.Config{
 			ServerName:         host,
 			InsecureSkipVerify: true, // Allow self-signed certs
@@ -285,8 +297,9 @@ func (s *Server) testSMTP(c *fiber.Ctx) error {
 				"details": err.Error(),
 			})
 		}
-	} else {
-		// Regular connection with optional STARTTLS
+
+	case "starttls":
+		// Regular connection with STARTTLS
 		conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 		if err != nil {
 			s.db.Exec(`UPDATE smtp_servers SET status = 'offline', last_check = NOW() WHERE id = $1`, id)
@@ -315,28 +328,56 @@ func (s *Server) testSMTP(c *fiber.Ctx) error {
 			})
 		}
 
-		// Use STARTTLS if enabled
-		if useTLS {
-			tlsConfig := &tls.Config{
-				ServerName:         host,
-				InsecureSkipVerify: true, // Allow self-signed certs
-			}
-			if err := client.StartTLS(tlsConfig); err != nil {
-				s.db.Exec(`UPDATE smtp_servers SET status = 'error', last_check = NOW() WHERE id = $1`, id)
-				return c.Status(400).JSON(fiber.Map{
-					"error":   "STARTTLS failed",
-					"details": err.Error(),
-				})
-			}
+		// Use STARTTLS
+		tlsConfig := &tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: true, // Allow self-signed certs
+		}
+		if err := client.StartTLS(tlsConfig); err != nil {
+			s.db.Exec(`UPDATE smtp_servers SET status = 'error', last_check = NOW() WHERE id = $1`, id)
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "STARTTLS failed",
+				"details": err.Error(),
+			})
+		}
+
+	default: // "none" or empty
+		// Plain connection without TLS
+		conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+		if err != nil {
+			s.db.Exec(`UPDATE smtp_servers SET status = 'offline', last_check = NOW() WHERE id = $1`, id)
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "Connection failed",
+				"details": err.Error(),
+			})
+		}
+		defer conn.Close()
+
+		client, err = smtp.NewClient(conn, host)
+		if err != nil {
+			s.db.Exec(`UPDATE smtp_servers SET status = 'error', last_check = NOW() WHERE id = $1`, id)
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "SMTP client failed",
+				"details": err.Error(),
+			})
+		}
+
+		// Say hello
+		if err := client.Hello("localhost"); err != nil {
+			s.db.Exec(`UPDATE smtp_servers SET status = 'error', last_check = NOW() WHERE id = $1`, id)
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "SMTP HELO failed",
+				"details": err.Error(),
+			})
 		}
 	}
 	defer client.Close()
 
-	// Test SMTP AUTH
-	auth := smtp.PlainAuth("", username, password, host)
-	if err := client.Auth(auth); err != nil {
-		// Try LOGIN auth if PLAIN fails
-		if err2 := client.Auth(LoginAuth(username, password)); err2 != nil {
+	// Test SMTP AUTH - try LOGIN first (more compatible), then PLAIN
+	if err := client.Auth(LoginAuth(username, password)); err != nil {
+		// Try PLAIN auth if LOGIN fails
+		auth := smtp.PlainAuth("", username, password, host)
+		if err2 := client.Auth(auth); err2 != nil {
 			s.db.Exec(`UPDATE smtp_servers SET status = 'error', last_check = NOW() WHERE id = $1`, id)
 			return c.Status(400).JSON(fiber.Map{
 				"error":   "Authentication failed",
