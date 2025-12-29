@@ -2,7 +2,6 @@ package api
 
 import (
 	"database/sql"
-	"log"
 	"time"
 
 	"github.com/gofiber/fiber/v2"

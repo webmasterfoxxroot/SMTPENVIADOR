@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"database/sql"
 	"strings"
 	"time"
 
@@ -29,8 +30,8 @@ func (s *Server) listBlacklist(c *fiber.Ctx) error {
 		s.db.QueryRow(`SELECT COUNT(*) FROM blacklist`).Scan(&total)
 	}
 
-	// Get blacklist
-	var rows interface{ Next() bool }
+	// Build query
+	var rows *sql.Rows
 	var err error
 	if search != "" {
 		rows, err = s.db.Query(`
@@ -52,28 +53,15 @@ func (s *Server) listBlacklist(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch blacklist"})
 	}
+	defer rows.Close()
 
 	var blacklist []fiber.Map
-	sqlRows := rows.(*interface{})
-	_ = sqlRows // Type assertion needed for proper iteration
-
-	// Re-query with proper type
-	query := `SELECT id, email, reason, created_at FROM blacklist ORDER BY created_at DESC LIMIT $1 OFFSET $2`
-	args := []interface{}{limit, offset}
-	if search != "" {
-		query = `SELECT id, email, reason, created_at FROM blacklist WHERE email LIKE $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`
-		args = []interface{}{"%" + search + "%", limit, offset}
-	}
-
-	dbRows, _ := s.db.Query(query, args...)
-	defer dbRows.Close()
-
-	for dbRows.Next() {
+	for rows.Next() {
 		var id, email string
 		var reason *string
 		var createdAt time.Time
 
-		dbRows.Scan(&id, &email, &reason, &createdAt)
+		rows.Scan(&id, &email, &reason, &createdAt)
 		blacklist = append(blacklist, fiber.Map{
 			"id":         id,
 			"email":      email,
