@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"crypto/hmac"
+	"crypto/md5"
 	"crypto/tls"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
@@ -356,16 +359,24 @@ func (s *SMTPConnection) sendPlain(addr, from, to string, msg []byte) error {
 	return s.sendMessage(client, from, to, msg)
 }
 
-// authenticate tries PLAIN auth first, then LOGIN if PLAIN fails
+// authenticate tries CRAM-MD5 first, then LOGIN, then PLAIN
 func (s *SMTPConnection) authenticate(client *smtp.Client) error {
-	// Try PLAIN auth first
+	// Try CRAM-MD5 first (most secure, doesn't send password)
+	if err := client.Auth(CRAMMD5Auth(s.Username, s.Password)); err == nil {
+		return nil
+	}
+
+	// Try LOGIN auth (doesn't have unencrypted connection check)
+	if err := client.Auth(LoginAuth(s.Username, s.Password)); err == nil {
+		return nil
+	}
+
+	// Try PLAIN auth as last resort
 	auth := smtp.PlainAuth("", s.Username, s.Password, s.Host)
 	if err := client.Auth(auth); err != nil {
-		// Try LOGIN auth as fallback
-		if err2 := client.Auth(LoginAuth(s.Username, s.Password)); err2 != nil {
-			return fmt.Errorf("failed to authenticate: %w", err)
-		}
+		return fmt.Errorf("failed to authenticate (tried CRAM-MD5, LOGIN, PLAIN): %w", err)
 	}
+
 	return nil
 }
 
@@ -393,6 +404,32 @@ func (s *SMTPConnection) sendMessage(client *smtp.Client, from, to string, msg [
 	}
 
 	return client.Quit()
+}
+
+// CRAMMD5Auth implements CRAM-MD5 authentication
+type cramMD5Auth struct {
+	username, password string
+}
+
+func CRAMMD5Auth(username, password string) smtp.Auth {
+	return &cramMD5Auth{username, password}
+}
+
+func (a *cramMD5Auth) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	return "CRAM-MD5", nil, nil
+}
+
+func (a *cramMD5Auth) Next(fromServer []byte, more bool) ([]byte, error) {
+	if more {
+		// fromServer contains the challenge
+		// Response is: username + space + HMAC-MD5(password, challenge)
+		h := hmac.New(md5.New, []byte(a.password))
+		h.Write(fromServer)
+		digest := hex.EncodeToString(h.Sum(nil))
+		response := fmt.Sprintf("%s %s", a.username, digest)
+		return []byte(response), nil
+	}
+	return nil, nil
 }
 
 // LoginAuth implements LOGIN authentication

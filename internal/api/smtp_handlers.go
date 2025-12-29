@@ -1,7 +1,10 @@
 package api
 
 import (
+	"crypto/hmac"
+	"crypto/md5"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/smtp"
@@ -373,17 +376,21 @@ func (s *Server) testSMTP(c *fiber.Ctx) error {
 	}
 	defer client.Close()
 
-	// Test SMTP AUTH - try LOGIN first (more compatible), then PLAIN
-	if err := client.Auth(LoginAuth(username, password)); err != nil {
-		// Try PLAIN auth if LOGIN fails
+	// Test SMTP AUTH - try CRAM-MD5 first, then LOGIN, then PLAIN
+	authErr := client.Auth(CRAMMD5Auth(username, password))
+	if authErr != nil {
+		authErr = client.Auth(LoginAuth(username, password))
+	}
+	if authErr != nil {
 		auth := smtp.PlainAuth("", username, password, host)
-		if err2 := client.Auth(auth); err2 != nil {
-			s.db.Exec(`UPDATE smtp_servers SET status = 'error', last_check = NOW() WHERE id = $1`, id)
-			return c.Status(400).JSON(fiber.Map{
-				"error":   "Authentication failed",
-				"details": err.Error(),
-			})
-		}
+		authErr = client.Auth(auth)
+	}
+	if authErr != nil {
+		s.db.Exec(`UPDATE smtp_servers SET status = 'error', last_check = NOW() WHERE id = $1`, id)
+		return c.Status(400).JSON(fiber.Map{
+			"error":   "Authentication failed",
+			"details": authErr.Error(),
+		})
 	}
 
 	// Update status to online
@@ -396,6 +403,30 @@ func (s *Server) testSMTP(c *fiber.Ctx) error {
 		"message": "SMTP connection successful",
 		"status":  "online",
 	})
+}
+
+// CRAMMD5Auth implements CRAM-MD5 authentication
+type cramMD5Auth struct {
+	username, password string
+}
+
+func CRAMMD5Auth(username, password string) smtp.Auth {
+	return &cramMD5Auth{username, password}
+}
+
+func (a *cramMD5Auth) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	return "CRAM-MD5", nil, nil
+}
+
+func (a *cramMD5Auth) Next(fromServer []byte, more bool) ([]byte, error) {
+	if more {
+		h := hmac.New(md5.New, []byte(a.password))
+		h.Write(fromServer)
+		digest := hex.EncodeToString(h.Sum(nil))
+		response := fmt.Sprintf("%s %s", a.username, digest)
+		return []byte(response), nil
+	}
+	return nil, nil
 }
 
 // LoginAuth implements LOGIN authentication
