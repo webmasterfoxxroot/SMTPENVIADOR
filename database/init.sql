@@ -186,7 +186,7 @@ CREATE INDEX idx_logs_created_at ON logs(created_at);
 
 -- Insert default admin user (password: admin123)
 INSERT INTO users (email, password_hash, name, role) VALUES
-('admin@admin.com', '$2a$10$rPQvGxTz8pxfXYxvHZjKxOQzZzZQZzZQZzZQZzZQZzZQZzZQZzZQ', 'Administrador', 'admin');
+('admin@admin.com', '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 'Administrador', 'admin');
 
 -- Create updated_at trigger function
 CREATE OR REPLACE FUNCTION update_updated_at_column()
