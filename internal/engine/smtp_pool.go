@@ -305,15 +305,19 @@ func (s *SMTPConnection) Send(params SendParams) error {
 	}
 	message += "\r\n"
 
-	// Text part
+	// Text part - use base64 encoding for UTF-8 safety
 	message += "--boundary-smtpenviador\r\n"
-	message += "Content-Type: text/plain; charset=\"UTF-8\"\r\n\r\n"
-	message += params.TextContent + "\r\n"
+	message += "Content-Type: text/plain; charset=\"UTF-8\"\r\n"
+	message += "Content-Transfer-Encoding: base64\r\n\r\n"
+	if params.TextContent != "" {
+		message += base64.StdEncoding.EncodeToString([]byte(params.TextContent)) + "\r\n"
+	}
 
-	// HTML part
+	// HTML part - use base64 encoding for UTF-8 safety
 	message += "--boundary-smtpenviador\r\n"
-	message += "Content-Type: text/html; charset=\"UTF-8\"\r\n\r\n"
-	message += params.HTMLContent + "\r\n"
+	message += "Content-Type: text/html; charset=\"UTF-8\"\r\n"
+	message += "Content-Transfer-Encoding: base64\r\n\r\n"
+	message += base64.StdEncoding.EncodeToString([]byte(params.HTMLContent)) + "\r\n"
 	message += "--boundary-smtpenviador--"
 
 	// Handle different TLS modes
