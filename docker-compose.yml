@@ -5,16 +5,16 @@ services:
     container_name: smtpenviador_db
     restart: always
     environment:
-      POSTGRES_USER: smtpenviador
-      POSTGRES_PASSWORD: smtpenviador123
-      POSTGRES_DB: smtpenviador
+      POSTGRES_USER: ${DB_USER:-smtpenviador}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-smtpenviador123}
+      POSTGRES_DB: ${DB_NAME:-smtpenviador}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U smtpenviador"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-smtpenviador}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -45,16 +45,16 @@ services:
     environment:
       - DB_HOST=postgres
       - DB_PORT=5432
-      - DB_USER=smtpenviador
-      - DB_PASSWORD=smtpenviador123
-      - DB_NAME=smtpenviador
+      - DB_USER=${DB_USER:-smtpenviador}
+      - DB_PASSWORD=${DB_PASSWORD:-smtpenviador123}
+      - DB_NAME=${DB_NAME:-smtpenviador}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - API_PORT=8080
-      - API_SECRET=your_super_secret_jwt_key_change_this
-      - WORKERS_COUNT=10
-      - CONNECTIONS_PER_SMTP=5
-      - TRACKING_DOMAIN=http://localhost:8080
+      - API_SECRET=${API_SECRET:-your_super_secret_jwt_key_change_this}
+      - WORKERS_COUNT=${WORKERS_COUNT:-10}
+      - CONNECTIONS_PER_SMTP=${CONNECTIONS_PER_SMTP:-5}
+      - TRACKING_DOMAIN=${TRACKING_DOMAIN:-http://localhost:8080}
     ports:
       - "8080:8080"
     depends_on:
