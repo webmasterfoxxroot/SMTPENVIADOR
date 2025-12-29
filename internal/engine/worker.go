@@ -145,11 +145,38 @@ func (w *Worker) processJob() {
 // updateCampaignSentCount updates the campaign sent_count
 func (w *Worker) updateCampaignSentCount(campaignID string) {
 	w.db.Exec(`UPDATE campaigns SET sent_count = sent_count + 1 WHERE id = $1`, campaignID)
+	w.checkCampaignCompletion(campaignID)
 }
 
 // updateCampaignFailedCount updates the campaign failed_count
 func (w *Worker) updateCampaignFailedCount(campaignID string) {
 	w.db.Exec(`UPDATE campaigns SET failed_count = failed_count + 1 WHERE id = $1`, campaignID)
+	w.checkCampaignCompletion(campaignID)
+}
+
+// checkCampaignCompletion checks if campaign is complete and updates status
+func (w *Worker) checkCampaignCompletion(campaignID string) {
+	var totalEmails, sentCount, failedCount int
+	var status string
+
+	err := w.db.QueryRow(`
+		SELECT total_emails, sent_count, failed_count, status
+		FROM campaigns WHERE id = $1
+	`, campaignID).Scan(&totalEmails, &sentCount, &failedCount, &status)
+
+	if err != nil {
+		return
+	}
+
+	// Only update if still running and all emails processed
+	if status == "running" && (sentCount+failedCount) >= totalEmails {
+		w.db.Exec(`
+			UPDATE campaigns
+			SET status = 'completed', completed_at = NOW()
+			WHERE id = $1
+		`, campaignID)
+		log.Printf("🏁 Campaign %s completed: %d sent, %d failed", campaignID, sentCount, failedCount)
+	}
 }
 
 // processVariables replaces variables in content
