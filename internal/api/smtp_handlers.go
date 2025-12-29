@@ -463,3 +463,156 @@ func (s *Server) refreshSMTPs(c *fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{"message": "SMTPs refreshed"})
 }
+
+// ============ SMTP SENDERS ============
+
+type SenderRequest struct {
+	Email   string `json:"email"`
+	Name    string `json:"name"`
+	ReplyTo string `json:"reply_to"`
+	Active  bool   `json:"active"`
+}
+
+// listSMTPSenders returns all senders for an SMTP
+func (s *Server) listSMTPSenders(c *fiber.Ctx) error {
+	smtpID := c.Params("id")
+
+	rows, err := s.db.Query(`
+		SELECT id, email, name, reply_to, active, total_sent, created_at
+		FROM smtp_senders
+		WHERE smtp_id = $1
+		ORDER BY created_at DESC
+	`, smtpID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch senders"})
+	}
+	defer rows.Close()
+
+	var senders []fiber.Map
+	for rows.Next() {
+		var id, email string
+		var name, replyTo *string
+		var active bool
+		var totalSent int64
+		var createdAt time.Time
+
+		err := rows.Scan(&id, &email, &name, &replyTo, &active, &totalSent, &createdAt)
+		if err != nil {
+			continue
+		}
+
+		senders = append(senders, fiber.Map{
+			"id":         id,
+			"email":      email,
+			"name":       name,
+			"reply_to":   replyTo,
+			"active":     active,
+			"total_sent": totalSent,
+			"created_at": createdAt,
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"data":  senders,
+		"total": len(senders),
+	})
+}
+
+// addSMTPSender adds a sender to an SMTP
+func (s *Server) addSMTPSender(c *fiber.Ctx) error {
+	smtpID := c.Params("id")
+
+	var req SenderRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	if req.Email == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Email is required"})
+	}
+
+	id := uuid.New().String()
+
+	_, err := s.db.Exec(`
+		INSERT INTO smtp_senders (id, smtp_id, email, name, reply_to, active)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, id, smtpID, req.Email, req.Name, req.ReplyTo, true)
+
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to add sender (maybe duplicate?)"})
+	}
+
+	return c.Status(201).JSON(fiber.Map{
+		"message": "Sender added",
+		"id":      id,
+	})
+}
+
+// addSMTPSendersBulk adds multiple senders to an SMTP
+func (s *Server) addSMTPSendersBulk(c *fiber.Ctx) error {
+	smtpID := c.Params("id")
+
+	var req struct {
+		Senders []SenderRequest `json:"senders"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	added := 0
+	for _, sender := range req.Senders {
+		if sender.Email == "" {
+			continue
+		}
+		id := uuid.New().String()
+		_, err := s.db.Exec(`
+			INSERT INTO smtp_senders (id, smtp_id, email, name, reply_to, active)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (smtp_id, email) DO NOTHING
+		`, id, smtpID, sender.Email, sender.Name, sender.ReplyTo, true)
+		if err == nil {
+			added++
+		}
+	}
+
+	return c.Status(201).JSON(fiber.Map{
+		"message": "Senders added",
+		"added":   added,
+	})
+}
+
+// deleteSMTPSender removes a sender from an SMTP
+func (s *Server) deleteSMTPSender(c *fiber.Ctx) error {
+	senderID := c.Params("senderId")
+
+	result, err := s.db.Exec(`DELETE FROM smtp_senders WHERE id = $1`, senderID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete sender"})
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return c.Status(404).JSON(fiber.Map{"error": "Sender not found"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Sender deleted"})
+}
+
+// toggleSMTPSender toggles sender active status
+func (s *Server) toggleSMTPSender(c *fiber.Ctx) error {
+	senderID := c.Params("senderId")
+
+	result, err := s.db.Exec(`
+		UPDATE smtp_senders SET active = NOT active WHERE id = $1
+	`, senderID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to toggle sender"})
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return c.Status(404).JSON(fiber.Map{"error": "Sender not found"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Sender toggled"})
+}

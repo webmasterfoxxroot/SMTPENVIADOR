@@ -77,7 +77,16 @@ func (w *Worker) processJob() {
 		return
 	}
 
-	log.Printf("📤 Worker %d: Using SMTP %s to send to %s", w.id, smtp.Name, job.To)
+	// Get next sender from SMTP (rotates automatically)
+	sender := smtp.GetNextSender()
+	if sender == nil {
+		log.Printf("⚠️ Worker %d: No senders for SMTP %s, pushing job back", w.id, smtp.Name)
+		w.queue.Push(job)
+		time.Sleep(1 * time.Second)
+		return
+	}
+
+	log.Printf("📤 Worker %d: Using SMTP %s <%s> to send to %s", w.id, smtp.Name, sender.Email, job.To)
 
 	// Check rate limit
 	if !w.queue.CheckRateLimit(smtp.ID, smtp.MaxPerMinute) {
@@ -99,13 +108,21 @@ func (w *Worker) processJob() {
 	// Process links for click tracking
 	htmlContent = w.processLinks(htmlContent, job.CampaignID, job.EmailID)
 
+	// Use sender from SMTP (ignore campaign's from_email)
+	fromEmail := sender.Email
+	fromName := sender.Name
+	replyTo := sender.ReplyTo
+	if replyTo == "" {
+		replyTo = job.ReplyTo // Fallback to campaign's reply_to if sender doesn't have one
+	}
+
 	// Send email
 	err = smtp.Send(SendParams{
-		From:        job.From,
-		FromName:    job.FromName,
+		From:        fromEmail,
+		FromName:    fromName,
 		To:          job.To,
 		ToName:      job.ToName,
-		ReplyTo:     job.ReplyTo,
+		ReplyTo:     replyTo,
 		Subject:     subject,
 		HTMLContent: htmlContent,
 		TextContent: textContent,

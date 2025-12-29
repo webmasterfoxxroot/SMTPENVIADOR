@@ -36,6 +36,21 @@ CREATE TABLE smtp_servers (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- SMTP Senders table (multiple senders per SMTP)
+CREATE TABLE smtp_senders (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    smtp_id UUID REFERENCES smtp_servers(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    name VARCHAR(255),
+    reply_to VARCHAR(255),
+    active BOOLEAN DEFAULT true,
+    total_sent BIGINT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(smtp_id, email)
+);
+
+CREATE INDEX idx_smtp_senders_smtp_id ON smtp_senders(smtp_id);
+
 -- Email Lists table
 CREATE TABLE email_lists (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

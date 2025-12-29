@@ -90,6 +90,12 @@ func (s *Server) setupRoutes() {
 	smtp.Delete("/:id", s.deleteSMTP)
 	smtp.Post("/:id/test", s.testSMTP)
 	smtp.Post("/refresh", s.refreshSMTPs)
+	// SMTP Senders
+	smtp.Get("/:id/senders", s.listSMTPSenders)
+	smtp.Post("/:id/senders", s.addSMTPSender)
+	smtp.Post("/:id/senders/bulk", s.addSMTPSendersBulk)
+	smtp.Delete("/:id/senders/:senderId", s.deleteSMTPSender)
+	smtp.Post("/:id/senders/:senderId/toggle", s.toggleSMTPSender)
 
 	// Email Lists
 	lists := protected.Group("/lists")

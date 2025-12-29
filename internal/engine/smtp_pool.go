@@ -24,6 +24,14 @@ type SMTPPool struct {
 	stopChan chan struct{}
 }
 
+// SMTPSender represents a sender for an SMTP server
+type SMTPSender struct {
+	ID      string
+	Email   string
+	Name    string
+	ReplyTo string
+}
+
 // SMTPConnection represents a connection to an SMTP server
 type SMTPConnection struct {
 	ID             string
@@ -38,10 +46,12 @@ type SMTPConnection struct {
 	MaxConnections int
 	Active         bool
 	Status         string
+	Senders        []SMTPSender // List of senders for this SMTP
 	client         *smtp.Client
 	mu             sync.Mutex
 	lastUsed       time.Time
 	sentCount      int64
+	senderIndex    int // For rotating senders
 }
 
 // SendParams holds email parameters
@@ -97,15 +107,49 @@ func (p *SMTPPool) LoadServers() error {
 			log.Printf("⚠️ Failed to scan SMTP server: %v", err)
 			continue
 		}
+
+		// Load senders for this SMTP
+		s.Senders = p.loadSenders(s.ID)
 		p.servers = append(p.servers, &s)
-		log.Printf("📧 Loaded SMTP: %s (%s:%d) TLS: %s", s.Name, s.Host, s.Port, s.TLSMode)
+		log.Printf("📧 Loaded SMTP: %s (%s:%d) TLS: %s, Senders: %d", s.Name, s.Host, s.Port, s.TLSMode, len(s.Senders))
 	}
 
 	log.Printf("✅ Loaded %d SMTP servers", len(p.servers))
 	return nil
 }
 
-// GetNextSMTP returns the next available SMTP using round-robin
+// loadSenders loads senders for a specific SMTP
+func (p *SMTPPool) loadSenders(smtpID string) []SMTPSender {
+	rows, err := p.db.Query(`
+		SELECT id, email, name, reply_to
+		FROM smtp_senders
+		WHERE smtp_id = $1 AND active = true
+	`, smtpID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var senders []SMTPSender
+	for rows.Next() {
+		var s SMTPSender
+		var name, replyTo *string
+		err := rows.Scan(&s.ID, &s.Email, &name, &replyTo)
+		if err != nil {
+			continue
+		}
+		if name != nil {
+			s.Name = *name
+		}
+		if replyTo != nil {
+			s.ReplyTo = *replyTo
+		}
+		senders = append(senders, s)
+	}
+	return senders
+}
+
+// GetNextSMTP returns the next available SMTP using round-robin (only SMTPs with senders)
 func (p *SMTPPool) GetNextSMTP() *SMTPConnection {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -114,25 +158,39 @@ func (p *SMTPPool) GetNextSMTP() *SMTPConnection {
 		return nil
 	}
 
-	// Simple round-robin
+	// Simple round-robin - only return SMTPs that have senders
 	attempts := len(p.servers)
 	for i := 0; i < attempts; i++ {
 		idx := int(p.current.Add(1)) % len(p.servers)
 		server := p.servers[idx]
 
-		if server.Active && server.Status == "online" {
+		if server.Active && server.Status == "online" && len(server.Senders) > 0 {
 			return server
 		}
 	}
 
-	// If no online server, return first active
+	// If no online server with senders, return first active with senders
 	for _, server := range p.servers {
-		if server.Active {
+		if server.Active && len(server.Senders) > 0 {
 			return server
 		}
 	}
 
 	return nil
+}
+
+// GetNextSender returns the next sender for this SMTP (round-robin)
+func (s *SMTPConnection) GetNextSender() *SMTPSender {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.Senders) == 0 {
+		return nil
+	}
+
+	sender := &s.Senders[s.senderIndex]
+	s.senderIndex = (s.senderIndex + 1) % len(s.Senders)
+	return sender
 }
 
 // GetActiveCount returns number of active SMTP servers
