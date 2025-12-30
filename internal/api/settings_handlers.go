@@ -2,6 +2,9 @@ package api
 
 import (
 	"database/sql"
+	"io"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -144,5 +147,60 @@ func (s *Server) updateSettings(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"message": "Settings updated successfully",
+	})
+}
+
+// getServerInfo returns server information including public IP
+func (s *Server) getServerInfo(c *fiber.Ctx) error {
+	ip := getPublicIP()
+
+	return c.JSON(fiber.Map{
+		"ip": ip,
+	})
+}
+
+// getPublicIP fetches the server's public IP address
+func getPublicIP() string {
+	services := []string{
+		"https://api.ipify.org",
+		"https://ifconfig.me/ip",
+		"https://icanhazip.com",
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	for _, service := range services {
+		resp, err := client.Get(service)
+		if err != nil {
+			continue
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			continue
+		}
+
+		ip := strings.TrimSpace(string(body))
+		if ip != "" {
+			return ip
+		}
+	}
+
+	return ""
+}
+
+// restartServer restarts the email engine
+func (s *Server) restartServer(c *fiber.Ctx) error {
+	// Stop the engine
+	if s.engine.IsRunning() {
+		s.engine.Stop()
+	}
+
+	// Start the engine again
+	go s.engine.Start()
+
+	return c.JSON(fiber.Map{
+		"message": "Server restarted successfully",
 	})
 }

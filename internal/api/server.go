@@ -153,6 +153,8 @@ func (s *Server) setupRoutes() {
 	// Settings
 	settings := protected.Group("/settings")
 	settings.Get("/", s.getSettings)
+	settings.Get("/server-info", s.getServerInfo)
+	settings.Post("/restart", s.restartServer)
 	settings.Get("/:key", s.getSetting)
 	settings.Put("/:key", s.updateSetting)
 	settings.Put("/", s.updateSettings)
