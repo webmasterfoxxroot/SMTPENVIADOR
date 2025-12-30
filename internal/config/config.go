@@ -45,7 +45,7 @@ func Load() *Config {
 		RedisPassword: getEnv("REDIS_PASSWORD", ""),
 
 		// API
-		APIPort:   getEnv("API_PORT", "8080"),
+		APIPort:   getEnv("API_PORT", "80"),
 		APISecret: getEnv("API_SECRET", "your_super_secret_jwt_key"),
 
 		// Engine
@@ -53,7 +53,7 @@ func Load() *Config {
 		ConnectionsPerSMTP: getEnvInt("CONNECTIONS_PER_SMTP", 5),
 
 		// Tracking
-		TrackingDomain: getEnv("TRACKING_DOMAIN", "http://localhost:8080"),
+		TrackingDomain: getEnv("TRACKING_DOMAIN", "http://localhost"),
 	}
 }
 
