@@ -108,9 +108,9 @@ func (w *Worker) processJob() {
 	// Process links for click tracking
 	htmlContent = w.processLinks(htmlContent, job.CampaignID, job.EmailID)
 
-	// Use sender from SMTP (ignore campaign's from_email)
+	// Use email from SMTP sender, but name from campaign
 	fromEmail := sender.Email
-	fromName := sender.Name
+	fromName := job.FromName // Name comes from campaign, not SMTP sender
 	replyTo := sender.ReplyTo
 	if replyTo == "" {
 		replyTo = job.ReplyTo // Fallback to campaign's reply_to if sender doesn't have one

@@ -13,6 +13,7 @@ function CampaignEdit() {
 
   const [form, setForm] = useState({
     name: '',
+    from_name: '',
     subject: '',
     html_content: '',
     text_content: '',
@@ -132,9 +133,6 @@ function CampaignEdit() {
                 className="input"
                 min="0"
               />
-              <p className="text-xs text-gray-500 mt-1">
-                O remetente será usado automaticamente do SMTP que estiver enviando
-              </p>
             </div>
           </div>
         </div>
@@ -143,6 +141,21 @@ function CampaignEdit() {
           <h2 className="text-lg font-semibold mb-4">Conteúdo do Email</h2>
 
           <div className="space-y-4">
+            <div>
+              <label className="label">Nome do Remetente</label>
+              <input
+                type="text"
+                value={form.from_name}
+                onChange={(e) => setForm({ ...form, from_name: e.target.value })}
+                className="input"
+                placeholder="Empresa XYZ"
+                required
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Nome que aparece no campo "De:" do email. O email será do SMTP.
+              </p>
+            </div>
+
             <div>
               <label className="label">Assunto</label>
               <input
