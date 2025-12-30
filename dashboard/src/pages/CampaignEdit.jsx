@@ -19,7 +19,8 @@ function CampaignEdit() {
     text_content: '',
     list_id: '',
     send_rate: 0,
-    track_opens: true
+    track_opens: true,
+    track_clicks: true
   })
 
   useEffect(() => {
@@ -135,17 +136,31 @@ function CampaignEdit() {
                 min="0"
               />
             </div>
-            <div className="flex items-center gap-3 pt-6">
-              <input
-                type="checkbox"
-                id="track_opens"
-                checked={form.track_opens}
-                onChange={(e) => setForm({ ...form, track_opens: e.target.checked })}
-                className="w-5 h-5 rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500"
-              />
-              <label htmlFor="track_opens" className="text-sm">
-                Rastrear aberturas e cliques
-              </label>
+            <div className="flex flex-col gap-3 pt-6">
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  id="track_opens"
+                  checked={form.track_opens}
+                  onChange={(e) => setForm({ ...form, track_opens: e.target.checked })}
+                  className="w-5 h-5 rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500"
+                />
+                <label htmlFor="track_opens" className="text-sm">
+                  Rastrear aberturas
+                </label>
+              </div>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  id="track_clicks"
+                  checked={form.track_clicks}
+                  onChange={(e) => setForm({ ...form, track_clicks: e.target.checked })}
+                  className="w-5 h-5 rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500"
+                />
+                <label htmlFor="track_clicks" className="text-sm">
+                  Rastrear cliques
+                </label>
+              </div>
             </div>
           </div>
         </div>

@@ -126,7 +126,8 @@ CREATE TABLE campaigns (
     bounce_count INTEGER DEFAULT 0,
     unsubscribe_count INTEGER DEFAULT 0,
     send_rate INTEGER DEFAULT 0, -- emails per minute, 0 = unlimited
-    track_opens BOOLEAN DEFAULT true, -- enable/disable open and click tracking
+    track_opens BOOLEAN DEFAULT true, -- enable/disable open tracking
+    track_clicks BOOLEAN DEFAULT true, -- enable/disable click tracking
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

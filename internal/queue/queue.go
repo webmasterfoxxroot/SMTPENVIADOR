@@ -33,6 +33,7 @@ type EmailJob struct {
 	TextContent string            `json:"text_content"`
 	Variables   map[string]string `json:"variables"`
 	TrackOpens  bool              `json:"track_opens"`
+	TrackClicks bool              `json:"track_clicks"`
 	Retries     int               `json:"retries"`
 	CreatedAt   time.Time         `json:"created_at"`
 }
