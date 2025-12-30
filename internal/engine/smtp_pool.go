@@ -286,41 +286,56 @@ func (s *SMTPConnection) Send(params SendParams) error {
 
 	addr := fmt.Sprintf("%s:%d", s.Host, s.Port)
 
-	// Generate unique boundary and message ID (similar format to other senders)
-	boundary := fmt.Sprintf("=-%d%d==", time.Now().UnixNano(), time.Now().Unix())
+	// Generate unique boundary and message ID (ASCII only)
+	boundary := fmt.Sprintf("=_%d_%d_=", time.Now().UnixNano(), time.Now().Unix())
 	messageID := fmt.Sprintf("<%d.%d@%s>", time.Now().UnixNano(), time.Now().Unix(), s.Host)
 	contentID := fmt.Sprintf("<%d.%d@%s>", time.Now().UnixNano()+1, time.Now().Unix(), s.Host)
 
-	// Build message - matching the format of working senders
+	// Build message - ALL ASCII, no UTF-8 in headers
 	var message string
+
+	// From: just email, no name (ASCII only)
 	message += fmt.Sprintf("From: %s\r\n", params.From)
-	message += fmt.Sprintf("Date: %s\r\n", time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 -0700"))
+
+	// Date: ASCII only
+	message += fmt.Sprintf("Date: %s\r\n", time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 +0000"))
+
+	// Subject: encode if has UTF-8, otherwise plain ASCII
 	message += fmt.Sprintf("Subject: %s\r\n", encodeRFC2047(params.Subject))
+
+	// Message-Id: ASCII only
 	message += fmt.Sprintf("Message-Id: %s\r\n", messageID)
+
+	// To: just email, no name (ASCII only)
 	message += fmt.Sprintf("To: %s\r\n", params.To)
+
+	// MIME headers
 	message += "MIME-Version: 1.0\r\n"
 	message += fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\r\n", boundary)
+
 	if params.ReplyTo != "" {
 		message += fmt.Sprintf("Reply-To: %s\r\n", params.ReplyTo)
 	}
 	message += "\r\n"
 
-	// Text part - plain UTF-8 like the working sender
-	message += "--" + boundary + "\r\n"
-	message += "Content-Type: text/plain; charset=utf-8\r\n"
-	message += "\r\n"
+	// Text part - MUST use base64 to avoid UTF-8 bytes in message
 	textContent := params.TextContent
 	if textContent == "" {
-		textContent = " "
+		textContent = "Email content"
 	}
-	message += textContent + "\r\n"
+	message += "--" + boundary + "\r\n"
+	message += "Content-Type: text/plain; charset=utf-8\r\n"
+	message += "Content-Transfer-Encoding: base64\r\n"
+	message += "\r\n"
+	message += encodeBase64WithLineBreaks([]byte(textContent))
 
-	// HTML part - plain UTF-8 with Content-Id like the working sender
+	// HTML part - MUST use base64 to avoid UTF-8 bytes in message
 	message += "--" + boundary + "\r\n"
 	message += "Content-Type: text/html; charset=utf-8\r\n"
+	message += "Content-Transfer-Encoding: base64\r\n"
 	message += fmt.Sprintf("Content-Id: %s\r\n", contentID)
 	message += "\r\n"
-	message += params.HTMLContent + "\r\n"
+	message += encodeBase64WithLineBreaks([]byte(params.HTMLContent))
 	message += "--" + boundary + "--\r\n"
 
 	// Handle different TLS modes
