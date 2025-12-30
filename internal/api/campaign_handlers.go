@@ -40,11 +40,14 @@ type CampaignRequest struct {
 func (s *Server) listCampaigns(c *fiber.Ctx) error {
 	status := c.Query("status", "")
 
+	// Use EXTRACT(EPOCH FROM ...) to get Unix timestamp directly from PostgreSQL
+	// This avoids timezone conversion issues between PostgreSQL and Go
 	query := `
 		SELECT c.id, c.name, c.subject, c.from_name, c.from_email, c.status,
 		       c.total_emails, c.sent_count, c.failed_count, c.open_count,
-		       c.click_count, c.bounce_count, c.scheduled_at, c.auto_start_at, c.started_at,
-		       c.completed_at, c.created_at, l.name as list_name
+		       c.click_count, c.bounce_count, c.scheduled_at,
+		       EXTRACT(EPOCH FROM c.auto_start_at)::bigint as auto_start_at_unix,
+		       c.started_at, c.completed_at, c.created_at, l.name as list_name
 		FROM campaigns c
 		LEFT JOIN email_lists l ON c.list_id = l.id
 	`
@@ -68,21 +71,16 @@ func (s *Server) listCampaigns(c *fiber.Ctx) error {
 		var id, name, subject, fromName, fromEmail, campaignStatus string
 		var listName *string
 		var totalEmails, sentCount, failedCount, openCount, clickCount, bounceCount int
-		var scheduledAt, autoStartAt, startedAt, completedAt *time.Time
+		var scheduledAt, startedAt, completedAt *time.Time
+		var autoStartAtUnix *int64
 		var createdAt time.Time
 
 		err := rows.Scan(&id, &name, &subject, &fromName, &fromEmail, &campaignStatus,
 			&totalEmails, &sentCount, &failedCount, &openCount, &clickCount, &bounceCount,
-			&scheduledAt, &autoStartAt, &startedAt, &completedAt, &createdAt, &listName)
+			&scheduledAt, &autoStartAtUnix, &startedAt, &completedAt, &createdAt, &listName)
 		if err != nil {
+			fmt.Printf("[listCampaigns] Scan error: %v\n", err)
 			continue
-		}
-
-		// Format auto_start_at as UTC RFC3339 string for consistent frontend parsing
-		var autoStartAtStr *string
-		if autoStartAt != nil {
-			formatted := autoStartAt.UTC().Format(time.RFC3339)
-			autoStartAtStr = &formatted
 		}
 
 		campaigns = append(campaigns, fiber.Map{
@@ -99,7 +97,7 @@ func (s *Server) listCampaigns(c *fiber.Ctx) error {
 			"click_count":    clickCount,
 			"bounce_count":   bounceCount,
 			"scheduled_at":   scheduledAt,
-			"auto_start_at":  autoStartAtStr,
+			"auto_start_at":  autoStartAtUnix,
 			"started_at":     startedAt,
 			"completed_at":   completedAt,
 			"created_at":     createdAt,
@@ -108,8 +106,9 @@ func (s *Server) listCampaigns(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"data":  campaigns,
-		"total": len(campaigns),
+		"data":        campaigns,
+		"total":       len(campaigns),
+		"server_time": time.Now().Unix(), // For frontend to sync clocks
 	})
 }
 
@@ -163,7 +162,7 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 		"id":            id,
 		"total_emails":  totalEmails,
 		"smtp_count":    smtpCount,
-		"auto_start_at": autoStartAt.Format(time.RFC3339),
+		"auto_start_at": autoStartAt.Unix(),
 	})
 }
 
@@ -590,7 +589,7 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 		"id":            newID,
 		"total_emails":  totalEmails,
 		"smtp_count":    smtpCount,
-		"auto_start_at": autoStartAt.Format(time.RFC3339),
+		"auto_start_at": autoStartAt.Unix(),
 	})
 }
 

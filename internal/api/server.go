@@ -63,10 +63,12 @@ func (s *Server) runAutoStartScheduler() {
 
 // checkAndAutoStartCampaigns checks for campaigns with passed auto_start_at and starts them
 func (s *Server) checkAndAutoStartCampaigns() {
-	// Find campaigns that need to be auto-started using Unix timestamp comparison
+	// Use EXTRACT(EPOCH) to get Unix timestamp directly from PostgreSQL
+	// This avoids any timezone conversion issues
 	nowUnix := time.Now().Unix()
 	rows, err := s.db.Query(`
-		SELECT id, auto_start_at FROM campaigns
+		SELECT id, EXTRACT(EPOCH FROM auto_start_at)::bigint as auto_start_unix
+		FROM campaigns
 		WHERE status = 'draft'
 		AND auto_start_at IS NOT NULL
 	`)
@@ -78,13 +80,13 @@ func (s *Server) checkAndAutoStartCampaigns() {
 
 	for rows.Next() {
 		var id string
-		var autoStartAt time.Time
-		if err := rows.Scan(&id, &autoStartAt); err != nil {
+		var autoStartUnix int64
+		if err := rows.Scan(&id, &autoStartUnix); err != nil {
+			fmt.Printf("[AutoStart] Scan error: %v\n", err)
 			continue
 		}
 
-		// Compare Unix timestamps (timezone independent)
-		autoStartUnix := autoStartAt.Unix()
+		// Compare Unix timestamps directly
 		if autoStartUnix <= nowUnix {
 			fmt.Printf("[AutoStart] Starting campaign %s (target: %d, now: %d)\n", id, autoStartUnix, nowUnix)
 			s.autoStartCampaignByID(id)

@@ -26,6 +26,7 @@ function Campaigns() {
   const [campaigns, setCampaigns] = useState([])
   const [loading, setLoading] = useState(true)
   const [actionMenu, setActionMenu] = useState(null)
+  const [serverTimeOffset, setServerTimeOffset] = useState(0) // Offset between server and client time
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -57,6 +58,15 @@ function Campaigns() {
     try {
       const response = await api.get('/campaigns')
       setCampaigns(response.data.data || [])
+
+      // Calculate time offset between server and client
+      // If server_time is 100 and client is at 118, offset = 100 - 118 = -18
+      // This means client is 18 seconds ahead of server
+      if (response.data.server_time) {
+        const clientNow = Math.floor(Date.now() / 1000)
+        const offset = response.data.server_time - clientNow
+        setServerTimeOffset(offset)
+      }
     } catch (error) {
       toast.error('Erro ao carregar campanhas')
     } finally {
@@ -204,12 +214,15 @@ function Campaigns() {
     }
   }
 
-  // Calculate remaining seconds until auto_start_at
-  const getCountdownSeconds = (autoStartAt) => {
-    if (!autoStartAt) return null
-    const targetTime = new Date(autoStartAt).getTime()
-    const now = Date.now()
-    const remaining = Math.ceil((targetTime - now) / 1000)
+  // Calculate remaining seconds until auto_start_at (Unix timestamp in seconds)
+  // Uses serverTimeOffset to sync with server clock
+  const getCountdownSeconds = (autoStartAtUnix) => {
+    if (!autoStartAtUnix) return null
+    // Apply server time offset to client time to get server-relative time
+    // If offset is -18 (client is 18s ahead), we add -18 to client time
+    const clientNow = Math.floor(Date.now() / 1000)
+    const serverNow = clientNow + serverTimeOffset // Adjusted to server time
+    const remaining = autoStartAtUnix - serverNow
     return remaining > 0 ? remaining : 0
   }
 
