@@ -289,51 +289,38 @@ func (s *SMTPConnection) Send(params SendParams) error {
 	// Generate unique boundary and message ID (ASCII only)
 	boundary := fmt.Sprintf("=_%d_%d_=", time.Now().UnixNano(), time.Now().Unix())
 	messageID := fmt.Sprintf("<%d.%d@%s>", time.Now().UnixNano(), time.Now().Unix(), s.Host)
-	contentID := fmt.Sprintf("<%d.%d@%s>", time.Now().UnixNano()+1, time.Now().Unix(), s.Host)
 
-	// Build message - ALL ASCII, no UTF-8 in headers
+	// Build message - 100% 7-bit ASCII, no UTF-8 anywhere
 	var message string
 
-	// From: just email, no name (ASCII only)
+	// Headers - all ASCII
 	message += fmt.Sprintf("From: %s\r\n", params.From)
-
-	// Date: ASCII only
 	message += fmt.Sprintf("Date: %s\r\n", time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 +0000"))
-
-	// Subject: encode if has UTF-8, otherwise plain ASCII
-	message += fmt.Sprintf("Subject: %s\r\n", encodeRFC2047(params.Subject))
-
-	// Message-Id: ASCII only
+	message += fmt.Sprintf("Subject: %s\r\n", toASCII(params.Subject))
 	message += fmt.Sprintf("Message-Id: %s\r\n", messageID)
-
-	// To: just email, no name (ASCII only)
 	message += fmt.Sprintf("To: %s\r\n", params.To)
-
-	// MIME headers
 	message += "MIME-Version: 1.0\r\n"
 	message += fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\r\n", boundary)
-
 	if params.ReplyTo != "" {
 		message += fmt.Sprintf("Reply-To: %s\r\n", params.ReplyTo)
 	}
 	message += "\r\n"
 
-	// Text part - MUST use base64 to avoid UTF-8 bytes in message
+	// Text part - base64 encoded, US-ASCII charset
 	textContent := params.TextContent
 	if textContent == "" {
 		textContent = "Email content"
 	}
 	message += "--" + boundary + "\r\n"
-	message += "Content-Type: text/plain; charset=utf-8\r\n"
+	message += "Content-Type: text/plain; charset=us-ascii\r\n"
 	message += "Content-Transfer-Encoding: base64\r\n"
 	message += "\r\n"
 	message += encodeBase64WithLineBreaks([]byte(textContent))
 
-	// HTML part - MUST use base64 to avoid UTF-8 bytes in message
+	// HTML part - base64 encoded, US-ASCII charset
 	message += "--" + boundary + "\r\n"
-	message += "Content-Type: text/html; charset=utf-8\r\n"
+	message += "Content-Type: text/html; charset=us-ascii\r\n"
 	message += "Content-Transfer-Encoding: base64\r\n"
-	message += fmt.Sprintf("Content-Id: %s\r\n", contentID)
 	message += "\r\n"
 	message += encodeBase64WithLineBreaks([]byte(params.HTMLContent))
 	message += "--" + boundary + "--\r\n"
@@ -559,6 +546,51 @@ func formatAddress(name, email string) string {
 	// Encode name with RFC 2047 Base64 encoding to handle UTF-8 characters
 	encodedName := encodeRFC2047(name)
 	return fmt.Sprintf("%s <%s>", encodedName, email)
+}
+
+// toASCII converts a string to pure ASCII by replacing non-ASCII chars
+func toASCII(s string) string {
+	result := make([]byte, 0, len(s))
+	for _, r := range s {
+		if r < 128 {
+			result = append(result, byte(r))
+		} else {
+			// Replace common accented characters with ASCII equivalents
+			switch r {
+			case 'á', 'à', 'ã', 'â', 'ä':
+				result = append(result, 'a')
+			case 'é', 'è', 'ê', 'ë':
+				result = append(result, 'e')
+			case 'í', 'ì', 'î', 'ï':
+				result = append(result, 'i')
+			case 'ó', 'ò', 'õ', 'ô', 'ö':
+				result = append(result, 'o')
+			case 'ú', 'ù', 'û', 'ü':
+				result = append(result, 'u')
+			case 'ç':
+				result = append(result, 'c')
+			case 'ñ':
+				result = append(result, 'n')
+			case 'Á', 'À', 'Ã', 'Â', 'Ä':
+				result = append(result, 'A')
+			case 'É', 'È', 'Ê', 'Ë':
+				result = append(result, 'E')
+			case 'Í', 'Ì', 'Î', 'Ï':
+				result = append(result, 'I')
+			case 'Ó', 'Ò', 'Õ', 'Ô', 'Ö':
+				result = append(result, 'O')
+			case 'Ú', 'Ù', 'Û', 'Ü':
+				result = append(result, 'U')
+			case 'Ç':
+				result = append(result, 'C')
+			case 'Ñ':
+				result = append(result, 'N')
+			default:
+				// Skip other non-ASCII characters
+			}
+		}
+	}
+	return string(result)
 }
 
 // encodeRFC2047 encodes a string using RFC 2047 Base64 for email headers
