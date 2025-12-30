@@ -62,13 +62,14 @@ func (s *Server) runAutoStartScheduler() {
 
 // checkAndAutoStartCampaigns checks for campaigns with passed auto_start_at and starts them
 func (s *Server) checkAndAutoStartCampaigns() {
-	// Find campaigns that need to be auto-started
+	// Find campaigns that need to be auto-started (comparing with current UTC time)
+	nowUTC := time.Now().UTC()
 	rows, err := s.db.Query(`
 		SELECT id FROM campaigns
 		WHERE status = 'draft'
 		AND auto_start_at IS NOT NULL
-		AND auto_start_at <= NOW()
-	`)
+		AND auto_start_at <= $1
+	`, nowUTC)
 	if err != nil {
 		return
 	}

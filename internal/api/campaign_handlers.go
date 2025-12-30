@@ -136,30 +136,27 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 
 	id := uuid.New().String()
 
-	// Insert campaign as draft with auto_start_at = NOW() + 60 seconds
+	// Insert campaign as draft with auto_start_at = NOW() + 60 seconds (in UTC)
+	autoStartAt := time.Now().UTC().Add(60 * time.Second)
 	_, err := s.db.Exec(`
 		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to,
 		                       html_content, text_content, list_id, send_rate,
 		                       scheduled_at, track_opens, track_clicks, total_emails, status, auto_start_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'draft', NOW() + INTERVAL '60 seconds')
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'draft', $15)
 	`, id, req.Name, req.Subject, req.FromName, req.FromEmail, req.ReplyTo,
 		req.HTMLContent, req.TextContent, req.ListID, req.SendRate,
-		req.ScheduledAt, req.TrackOpens, req.TrackClicks, totalEmails)
+		req.ScheduledAt, req.TrackOpens, req.TrackClicks, totalEmails, autoStartAt)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to create campaign"})
 	}
-
-	// Get the auto_start_at time
-	var autoStartAt time.Time
-	s.db.QueryRow(`SELECT auto_start_at FROM campaigns WHERE id = $1`, id).Scan(&autoStartAt)
 
 	return c.Status(201).JSON(fiber.Map{
 		"message":       "Campanha criada",
 		"id":            id,
 		"total_emails":  totalEmails,
 		"smtp_count":    smtpCount,
-		"auto_start_at": autoStartAt,
+		"auto_start_at": autoStartAt.Format(time.RFC3339),
 	})
 }
 
@@ -555,29 +552,26 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 	var totalEmails int
 	s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false`, listID).Scan(&totalEmails)
 
-	// Create new campaign with "Copy of" prefix as draft with auto_start_at = NOW() + 60 seconds
+	// Create new campaign with "Copy of" prefix as draft with auto_start_at = NOW() + 60 seconds (UTC)
 	newID := uuid.New().String()
 	newName := "Cópia de " + name
+	autoStartAt := time.Now().UTC().Add(60 * time.Second)
 
 	_, err = s.db.Exec(`
 		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to, html_content, text_content, list_id, send_rate, track_opens, track_clicks, total_emails, status, auto_start_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'draft', NOW() + INTERVAL '60 seconds')
-	`, newID, newName, subject, fromName, fromEmail, replyTo, htmlContent, textContent, listID, sendRate, trackOpens, trackClicks, totalEmails)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'draft', $14)
+	`, newID, newName, subject, fromName, fromEmail, replyTo, htmlContent, textContent, listID, sendRate, trackOpens, trackClicks, totalEmails, autoStartAt)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to clone campaign"})
 	}
-
-	// Get the auto_start_at time
-	var autoStartAt time.Time
-	s.db.QueryRow(`SELECT auto_start_at FROM campaigns WHERE id = $1`, newID).Scan(&autoStartAt)
 
 	return c.JSON(fiber.Map{
 		"message":       "Campanha clonada",
 		"id":            newID,
 		"total_emails":  totalEmails,
 		"smtp_count":    smtpCount,
-		"auto_start_at": autoStartAt,
+		"auto_start_at": autoStartAt.Format(time.RFC3339),
 	})
 }
 
