@@ -156,8 +156,11 @@ function Campaigns() {
       const response = await api.post(`/campaigns/${id}/clone`)
       toast.success('Campanha clonada!')
 
+      console.log('Clone response:', response.data)
+
       // If auto_start is true, show countdown
       if (response.data.auto_start) {
+        console.log('Starting countdown for campaign:', response.data.id)
         setCountdownCampaignId(response.data.id)
         setCountdownInfo({
           total_emails: response.data.total_emails,
@@ -262,6 +265,9 @@ function Campaigns() {
     e.stopPropagation()
     setActionMenu(actionMenu === id ? null : id)
   }
+
+  // Debug log
+  console.log('Countdown state:', countdown, 'Campaign ID:', countdownCampaignId)
 
   return (
     <div>
