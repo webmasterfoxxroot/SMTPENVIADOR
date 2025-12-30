@@ -7,6 +7,7 @@ import SMTPServers from './pages/SMTPServers'
 import EmailLists from './pages/EmailLists'
 import Campaigns from './pages/Campaigns'
 import CampaignEdit from './pages/CampaignEdit'
+import CampaignDetails from './pages/CampaignDetails'
 import Templates from './pages/Templates'
 import Blacklist from './pages/Blacklist'
 import { getToken } from './services/auth'
@@ -41,6 +42,7 @@ function App() {
         <Route path="campaigns" element={<Campaigns />} />
         <Route path="campaigns/new" element={<CampaignEdit />} />
         <Route path="campaigns/:id" element={<CampaignEdit />} />
+        <Route path="campaigns/:id/details" element={<CampaignDetails />} />
         <Route path="templates" element={<Templates />} />
         <Route path="blacklist" element={<Blacklist />} />
       </Route>

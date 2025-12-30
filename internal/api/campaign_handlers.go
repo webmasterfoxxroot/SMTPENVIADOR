@@ -1,6 +1,9 @@
 package api
 
 import (
+	"database/sql"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -424,5 +427,356 @@ func (s *Server) getCampaignStats(c *fiber.Ctx) error {
 		"sent":    stats["sent"],
 		"failed":  stats["failed"],
 		"bounced": stats["bounced"],
+	})
+}
+
+// cloneCampaign creates a copy of an existing campaign
+func (s *Server) cloneCampaign(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	// Get original campaign
+	var name, subject, fromName, fromEmail, replyTo, htmlContent, textContent, listID string
+	var sendRate int
+	err := s.db.QueryRow(`
+		SELECT name, subject, from_name, from_email, reply_to, html_content, text_content, list_id, send_rate
+		FROM campaigns WHERE id = $1
+	`, id).Scan(&name, &subject, &fromName, &fromEmail, &replyTo, &htmlContent, &textContent, &listID, &sendRate)
+
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
+	}
+
+	// Create new campaign with "Copy of" prefix
+	newID := uuid.New().String()
+	newName := "Cópia de " + name
+
+	_, err = s.db.Exec(`
+		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to, html_content, text_content, list_id, send_rate, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'draft')
+	`, newID, newName, subject, fromName, fromEmail, replyTo, htmlContent, textContent, listID, sendRate)
+
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to clone campaign"})
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "Campaign cloned",
+		"id":      newID,
+	})
+}
+
+// resendCampaign resends the campaign to all emails in the list
+func (s *Server) resendCampaign(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	// Get campaign details
+	var listID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	err := s.db.QueryRow(`
+		SELECT list_id, from_email, from_name, reply_to, subject, html_content, text_content
+		FROM campaigns WHERE id = $1
+	`, id).Scan(&listID, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent)
+
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
+	}
+
+	// Clear previous campaign_emails
+	s.db.Exec(`DELETE FROM campaign_emails WHERE campaign_id = $1`, id)
+
+	// Reset campaign counters
+	s.db.Exec(`UPDATE campaigns SET sent_count = 0, failed_count = 0, open_count = 0, click_count = 0, bounce_count = 0 WHERE id = $1`, id)
+
+	// Get all emails from list
+	rows, err := s.db.Query(`
+		SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
+		FROM emails
+		WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
+	`, listID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch emails"})
+	}
+	defer rows.Close()
+
+	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent)
+
+	// Update campaign status
+	s.db.Exec(`UPDATE campaigns SET status = 'running', started_at = NOW(), total_emails = $1 WHERE id = $2`, count, id)
+
+	return c.JSON(fiber.Map{
+		"message":       "Campaign resend started",
+		"emails_queued": count,
+	})
+}
+
+// resendToFailed resends only to emails that failed
+func (s *Server) resendToFailed(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	// Get campaign details
+	var fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	err := s.db.QueryRow(`
+		SELECT from_email, from_name, reply_to, subject, html_content, text_content
+		FROM campaigns WHERE id = $1
+	`, id).Scan(&fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent)
+
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
+	}
+
+	// Get failed emails
+	rows, err := s.db.Query(`
+		SELECT e.id, e.email, e.name, e.custom1, e.custom2, e.custom3, e.custom4, e.custom5
+		FROM emails e
+		INNER JOIN campaign_emails ce ON ce.email_id = e.id
+		WHERE ce.campaign_id = $1 AND ce.status = 'failed'
+	`, id)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch failed emails"})
+	}
+	defer rows.Close()
+
+	// Delete old failed records
+	s.db.Exec(`DELETE FROM campaign_emails WHERE campaign_id = $1 AND status = 'failed'`, id)
+
+	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent)
+
+	// Update campaign status
+	if count > 0 {
+		s.db.Exec(`UPDATE campaigns SET status = 'running' WHERE id = $1`, id)
+	}
+
+	return c.JSON(fiber.Map{
+		"message":       "Resending to failed emails",
+		"emails_queued": count,
+	})
+}
+
+// resendToNonOpeners resends only to emails that didn't open
+func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	// Get campaign details
+	var fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	err := s.db.QueryRow(`
+		SELECT from_email, from_name, reply_to, subject, html_content, text_content
+		FROM campaigns WHERE id = $1
+	`, id).Scan(&fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent)
+
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
+	}
+
+	// Get emails that were sent but not opened
+	rows, err := s.db.Query(`
+		SELECT e.id, e.email, e.name, e.custom1, e.custom2, e.custom3, e.custom4, e.custom5
+		FROM emails e
+		INNER JOIN campaign_emails ce ON ce.email_id = e.id
+		WHERE ce.campaign_id = $1 AND ce.status = 'sent' AND ce.opened_at IS NULL
+	`, id)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch non-opener emails"})
+	}
+	defer rows.Close()
+
+	// Delete old sent records for non-openers
+	s.db.Exec(`DELETE FROM campaign_emails WHERE campaign_id = $1 AND status = 'sent' AND opened_at IS NULL`, id)
+
+	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent)
+
+	// Update campaign status
+	if count > 0 {
+		s.db.Exec(`UPDATE campaigns SET status = 'running' WHERE id = $1`, id)
+	}
+
+	return c.JSON(fiber.Map{
+		"message":       "Resending to non-openers",
+		"emails_queued": count,
+	})
+}
+
+// queueEmails is a helper to queue emails from a rows result
+func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string) int {
+	count := 0
+	for rows.Next() {
+		var emailID, email string
+		var name, c1, c2, c3, c4, c5 *string
+		rows.Scan(&emailID, &email, &name, &c1, &c2, &c3, &c4, &c5)
+
+		variables := make(map[string]string)
+		if c1 != nil {
+			variables["custom1"] = *c1
+		}
+		if c2 != nil {
+			variables["custom2"] = *c2
+		}
+		if c3 != nil {
+			variables["custom3"] = *c3
+		}
+		if c4 != nil {
+			variables["custom4"] = *c4
+		}
+		if c5 != nil {
+			variables["custom5"] = *c5
+		}
+
+		nameStr := ""
+		if name != nil {
+			nameStr = *name
+		}
+
+		job := &queue.EmailJob{
+			ID:          uuid.New().String(),
+			CampaignID:  campaignID,
+			EmailID:     emailID,
+			To:          email,
+			ToName:      nameStr,
+			From:        fromEmail,
+			FromName:    fromName,
+			ReplyTo:     replyTo,
+			Subject:     subject,
+			HTMLContent: htmlContent,
+			TextContent: textContent,
+			Variables:   variables,
+			CreatedAt:   time.Now(),
+		}
+
+		s.db.Exec(`
+			INSERT INTO campaign_emails (id, campaign_id, email_id, status)
+			VALUES ($1, $2, $3, 'queued')
+		`, job.ID, campaignID, emailID)
+
+		s.queue.Push(job)
+		count++
+	}
+	return count
+}
+
+// exportCampaignCSV exports campaign results to CSV
+func (s *Server) exportCampaignCSV(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	// Get campaign name
+	var campaignName string
+	s.db.QueryRow(`SELECT name FROM campaigns WHERE id = $1`, id).Scan(&campaignName)
+
+	// Get all campaign emails with details
+	rows, err := s.db.Query(`
+		SELECT e.email, e.name, ce.status, ce.sent_at, ce.opened_at, ce.clicked_at, ce.error_message
+		FROM campaign_emails ce
+		INNER JOIN emails e ON e.id = ce.email_id
+		WHERE ce.campaign_id = $1
+		ORDER BY ce.sent_at DESC
+	`, id)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch campaign data"})
+	}
+	defer rows.Close()
+
+	// Build CSV
+	var csv strings.Builder
+	csv.WriteString("Email,Nome,Status,Enviado Em,Aberto Em,Clicado Em,Erro\n")
+
+	for rows.Next() {
+		var email, status string
+		var name, errorMsg *string
+		var sentAt, openedAt, clickedAt *time.Time
+
+		rows.Scan(&email, &name, &status, &sentAt, &openedAt, &clickedAt, &errorMsg)
+
+		nameStr := ""
+		if name != nil {
+			nameStr = *name
+		}
+		errorStr := ""
+		if errorMsg != nil {
+			errorStr = *errorMsg
+		}
+		sentStr := ""
+		if sentAt != nil {
+			sentStr = sentAt.Format("2006-01-02 15:04:05")
+		}
+		openedStr := ""
+		if openedAt != nil {
+			openedStr = openedAt.Format("2006-01-02 15:04:05")
+		}
+		clickedStr := ""
+		if clickedAt != nil {
+			clickedStr = clickedAt.Format("2006-01-02 15:04:05")
+		}
+
+		csv.WriteString(fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s\n",
+			email, nameStr, status, sentStr, openedStr, clickedStr, errorStr))
+	}
+
+	c.Set("Content-Type", "text/csv")
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.csv\"", campaignName))
+	return c.SendString(csv.String())
+}
+
+// getCampaignDetails returns detailed list of emails with status
+func (s *Server) getCampaignDetails(c *fiber.Ctx) error {
+	id := c.Params("id")
+	status := c.Query("status", "")
+	page := c.QueryInt("page", 1)
+	limit := c.QueryInt("limit", 50)
+	offset := (page - 1) * limit
+
+	// Build query
+	query := `
+		SELECT e.email, e.name, ce.status, ce.sent_at, ce.opened_at, ce.clicked_at, ce.error_message
+		FROM campaign_emails ce
+		INNER JOIN emails e ON e.id = ce.email_id
+		WHERE ce.campaign_id = $1
+	`
+	args := []interface{}{id}
+
+	if status != "" {
+		query += " AND ce.status = $2"
+		args = append(args, status)
+	}
+
+	query += " ORDER BY ce.sent_at DESC LIMIT $" + fmt.Sprintf("%d", len(args)+1) + " OFFSET $" + fmt.Sprintf("%d", len(args)+2)
+	args = append(args, limit, offset)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch details"})
+	}
+	defer rows.Close()
+
+	var emails []fiber.Map
+	for rows.Next() {
+		var email, emailStatus string
+		var name, errorMsg *string
+		var sentAt, openedAt, clickedAt *time.Time
+
+		rows.Scan(&email, &name, &emailStatus, &sentAt, &openedAt, &clickedAt, &errorMsg)
+
+		emails = append(emails, fiber.Map{
+			"email":      email,
+			"name":       name,
+			"status":     emailStatus,
+			"sent_at":    sentAt,
+			"opened_at":  openedAt,
+			"clicked_at": clickedAt,
+			"error":      errorMsg,
+		})
+	}
+
+	// Get total count
+	var total int
+	countQuery := `SELECT COUNT(*) FROM campaign_emails WHERE campaign_id = $1`
+	countArgs := []interface{}{id}
+	if status != "" {
+		countQuery += " AND status = $2"
+		countArgs = append(countArgs, status)
+	}
+	s.db.QueryRow(countQuery, countArgs...).Scan(&total)
+
+	return c.JSON(fiber.Map{
+		"data":  emails,
+		"total": total,
+		"page":  page,
+		"limit": limit,
 	})
 }

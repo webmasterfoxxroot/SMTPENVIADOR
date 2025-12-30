@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   Plus,
   Play,
@@ -8,7 +8,14 @@ import {
   Trash2,
   Eye,
   Send,
-  Loader2
+  Loader2,
+  Copy,
+  RefreshCw,
+  AlertCircle,
+  EyeOff,
+  Download,
+  MoreVertical,
+  List
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
@@ -16,11 +23,20 @@ import api from '../services/api'
 function Campaigns() {
   const [campaigns, setCampaigns] = useState([])
   const [loading, setLoading] = useState(true)
+  const [actionMenu, setActionMenu] = useState(null)
+  const navigate = useNavigate()
 
   useEffect(() => {
     fetchCampaigns()
     const interval = setInterval(fetchCampaigns, 10000)
     return () => clearInterval(interval)
+  }, [])
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    const handleClick = () => setActionMenu(null)
+    document.addEventListener('click', handleClick)
+    return () => document.removeEventListener('click', handleClick)
   }, [])
 
   const fetchCampaigns = async () => {
@@ -88,6 +104,72 @@ function Campaigns() {
     }
   }
 
+  const cloneCampaign = async (id) => {
+    try {
+      const response = await api.post(`/campaigns/${id}/clone`)
+      toast.success('Campanha clonada!')
+      navigate(`/campaigns/${response.data.id}`)
+    } catch (error) {
+      toast.error('Erro ao clonar campanha')
+    }
+  }
+
+  const resendCampaign = async (id) => {
+    if (!confirm('Reenviar para TODOS os emails da lista?')) return
+
+    try {
+      const response = await api.post(`/campaigns/${id}/resend`)
+      toast.success(`Reenviando! ${response.data.emails_queued} emails na fila`)
+      fetchCampaigns()
+    } catch (error) {
+      toast.error('Erro ao reenviar')
+    }
+  }
+
+  const resendToFailed = async (id) => {
+    try {
+      const response = await api.post(`/campaigns/${id}/resend-failed`)
+      if (response.data.emails_queued === 0) {
+        toast.info('Nenhum email falho para reenviar')
+      } else {
+        toast.success(`Reenviando para ${response.data.emails_queued} emails que falharam`)
+      }
+      fetchCampaigns()
+    } catch (error) {
+      toast.error('Erro ao reenviar para falhos')
+    }
+  }
+
+  const resendToNonOpeners = async (id) => {
+    try {
+      const response = await api.post(`/campaigns/${id}/resend-non-openers`)
+      if (response.data.emails_queued === 0) {
+        toast.info('Todos os emails foram abertos!')
+      } else {
+        toast.success(`Reenviando para ${response.data.emails_queued} que não abriram`)
+      }
+      fetchCampaigns()
+    } catch (error) {
+      toast.error('Erro ao reenviar para não abertos')
+    }
+  }
+
+  const exportCSV = async (id, name) => {
+    try {
+      const response = await api.get(`/campaigns/${id}/export`, { responseType: 'blob' })
+      const url = window.URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', `${name}.csv`)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      toast.success('CSV exportado!')
+    } catch (error) {
+      toast.error('Erro ao exportar CSV')
+    }
+  }
+
   const getStatusBadge = (status) => {
     const badges = {
       draft: 'badge-gray',
@@ -115,6 +197,11 @@ function Campaigns() {
   const getProgress = (campaign) => {
     if (campaign.total_emails === 0) return 0
     return Math.round((campaign.sent_count / campaign.total_emails) * 100)
+  }
+
+  const toggleMenu = (e, id) => {
+    e.stopPropagation()
+    setActionMenu(actionMenu === id ? null : id)
   }
 
   return (
@@ -173,6 +260,11 @@ function Campaigns() {
                           style={{ width: `${getProgress(campaign)}%` }}
                         />
                       </div>
+                      {campaign.failed_count > 0 && (
+                        <div className="text-xs text-red-500 mt-1">
+                          {campaign.failed_count} falhos
+                        </div>
+                      )}
                     </div>
                   </td>
                   <td className="text-gray-600">
@@ -236,15 +328,89 @@ function Campaigns() {
                       >
                         <Eye className="w-4 h-4" />
                       </Link>
-                      {(campaign.status === 'draft' || campaign.status === 'completed' || campaign.status === 'cancelled') && (
+
+                      {/* Dropdown menu for more actions */}
+                      <div className="relative">
                         <button
-                          onClick={() => deleteCampaign(campaign.id)}
-                          className="p-2 text-red-600 hover:bg-red-50 rounded"
-                          title="Excluir"
+                          onClick={(e) => toggleMenu(e, campaign.id)}
+                          className="p-2 text-gray-600 hover:bg-gray-100 rounded"
+                          title="Mais opções"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <MoreVertical className="w-4 h-4" />
                         </button>
-                      )}
+
+                        {actionMenu === campaign.id && (
+                          <div className="absolute right-0 top-full mt-1 bg-white border rounded-lg shadow-lg py-1 z-10 min-w-[180px]">
+                            <button
+                              onClick={() => cloneCampaign(campaign.id)}
+                              className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                            >
+                              <Copy className="w-4 h-4" />
+                              Clonar
+                            </button>
+
+                            {(campaign.status === 'completed' || campaign.status === 'cancelled') && (
+                              <>
+                                <button
+                                  onClick={() => resendCampaign(campaign.id)}
+                                  className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                                >
+                                  <RefreshCw className="w-4 h-4" />
+                                  Reenviar Todos
+                                </button>
+
+                                {campaign.failed_count > 0 && (
+                                  <button
+                                    onClick={() => resendToFailed(campaign.id)}
+                                    className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2 text-red-600"
+                                  >
+                                    <AlertCircle className="w-4 h-4" />
+                                    Reenviar Falhos ({campaign.failed_count})
+                                  </button>
+                                )}
+
+                                <button
+                                  onClick={() => resendToNonOpeners(campaign.id)}
+                                  className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                                >
+                                  <EyeOff className="w-4 h-4" />
+                                  Reenviar Não Abertos
+                                </button>
+                              </>
+                            )}
+
+                            <hr className="my-1" />
+
+                            <Link
+                              to={`/campaigns/${campaign.id}/details`}
+                              className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                            >
+                              <List className="w-4 h-4" />
+                              Ver Detalhes
+                            </Link>
+
+                            <button
+                              onClick={() => exportCSV(campaign.id, campaign.name)}
+                              className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                            >
+                              <Download className="w-4 h-4" />
+                              Exportar CSV
+                            </button>
+
+                            <hr className="my-1" />
+
+                            {(campaign.status === 'draft' || campaign.status === 'completed' || campaign.status === 'cancelled') && (
+                              <button
+                                onClick={() => deleteCampaign(campaign.id)}
+                                className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2 text-red-600"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                                Excluir
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </td>
                 </tr>

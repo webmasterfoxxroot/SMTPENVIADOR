@@ -128,6 +128,12 @@ func (s *Server) setupRoutes() {
 	campaigns.Post("/:id/resume", s.resumeCampaign)
 	campaigns.Post("/:id/cancel", s.cancelCampaign)
 	campaigns.Get("/:id/stats", s.getCampaignStats)
+	campaigns.Post("/:id/clone", s.cloneCampaign)
+	campaigns.Post("/:id/resend", s.resendCampaign)
+	campaigns.Post("/:id/resend-failed", s.resendToFailed)
+	campaigns.Post("/:id/resend-non-openers", s.resendToNonOpeners)
+	campaigns.Get("/:id/export", s.exportCampaignCSV)
+	campaigns.Get("/:id/details", s.getCampaignDetails)
 
 	// Blacklist
 	blacklist := protected.Group("/blacklist")
