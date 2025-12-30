@@ -290,13 +290,13 @@ func (s *SMTPConnection) Send(params SendParams) error {
 	boundary := fmt.Sprintf("=_%d_%d_=", time.Now().UnixNano(), time.Now().Unix())
 	messageID := fmt.Sprintf("<%d.%d@%s>", time.Now().UnixNano(), time.Now().Unix(), s.Host)
 
-	// Build message - 100% 7-bit ASCII, no UTF-8 anywhere
+	// Build message like Roundcube does
 	var message string
 
 	// Headers - all ASCII
 	message += fmt.Sprintf("From: %s\r\n", params.From)
 	message += fmt.Sprintf("Date: %s\r\n", time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 +0000"))
-	message += fmt.Sprintf("Subject: %s\r\n", toASCII(params.Subject))
+	message += fmt.Sprintf("Subject: %s\r\n", encodeRFC2047(params.Subject))
 	message += fmt.Sprintf("Message-Id: %s\r\n", messageID)
 	message += fmt.Sprintf("To: %s\r\n", params.To)
 	message += "MIME-Version: 1.0\r\n"
@@ -306,23 +306,23 @@ func (s *SMTPConnection) Send(params SendParams) error {
 	}
 	message += "\r\n"
 
-	// Text part - base64 encoded, US-ASCII charset
+	// Text part - quoted-printable like Roundcube
 	textContent := params.TextContent
 	if textContent == "" {
 		textContent = "Email content"
 	}
 	message += "--" + boundary + "\r\n"
-	message += "Content-Type: text/plain; charset=us-ascii\r\n"
-	message += "Content-Transfer-Encoding: base64\r\n"
+	message += "Content-Type: text/plain; charset=UTF-8\r\n"
+	message += "Content-Transfer-Encoding: quoted-printable\r\n"
 	message += "\r\n"
-	message += encodeBase64WithLineBreaks([]byte(textContent))
+	message += encodeQuotedPrintable(textContent) + "\r\n"
 
-	// HTML part - base64 encoded, US-ASCII charset
+	// HTML part - quoted-printable like Roundcube
 	message += "--" + boundary + "\r\n"
-	message += "Content-Type: text/html; charset=us-ascii\r\n"
-	message += "Content-Transfer-Encoding: base64\r\n"
+	message += "Content-Type: text/html; charset=UTF-8\r\n"
+	message += "Content-Transfer-Encoding: quoted-printable\r\n"
 	message += "\r\n"
-	message += encodeBase64WithLineBreaks([]byte(params.HTMLContent))
+	message += encodeQuotedPrintable(params.HTMLContent) + "\r\n"
 	message += "--" + boundary + "--\r\n"
 
 	// Handle different TLS modes
@@ -623,4 +623,53 @@ func encodeBase64WithLineBreaks(data []byte) string {
 		result += encoded[i:end] + "\r\n"
 	}
 	return result
+}
+
+// encodeQuotedPrintable encodes content using quoted-printable encoding (RFC 2045)
+// This is how Roundcube encodes email body content
+func encodeQuotedPrintable(s string) string {
+	var result []byte
+	lineLen := 0
+	maxLineLen := 76
+
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+
+		// Handle line breaks in input
+		if b == '\r' && i+1 < len(s) && s[i+1] == '\n' {
+			result = append(result, '\r', '\n')
+			lineLen = 0
+			i++ // skip \n
+			continue
+		}
+		if b == '\n' {
+			result = append(result, '\r', '\n')
+			lineLen = 0
+			continue
+		}
+
+		var encoded []byte
+
+		// Encode based on RFC 2045:
+		// - Printable ASCII (33-126) except = (61) can be literal
+		// - Space (32) and Tab (9) can be literal unless at end of line
+		// - Everything else must be encoded
+		if (b >= 33 && b <= 126 && b != '=') || b == ' ' || b == '\t' {
+			encoded = []byte{b}
+		} else {
+			// Encode as =XX
+			encoded = []byte(fmt.Sprintf("=%02X", b))
+		}
+
+		// Check if we need a soft line break
+		if lineLen+len(encoded) > maxLineLen-1 {
+			result = append(result, '=', '\r', '\n')
+			lineLen = 0
+		}
+
+		result = append(result, encoded...)
+		lineLen += len(encoded)
+	}
+
+	return string(result)
 }
