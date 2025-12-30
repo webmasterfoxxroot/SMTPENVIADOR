@@ -286,17 +286,18 @@ func (s *SMTPConnection) Send(params SendParams) error {
 
 	addr := fmt.Sprintf("%s:%d", s.Host, s.Port)
 
-	// Generate unique boundary and message ID
-	boundary := fmt.Sprintf("----=_Part_%d_%d", time.Now().UnixNano(), time.Now().Unix())
+	// Generate unique boundary and message ID (similar format to other senders)
+	boundary := fmt.Sprintf("=-%d%d==", time.Now().UnixNano(), time.Now().Unix())
 	messageID := fmt.Sprintf("<%d.%d@%s>", time.Now().UnixNano(), time.Now().Unix(), s.Host)
+	contentID := fmt.Sprintf("<%d.%d@%s>", time.Now().UnixNano()+1, time.Now().Unix(), s.Host)
 
-	// Build message with proper header order - all 7-bit ASCII clean
+	// Build message - matching the format of working senders
 	var message string
-	message += fmt.Sprintf("From: %s\r\n", params.From) // Simple email, no name with accents
-	message += fmt.Sprintf("To: %s\r\n", params.To)     // Simple email, no name with accents
-	message += fmt.Sprintf("Date: %s\r\n", time.Now().Format("Mon, 02 Jan 2006 15:04:05 -0700"))
-	message += fmt.Sprintf("Message-Id: %s\r\n", messageID)
+	message += fmt.Sprintf("From: %s\r\n", params.From)
+	message += fmt.Sprintf("Date: %s\r\n", time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 -0700"))
 	message += fmt.Sprintf("Subject: %s\r\n", encodeRFC2047(params.Subject))
+	message += fmt.Sprintf("Message-Id: %s\r\n", messageID)
+	message += fmt.Sprintf("To: %s\r\n", params.To)
 	message += "MIME-Version: 1.0\r\n"
 	message += fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\r\n", boundary)
 	if params.ReplyTo != "" {
@@ -304,24 +305,23 @@ func (s *SMTPConnection) Send(params SendParams) error {
 	}
 	message += "\r\n"
 
-	// Text part - base64 encoded for 7-bit safety
-	textContent := params.TextContent
-	if textContent == "" {
-		textContent = "Email content"
-	}
+	// Text part - plain UTF-8 like the working sender
 	message += "--" + boundary + "\r\n"
 	message += "Content-Type: text/plain; charset=utf-8\r\n"
-	message += "Content-Transfer-Encoding: base64\r\n"
 	message += "\r\n"
-	message += encodeBase64WithLineBreaks([]byte(textContent)) + "\r\n"
+	textContent := params.TextContent
+	if textContent == "" {
+		textContent = " "
+	}
+	message += textContent + "\r\n"
 
-	// HTML part - base64 encoded for 7-bit safety
+	// HTML part - plain UTF-8 with Content-Id like the working sender
 	message += "--" + boundary + "\r\n"
 	message += "Content-Type: text/html; charset=utf-8\r\n"
-	message += "Content-Transfer-Encoding: base64\r\n"
+	message += fmt.Sprintf("Content-Id: %s\r\n", contentID)
 	message += "\r\n"
-	message += encodeBase64WithLineBreaks([]byte(params.HTMLContent)) + "\r\n"
-	message += "--" + boundary + "--"
+	message += params.HTMLContent + "\r\n"
+	message += "--" + boundary + "--\r\n"
 
 	// Handle different TLS modes
 	switch s.TLSMode {
