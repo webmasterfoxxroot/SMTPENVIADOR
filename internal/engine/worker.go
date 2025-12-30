@@ -101,12 +101,14 @@ func (w *Worker) processJob() {
 	textContent := w.processVariables(job.TextContent, job.Variables, job.To, job.ToName)
 	subject := w.processVariables(job.Subject, job.Variables, job.To, job.ToName)
 
-	// Add tracking pixel
-	trackingPixel := w.generateTrackingPixel(job.CampaignID, job.EmailID)
-	htmlContent = strings.Replace(htmlContent, "</body>", trackingPixel+"</body>", 1)
+	// Add tracking pixel only if tracking is enabled
+	if job.TrackOpens {
+		trackingPixel := w.generateTrackingPixel(job.CampaignID, job.EmailID)
+		htmlContent = strings.Replace(htmlContent, "</body>", trackingPixel+"</body>", 1)
 
-	// Process links for click tracking
-	htmlContent = w.processLinks(htmlContent, job.CampaignID, job.EmailID)
+		// Process links for click tracking
+		htmlContent = w.processLinks(htmlContent, job.CampaignID, job.EmailID)
+	}
 
 	// Use email from SMTP sender, but name from campaign
 	fromEmail := sender.Email

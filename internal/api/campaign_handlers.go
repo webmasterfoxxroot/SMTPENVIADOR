@@ -244,10 +244,11 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 	// Get campaign details
 	var listID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string
 	var status string
+	var trackOpens bool
 	err := s.db.QueryRow(`
-		SELECT list_id, from_email, from_name, reply_to, subject, html_content, text_content, status
+		SELECT list_id, from_email, from_name, reply_to, subject, html_content, text_content, status, COALESCE(track_opens, true)
 		FROM campaigns WHERE id = $1
-	`, id).Scan(&listID, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &status)
+	`, id).Scan(&listID, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &status, &trackOpens)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
@@ -311,6 +312,7 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 			HTMLContent: htmlContent,
 			TextContent: textContent,
 			Variables:   variables,
+			TrackOpens:  trackOpens,
 			CreatedAt:   time.Now(),
 		}
 
@@ -471,10 +473,11 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 
 	// Get campaign details
 	var listID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	var trackOpens bool
 	err := s.db.QueryRow(`
-		SELECT list_id, from_email, from_name, reply_to, subject, html_content, text_content
+		SELECT list_id, from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true)
 		FROM campaigns WHERE id = $1
-	`, id).Scan(&listID, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent)
+	`, id).Scan(&listID, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
@@ -497,7 +500,7 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 	}
 	defer rows.Close()
 
-	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent)
+	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens)
 
 	// Update campaign status
 	s.db.Exec(`UPDATE campaigns SET status = 'running', started_at = NOW(), total_emails = $1 WHERE id = $2`, count, id)
@@ -514,10 +517,11 @@ func (s *Server) resendToFailed(c *fiber.Ctx) error {
 
 	// Get campaign details
 	var fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	var trackOpens bool
 	err := s.db.QueryRow(`
-		SELECT from_email, from_name, reply_to, subject, html_content, text_content
+		SELECT from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true)
 		FROM campaigns WHERE id = $1
-	`, id).Scan(&fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent)
+	`, id).Scan(&fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
@@ -538,7 +542,7 @@ func (s *Server) resendToFailed(c *fiber.Ctx) error {
 	// Delete old failed records
 	s.db.Exec(`DELETE FROM campaign_emails WHERE campaign_id = $1 AND status = 'failed'`, id)
 
-	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent)
+	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens)
 
 	// Update campaign status
 	if count > 0 {
@@ -557,10 +561,11 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 
 	// Get campaign details
 	var fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	var trackOpens bool
 	err := s.db.QueryRow(`
-		SELECT from_email, from_name, reply_to, subject, html_content, text_content
+		SELECT from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true)
 		FROM campaigns WHERE id = $1
-	`, id).Scan(&fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent)
+	`, id).Scan(&fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
@@ -581,7 +586,7 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 	// Delete old sent records for non-openers
 	s.db.Exec(`DELETE FROM campaign_emails WHERE campaign_id = $1 AND status = 'sent' AND opened_at IS NULL`, id)
 
-	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent)
+	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens)
 
 	// Update campaign status
 	if count > 0 {
@@ -595,7 +600,7 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 }
 
 // queueEmails is a helper to queue emails from a rows result
-func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string) int {
+func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string, trackOpens bool) int {
 	count := 0
 	for rows.Next() {
 		var emailID, email string
@@ -637,6 +642,7 @@ func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, re
 			HTMLContent: htmlContent,
 			TextContent: textContent,
 			Variables:   variables,
+			TrackOpens:  trackOpens,
 			CreatedAt:   time.Now(),
 		}
 

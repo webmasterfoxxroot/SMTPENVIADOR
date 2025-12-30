@@ -18,7 +18,8 @@ function CampaignEdit() {
     html_content: '',
     text_content: '',
     list_id: '',
-    send_rate: 0
+    send_rate: 0,
+    track_opens: true
   })
 
   useEffect(() => {
@@ -133,6 +134,18 @@ function CampaignEdit() {
                 className="input"
                 min="0"
               />
+            </div>
+            <div className="flex items-center gap-3 pt-6">
+              <input
+                type="checkbox"
+                id="track_opens"
+                checked={form.track_opens}
+                onChange={(e) => setForm({ ...form, track_opens: e.target.checked })}
+                className="w-5 h-5 rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500"
+              />
+              <label htmlFor="track_opens" className="text-sm">
+                Rastrear aberturas e cliques
+              </label>
             </div>
           </div>
         </div>
