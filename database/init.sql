@@ -199,6 +199,23 @@ CREATE TABLE logs (
 CREATE INDEX idx_logs_level ON logs(level);
 CREATE INDEX idx_logs_created_at ON logs(created_at);
 
+-- Settings table
+CREATE TABLE settings (
+    key VARCHAR(100) PRIMARY KEY,
+    value TEXT NOT NULL,
+    description VARCHAR(255),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Insert default settings
+INSERT INTO settings (key, value, description) VALUES
+('tracking_domain', 'http://localhost', 'Domain for tracking opens and clicks'),
+('workers_count', '10', 'Number of email sending workers'),
+('connections_per_smtp', '5', 'Max connections per SMTP server'),
+('default_send_rate', '0', 'Default send rate (emails/min, 0=unlimited)'),
+('retry_attempts', '3', 'Number of retry attempts for failed emails'),
+('retry_delay', '60', 'Delay between retries (seconds)');
+
 -- Insert default admin user (password: admin123)
 INSERT INTO users (email, password_hash, name, role) VALUES
 ('admin@admin.com', '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 'Administrador', 'admin');

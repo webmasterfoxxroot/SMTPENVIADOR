@@ -149,6 +149,13 @@ func (s *Server) setupRoutes() {
 
 	// Logs
 	protected.Get("/logs", s.getLogs)
+
+	// Settings
+	settings := protected.Group("/settings")
+	settings.Get("/", s.getSettings)
+	settings.Get("/:key", s.getSetting)
+	settings.Put("/:key", s.updateSetting)
+	settings.Put("/", s.updateSettings)
 }
 
 // Start starts the API server

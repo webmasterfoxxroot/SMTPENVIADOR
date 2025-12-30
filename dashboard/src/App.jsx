@@ -10,6 +10,7 @@ import CampaignEdit from './pages/CampaignEdit'
 import CampaignDetails from './pages/CampaignDetails'
 import Templates from './pages/Templates'
 import Blacklist from './pages/Blacklist'
+import Settings from './pages/Settings'
 import { getToken } from './services/auth'
 
 function PrivateRoute({ children }) {
@@ -45,6 +46,7 @@ function App() {
         <Route path="campaigns/:id/details" element={<CampaignDetails />} />
         <Route path="templates" element={<Templates />} />
         <Route path="blacklist" element={<Blacklist />} />
+        <Route path="settings" element={<Settings />} />
       </Route>
     </Routes>
   )

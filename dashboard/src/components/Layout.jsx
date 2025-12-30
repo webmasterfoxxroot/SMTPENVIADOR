@@ -7,7 +7,8 @@ import {
   FileText,
   Ban,
   LogOut,
-  Zap
+  Zap,
+  Settings
 } from 'lucide-react'
 import { removeToken, getUser } from '../services/auth'
 
@@ -28,6 +29,7 @@ function Layout({ onLogout }) {
     { path: '/campaigns', icon: Send, label: 'Campanhas' },
     { path: '/templates', icon: FileText, label: 'Templates' },
     { path: '/blacklist', icon: Ban, label: 'Blacklist' },
+    { path: '/settings', icon: Settings, label: 'Configuracoes' },
   ]
 
   return (
