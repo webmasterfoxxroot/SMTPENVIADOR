@@ -449,15 +449,34 @@ func (s *SMTPConnection) authenticate(client *smtp.Client) error {
 }
 
 // sendMessage sends the email after authentication
+// Uses raw SMTP commands to avoid Go's automatic SMTPUTF8 extension
 func (s *SMTPConnection) sendMessage(client *smtp.Client, from, to string, msg []byte) error {
-	if err := client.Mail(from); err != nil {
-		return fmt.Errorf("failed to set sender: %w", err)
+	// Send MAIL FROM without SMTPUTF8 extension (Go adds it automatically, causing issues)
+	// We use the Text connection to send raw commands
+	id, err := client.Text.Cmd("MAIL FROM:<%s>", from)
+	if err != nil {
+		return fmt.Errorf("failed to send MAIL FROM: %w", err)
+	}
+	client.Text.StartResponse(id)
+	code, message, err := client.Text.ReadResponse(250)
+	client.Text.EndResponse(id)
+	if err != nil {
+		return fmt.Errorf("MAIL FROM failed (%d): %s - %w", code, message, err)
 	}
 
-	if err := client.Rcpt(to); err != nil {
-		return fmt.Errorf("failed to set recipient: %w", err)
+	// Send RCPT TO
+	id, err = client.Text.Cmd("RCPT TO:<%s>", to)
+	if err != nil {
+		return fmt.Errorf("failed to send RCPT TO: %w", err)
+	}
+	client.Text.StartResponse(id)
+	code, message, err = client.Text.ReadResponse(250)
+	client.Text.EndResponse(id)
+	if err != nil {
+		return fmt.Errorf("RCPT TO failed (%d): %s - %w", code, message, err)
 	}
 
+	// Send DATA command and message body using standard method
 	w, err := client.Data()
 	if err != nil {
 		return fmt.Errorf("failed to get data writer: %w", err)
