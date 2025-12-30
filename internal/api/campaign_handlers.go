@@ -105,7 +105,7 @@ func (s *Server) listCampaigns(c *fiber.Ctx) error {
 	})
 }
 
-// createCampaign creates a new campaign and starts it automatically if SMTPs are available
+// createCampaign creates a new campaign (frontend will handle countdown and start)
 func (s *Server) createCampaign(c *fiber.Ctx) error {
 	var req CampaignRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -129,45 +129,32 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Nenhum SMTP ativo disponível. Adicione um SMTP antes de criar campanhas."})
 	}
 
+	// Get email count from list
+	var totalEmails int
+	s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false`, req.ListID).Scan(&totalEmails)
+
 	id := uuid.New().String()
 
-	// Insert campaign with running status (auto-start)
+	// Insert campaign as draft (frontend will show countdown and then call start)
 	_, err := s.db.Exec(`
 		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to,
 		                       html_content, text_content, list_id, send_rate,
-		                       scheduled_at, track_opens, track_clicks, status, started_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'running', NOW())
+		                       scheduled_at, track_opens, track_clicks, total_emails, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'draft')
 	`, id, req.Name, req.Subject, req.FromName, req.FromEmail, req.ReplyTo,
 		req.HTMLContent, req.TextContent, req.ListID, req.SendRate,
-		req.ScheduledAt, req.TrackOpens, req.TrackClicks)
+		req.ScheduledAt, req.TrackOpens, req.TrackClicks, totalEmails)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to create campaign"})
 	}
 
-	// Get tracking domain from settings
-	trackingDomain := s.getTrackingDomain()
-
-	// Get emails from list and queue them
-	rows, err := s.db.Query(`
-		SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
-		FROM emails
-		WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
-	`, req.ListID)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch emails"})
-	}
-	defer rows.Close()
-
-	count := s.queueEmails(rows, id, req.FromEmail, req.FromName, req.ReplyTo, req.Subject, req.HTMLContent, req.TextContent, req.TrackOpens, req.TrackClicks, trackingDomain)
-
-	// Update total emails count
-	s.db.Exec(`UPDATE campaigns SET total_emails = $1 WHERE id = $2`, count, id)
-
 	return c.Status(201).JSON(fiber.Map{
-		"message":       "Campanha criada e iniciada",
-		"id":            id,
-		"emails_queued": count,
+		"message":      "Campanha criada",
+		"id":           id,
+		"total_emails": totalEmails,
+		"smtp_count":   smtpCount,
+		"auto_start":   true,
 	})
 }
 
@@ -476,7 +463,7 @@ func (s *Server) getCampaignStats(c *fiber.Ctx) error {
 	})
 }
 
-// cloneCampaign creates a copy of an existing campaign and starts it automatically
+// cloneCampaign creates a copy of an existing campaign (frontend will handle countdown and start)
 func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 	id := c.Params("id")
 
@@ -501,42 +488,29 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
 	}
 
-	// Create new campaign with "Copy of" prefix and running status (auto-start)
+	// Get email count from list
+	var totalEmails int
+	s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false`, listID).Scan(&totalEmails)
+
+	// Create new campaign with "Copy of" prefix as draft
 	newID := uuid.New().String()
 	newName := "Cópia de " + name
 
 	_, err = s.db.Exec(`
-		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to, html_content, text_content, list_id, send_rate, track_opens, track_clicks, status, started_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'running', NOW())
-	`, newID, newName, subject, fromName, fromEmail, replyTo, htmlContent, textContent, listID, sendRate, trackOpens, trackClicks)
+		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to, html_content, text_content, list_id, send_rate, track_opens, track_clicks, total_emails, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'draft')
+	`, newID, newName, subject, fromName, fromEmail, replyTo, htmlContent, textContent, listID, sendRate, trackOpens, trackClicks, totalEmails)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to clone campaign"})
 	}
 
-	// Get tracking domain from settings
-	trackingDomain := s.getTrackingDomain()
-
-	// Get emails from list and queue them
-	rows, err := s.db.Query(`
-		SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
-		FROM emails
-		WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
-	`, listID)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch emails"})
-	}
-	defer rows.Close()
-
-	count := s.queueEmails(rows, newID, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
-
-	// Update total emails count
-	s.db.Exec(`UPDATE campaigns SET total_emails = $1 WHERE id = $2`, count, newID)
-
 	return c.JSON(fiber.Map{
-		"message":       "Campanha clonada e iniciada",
-		"id":            newID,
-		"emails_queued": count,
+		"message":      "Campanha clonada",
+		"id":           newID,
+		"total_emails": totalEmails,
+		"smtp_count":   smtpCount,
+		"auto_start":   true,
 	})
 }
 

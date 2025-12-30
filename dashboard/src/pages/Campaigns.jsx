@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Plus,
@@ -15,7 +15,9 @@ import {
   EyeOff,
   Download,
   MoreVertical,
-  List
+  List,
+  X,
+  Clock
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
@@ -25,6 +27,11 @@ function Campaigns() {
   const [loading, setLoading] = useState(true)
   const [actionMenu, setActionMenu] = useState(null)
   const navigate = useNavigate()
+
+  // Countdown modal state
+  const [countdown, setCountdown] = useState(null)
+  const [countdownCampaignId, setCountdownCampaignId] = useState(null)
+  const [countdownInfo, setCountdownInfo] = useState(null)
 
   useEffect(() => {
     fetchCampaigns()
@@ -39,6 +46,23 @@ function Campaigns() {
     return () => document.removeEventListener('click', handleClick)
   }, [])
 
+  // Countdown timer effect
+  useEffect(() => {
+    if (countdown === null || countdown < 0) return
+
+    if (countdown === 0) {
+      // Timer finished, start the campaign
+      actuallyStartCampaign(countdownCampaignId)
+      return
+    }
+
+    const timer = setTimeout(() => {
+      setCountdown(countdown - 1)
+    }, 1000)
+
+    return () => clearTimeout(timer)
+  }, [countdown, countdownCampaignId])
+
   const fetchCampaigns = async () => {
     try {
       const response = await api.get('/campaigns')
@@ -50,6 +74,22 @@ function Campaigns() {
     }
   }
 
+  const actuallyStartCampaign = async (id) => {
+    try {
+      const response = await api.post(`/campaigns/${id}/start`)
+      toast.success(`Campanha iniciada! ${response.data.emails_queued} emails na fila`)
+      setCountdown(null)
+      setCountdownCampaignId(null)
+      setCountdownInfo(null)
+      fetchCampaigns()
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Erro ao iniciar')
+      setCountdown(null)
+      setCountdownCampaignId(null)
+      setCountdownInfo(null)
+    }
+  }
+
   const startCampaign = async (id) => {
     try {
       const response = await api.post(`/campaigns/${id}/start`)
@@ -58,6 +98,13 @@ function Campaigns() {
     } catch (error) {
       toast.error(error.response?.data?.error || 'Erro ao iniciar')
     }
+  }
+
+  const cancelCountdown = () => {
+    setCountdown(null)
+    setCountdownCampaignId(null)
+    setCountdownInfo(null)
+    toast.info('Início cancelado. A campanha permanece como rascunho.')
   }
 
   const pauseCampaign = async (id) => {
@@ -108,9 +155,21 @@ function Campaigns() {
     try {
       const response = await api.post(`/campaigns/${id}/clone`)
       toast.success('Campanha clonada!')
-      navigate(`/campaigns/${response.data.id}`)
+
+      // If auto_start is true, show countdown
+      if (response.data.auto_start) {
+        setCountdownCampaignId(response.data.id)
+        setCountdownInfo({
+          total_emails: response.data.total_emails,
+          smtp_count: response.data.smtp_count
+        })
+        setCountdown(60) // 60 second countdown
+        fetchCampaigns()
+      } else {
+        navigate(`/campaigns/${response.data.id}`)
+      }
     } catch (error) {
-      toast.error('Erro ao clonar campanha')
+      toast.error(error.response?.data?.error || 'Erro ao clonar campanha')
     }
   }
 
@@ -206,6 +265,56 @@ function Campaigns() {
 
   return (
     <div>
+      {/* Countdown Modal */}
+      {countdown !== null && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-8 max-w-md w-full mx-4 text-center">
+            <div className="flex justify-center mb-4">
+              <div className="w-24 h-24 rounded-full bg-blue-100 flex items-center justify-center">
+                <Clock className="w-12 h-12 text-blue-600" />
+              </div>
+            </div>
+            <h2 className="text-2xl font-bold mb-2">Iniciando Campanha</h2>
+            <p className="text-gray-600 mb-4">
+              A campanha será iniciada em
+            </p>
+            <div className="text-6xl font-bold text-blue-600 mb-4">
+              {countdown}s
+            </div>
+            {countdownInfo && (
+              <div className="bg-gray-100 rounded-lg p-4 mb-6 text-sm">
+                <div className="flex justify-between mb-2">
+                  <span className="text-gray-600">Emails a enviar:</span>
+                  <span className="font-semibold">{countdownInfo.total_emails?.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">SMTPs ativos:</span>
+                  <span className="font-semibold">{countdownInfo.smtp_count}</span>
+                </div>
+              </div>
+            )}
+            <div className="flex gap-3 justify-center">
+              <button
+                onClick={() => {
+                  setCountdown(0) // Force immediate start
+                }}
+                className="btn btn-primary flex items-center gap-2"
+              >
+                <Play className="w-4 h-4" />
+                Iniciar Agora
+              </button>
+              <button
+                onClick={cancelCountdown}
+                className="btn btn-secondary flex items-center gap-2"
+              >
+                <X className="w-4 h-4" />
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">Campanhas</h1>
         <Link to="/campaigns/new" className="btn btn-primary flex items-center gap-2">
