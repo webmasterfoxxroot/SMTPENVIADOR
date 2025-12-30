@@ -44,7 +44,44 @@ func NewServer(cfg *config.Config, db *sql.DB, q *queue.Manager, eng *engine.Eng
 	server.setupMiddlewares()
 	server.setupRoutes()
 
+	// Start background scheduler for auto-starting campaigns
+	go server.runAutoStartScheduler()
+
 	return server
+}
+
+// runAutoStartScheduler runs a background scheduler that checks for campaigns to auto-start
+func (s *Server) runAutoStartScheduler() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.checkAndAutoStartCampaigns()
+	}
+}
+
+// checkAndAutoStartCampaigns checks for campaigns with passed auto_start_at and starts them
+func (s *Server) checkAndAutoStartCampaigns() {
+	// Find campaigns that need to be auto-started
+	rows, err := s.db.Query(`
+		SELECT id FROM campaigns
+		WHERE status = 'draft'
+		AND auto_start_at IS NOT NULL
+		AND auto_start_at <= NOW()
+	`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		// Start the campaign
+		s.autoStartCampaignByID(id)
+	}
 }
 
 // setupMiddlewares configures middlewares
@@ -127,6 +164,7 @@ func (s *Server) setupRoutes() {
 	campaigns.Post("/:id/pause", s.pauseCampaign)
 	campaigns.Post("/:id/resume", s.resumeCampaign)
 	campaigns.Post("/:id/cancel", s.cancelCampaign)
+	campaigns.Post("/:id/cancel-auto-start", s.cancelAutoStart)
 	campaigns.Get("/:id/stats", s.getCampaignStats)
 	campaigns.Post("/:id/clone", s.cloneCampaign)
 	campaigns.Post("/:id/resend", s.resendCampaign)

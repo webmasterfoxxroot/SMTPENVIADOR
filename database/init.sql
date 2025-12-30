@@ -116,6 +116,7 @@ CREATE TABLE campaigns (
     list_id UUID REFERENCES email_lists(id),
     status VARCHAR(50) DEFAULT 'draft', -- draft, scheduled, running, paused, completed, cancelled
     scheduled_at TIMESTAMP,
+    auto_start_at TIMESTAMP, -- when campaign should auto-start (countdown)
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
     total_emails INTEGER DEFAULT 0,

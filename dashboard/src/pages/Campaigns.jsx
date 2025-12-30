@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import {
   Plus,
@@ -29,24 +29,20 @@ function Campaigns() {
   const navigate = useNavigate()
   const location = useLocation()
 
-  // Countdown state - tracks countdown per campaign ID
-  const [countdowns, setCountdowns] = useState({})
-
-  // Check if we came from creating a new campaign
-  useEffect(() => {
-    if (location.state?.newCampaignId && location.state?.autoStart) {
-      setCountdowns(prev => ({
-        ...prev,
-        [location.state.newCampaignId]: 60
-      }))
-      // Clear the state to prevent re-triggering on page refresh
-      window.history.replaceState({}, document.title)
-    }
-  }, [location.state])
+  // Force re-render every second to update countdowns
+  const [, setTick] = useState(0)
 
   useEffect(() => {
     fetchCampaigns()
-    const interval = setInterval(fetchCampaigns, 10000)
+    const interval = setInterval(fetchCampaigns, 5000) // Refresh every 5 seconds
+    return () => clearInterval(interval)
+  }, [])
+
+  // Tick every second to update countdown display
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTick(t => t + 1)
+    }, 1000)
     return () => clearInterval(interval)
   }, [])
 
@@ -55,33 +51,6 @@ function Campaigns() {
     const handleClick = () => setActionMenu(null)
     document.addEventListener('click', handleClick)
     return () => document.removeEventListener('click', handleClick)
-  }, [])
-
-  // Countdown timer - runs every second
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setCountdowns(prev => {
-        const updated = { ...prev }
-        let hasChanges = false
-
-        Object.keys(updated).forEach(campaignId => {
-          if (updated[campaignId] > 0) {
-            updated[campaignId] = updated[campaignId] - 1
-            hasChanges = true
-
-            // When countdown reaches 0, start the campaign
-            if (updated[campaignId] === 0) {
-              startCampaignAfterCountdown(campaignId)
-              delete updated[campaignId]
-            }
-          }
-        })
-
-        return hasChanges ? updated : prev
-      })
-    }, 1000)
-
-    return () => clearInterval(interval)
   }, [])
 
   const fetchCampaigns = async () => {
@@ -95,16 +64,6 @@ function Campaigns() {
     }
   }
 
-  const startCampaignAfterCountdown = async (id) => {
-    try {
-      const response = await api.post(`/campaigns/${id}/start`)
-      toast.success(`Campanha iniciada! ${response.data.emails_queued} emails na fila`)
-      fetchCampaigns()
-    } catch (error) {
-      toast.error(error.response?.data?.error || 'Erro ao iniciar')
-    }
-  }
-
   const startCampaign = async (id) => {
     try {
       const response = await api.post(`/campaigns/${id}/start`)
@@ -115,22 +74,24 @@ function Campaigns() {
     }
   }
 
-  const cancelCountdown = (campaignId) => {
-    setCountdowns(prev => {
-      const updated = { ...prev }
-      delete updated[campaignId]
-      return updated
-    })
-    toast.info('Início cancelado. A campanha permanece como rascunho.')
+  const cancelAutoStart = async (campaignId) => {
+    try {
+      await api.post(`/campaigns/${campaignId}/cancel-auto-start`)
+      toast.info('Auto-start cancelado. A campanha permanece como rascunho.')
+      fetchCampaigns()
+    } catch (error) {
+      toast.error('Erro ao cancelar auto-start')
+    }
   }
 
-  const forceStartNow = (campaignId) => {
-    setCountdowns(prev => {
-      const updated = { ...prev }
-      delete updated[campaignId]
-      return updated
-    })
-    startCampaign(campaignId)
+  const forceStartNow = async (campaignId) => {
+    try {
+      const response = await api.post(`/campaigns/${campaignId}/start`)
+      toast.success(`Campanha iniciada! ${response.data.emails_queued} emails na fila`)
+      fetchCampaigns()
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Erro ao iniciar')
+    }
   }
 
   const pauseCampaign = async (id) => {
@@ -179,19 +140,9 @@ function Campaigns() {
 
   const cloneCampaign = async (id) => {
     try {
-      const response = await api.post(`/campaigns/${id}/clone`)
-      toast.success('Campanha clonada!')
-
-      // Start countdown for the new campaign
-      if (response.data.auto_start) {
-        setCountdowns(prev => ({
-          ...prev,
-          [response.data.id]: 60 // 60 second countdown
-        }))
-        fetchCampaigns()
-      } else {
-        navigate(`/campaigns/${response.data.id}`)
-      }
+      await api.post(`/campaigns/${id}/clone`)
+      toast.success('Campanha clonada! Auto-start em 60 segundos.')
+      fetchCampaigns()
     } catch (error) {
       toast.error(error.response?.data?.error || 'Erro ao clonar campanha')
     }
@@ -253,14 +204,25 @@ function Campaigns() {
     }
   }
 
+  // Calculate remaining seconds until auto_start_at
+  const getCountdownSeconds = (autoStartAt) => {
+    if (!autoStartAt) return null
+    const targetTime = new Date(autoStartAt).getTime()
+    const now = Date.now()
+    const remaining = Math.ceil((targetTime - now) / 1000)
+    return remaining > 0 ? remaining : 0
+  }
+
   const getStatusBadge = (campaign) => {
-    // Check if campaign has active countdown
-    if (countdowns[campaign.id] !== undefined) {
+    // Check if campaign has auto_start_at
+    const countdown = getCountdownSeconds(campaign.auto_start_at)
+
+    if (countdown !== null && countdown > 0 && campaign.status === 'draft') {
       return (
         <div className="flex flex-col items-start gap-1">
           <div className="flex items-center gap-2 text-blue-600">
             <Clock className="w-4 h-4 animate-pulse" />
-            <span className="font-bold text-lg">{countdowns[campaign.id]}s</span>
+            <span className="font-bold text-lg">{countdown}s</span>
           </div>
           <div className="flex gap-1">
             <button
@@ -275,7 +237,7 @@ function Campaigns() {
             <button
               onClick={(e) => {
                 e.stopPropagation()
-                cancelCountdown(campaign.id)
+                cancelAutoStart(campaign.id)
               }}
               className="text-xs px-2 py-1 bg-gray-500 text-white rounded hover:bg-gray-600"
             >
@@ -317,6 +279,12 @@ function Campaigns() {
   const toggleMenu = (e, id) => {
     e.stopPropagation()
     setActionMenu(actionMenu === id ? null : id)
+  }
+
+  // Check if campaign has active countdown
+  const hasActiveCountdown = (campaign) => {
+    const countdown = getCountdownSeconds(campaign.auto_start_at)
+    return countdown !== null && countdown > 0 && campaign.status === 'draft'
   }
 
   return (
@@ -400,7 +368,7 @@ function Campaigns() {
                   </td>
                   <td>
                     <div className="flex items-center gap-1">
-                      {campaign.status === 'draft' && !countdowns[campaign.id] && (
+                      {campaign.status === 'draft' && !hasActiveCountdown(campaign) && (
                         <button
                           onClick={() => startCampaign(campaign.id)}
                           className="p-2 text-green-600 hover:bg-green-50 rounded"

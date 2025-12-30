@@ -43,7 +43,7 @@ func (s *Server) listCampaigns(c *fiber.Ctx) error {
 	query := `
 		SELECT c.id, c.name, c.subject, c.from_name, c.from_email, c.status,
 		       c.total_emails, c.sent_count, c.failed_count, c.open_count,
-		       c.click_count, c.bounce_count, c.scheduled_at, c.started_at,
+		       c.click_count, c.bounce_count, c.scheduled_at, c.auto_start_at, c.started_at,
 		       c.completed_at, c.created_at, l.name as list_name
 		FROM campaigns c
 		LEFT JOIN email_lists l ON c.list_id = l.id
@@ -68,34 +68,35 @@ func (s *Server) listCampaigns(c *fiber.Ctx) error {
 		var id, name, subject, fromName, fromEmail, campaignStatus string
 		var listName *string
 		var totalEmails, sentCount, failedCount, openCount, clickCount, bounceCount int
-		var scheduledAt, startedAt, completedAt *time.Time
+		var scheduledAt, autoStartAt, startedAt, completedAt *time.Time
 		var createdAt time.Time
 
 		err := rows.Scan(&id, &name, &subject, &fromName, &fromEmail, &campaignStatus,
 			&totalEmails, &sentCount, &failedCount, &openCount, &clickCount, &bounceCount,
-			&scheduledAt, &startedAt, &completedAt, &createdAt, &listName)
+			&scheduledAt, &autoStartAt, &startedAt, &completedAt, &createdAt, &listName)
 		if err != nil {
 			continue
 		}
 
 		campaigns = append(campaigns, fiber.Map{
-			"id":            id,
-			"name":          name,
-			"subject":       subject,
-			"from_name":     fromName,
-			"from_email":    fromEmail,
-			"status":        campaignStatus,
-			"total_emails":  totalEmails,
-			"sent_count":    sentCount,
-			"failed_count":  failedCount,
-			"open_count":    openCount,
-			"click_count":   clickCount,
-			"bounce_count":  bounceCount,
-			"scheduled_at":  scheduledAt,
-			"started_at":    startedAt,
-			"completed_at":  completedAt,
-			"created_at":    createdAt,
-			"list_name":     listName,
+			"id":             id,
+			"name":           name,
+			"subject":        subject,
+			"from_name":      fromName,
+			"from_email":     fromEmail,
+			"status":         campaignStatus,
+			"total_emails":   totalEmails,
+			"sent_count":     sentCount,
+			"failed_count":   failedCount,
+			"open_count":     openCount,
+			"click_count":    clickCount,
+			"bounce_count":   bounceCount,
+			"scheduled_at":   scheduledAt,
+			"auto_start_at":  autoStartAt,
+			"started_at":     startedAt,
+			"completed_at":   completedAt,
+			"created_at":     createdAt,
+			"list_name":      listName,
 		})
 	}
 
@@ -135,12 +136,12 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 
 	id := uuid.New().String()
 
-	// Insert campaign as draft (frontend will show countdown and then call start)
+	// Insert campaign as draft with auto_start_at = NOW() + 60 seconds
 	_, err := s.db.Exec(`
 		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to,
 		                       html_content, text_content, list_id, send_rate,
-		                       scheduled_at, track_opens, track_clicks, total_emails, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'draft')
+		                       scheduled_at, track_opens, track_clicks, total_emails, status, auto_start_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'draft', NOW() + INTERVAL '60 seconds')
 	`, id, req.Name, req.Subject, req.FromName, req.FromEmail, req.ReplyTo,
 		req.HTMLContent, req.TextContent, req.ListID, req.SendRate,
 		req.ScheduledAt, req.TrackOpens, req.TrackClicks, totalEmails)
@@ -149,12 +150,16 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to create campaign"})
 	}
 
+	// Get the auto_start_at time
+	var autoStartAt time.Time
+	s.db.QueryRow(`SELECT auto_start_at FROM campaigns WHERE id = $1`, id).Scan(&autoStartAt)
+
 	return c.Status(201).JSON(fiber.Map{
-		"message":      "Campanha criada",
-		"id":           id,
-		"total_emails": totalEmails,
-		"smtp_count":   smtpCount,
-		"auto_start":   true,
+		"message":       "Campanha criada",
+		"id":            id,
+		"total_emails":  totalEmails,
+		"smtp_count":    smtpCount,
+		"auto_start_at": autoStartAt,
 	})
 }
 
@@ -433,6 +438,64 @@ func (s *Server) cancelCampaign(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Campaign cancelled"})
 }
 
+// cancelAutoStart cancels the auto-start countdown for a campaign
+func (s *Server) cancelAutoStart(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	result, err := s.db.Exec(`
+		UPDATE campaigns SET auto_start_at = NULL WHERE id = $1 AND status = 'draft'
+	`, id)
+
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to cancel auto-start"})
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "Campaign not found or not in draft status"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Auto-start cancelled"})
+}
+
+// autoStartCampaignByID starts a campaign by ID (called by scheduler)
+func (s *Server) autoStartCampaignByID(id string) {
+	// Get campaign details
+	var listID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	var trackOpens, trackClicks bool
+	err := s.db.QueryRow(`
+		SELECT list_id, from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
+		FROM campaigns WHERE id = $1 AND status = 'draft'
+	`, id).Scan(&listID, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
+
+	if err != nil {
+		return
+	}
+
+	// Get tracking domain from settings
+	trackingDomain := s.getTrackingDomain()
+
+	// Get emails from list
+	rows, err := s.db.Query(`
+		SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
+		FROM emails
+		WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
+	`, listID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	// Queue emails
+	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+
+	// Update campaign status
+	s.db.Exec(`
+		UPDATE campaigns SET status = 'running', started_at = NOW(), total_emails = $1, auto_start_at = NULL
+		WHERE id = $2
+	`, count, id)
+}
+
 // getCampaignStats returns campaign statistics
 func (s *Server) getCampaignStats(c *fiber.Ctx) error {
 	id := c.Params("id")
@@ -492,25 +555,29 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 	var totalEmails int
 	s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false`, listID).Scan(&totalEmails)
 
-	// Create new campaign with "Copy of" prefix as draft
+	// Create new campaign with "Copy of" prefix as draft with auto_start_at = NOW() + 60 seconds
 	newID := uuid.New().String()
 	newName := "Cópia de " + name
 
 	_, err = s.db.Exec(`
-		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to, html_content, text_content, list_id, send_rate, track_opens, track_clicks, total_emails, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'draft')
+		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to, html_content, text_content, list_id, send_rate, track_opens, track_clicks, total_emails, status, auto_start_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'draft', NOW() + INTERVAL '60 seconds')
 	`, newID, newName, subject, fromName, fromEmail, replyTo, htmlContent, textContent, listID, sendRate, trackOpens, trackClicks, totalEmails)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to clone campaign"})
 	}
 
+	// Get the auto_start_at time
+	var autoStartAt time.Time
+	s.db.QueryRow(`SELECT auto_start_at FROM campaigns WHERE id = $1`, newID).Scan(&autoStartAt)
+
 	return c.JSON(fiber.Map{
-		"message":      "Campanha clonada",
-		"id":           newID,
-		"total_emails": totalEmails,
-		"smtp_count":   smtpCount,
-		"auto_start":   true,
+		"message":       "Campanha clonada",
+		"id":            newID,
+		"total_emails":  totalEmails,
+		"smtp_count":    smtpCount,
+		"auto_start_at": autoStartAt,
 	})
 }
 
