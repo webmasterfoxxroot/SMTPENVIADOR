@@ -11,6 +11,16 @@ import (
 	"smtpenviador/internal/queue"
 )
 
+// getTrackingDomain returns the tracking domain from settings
+func (s *Server) getTrackingDomain() string {
+	var domain string
+	err := s.db.QueryRow(`SELECT value FROM settings WHERE key = 'tracking_domain'`).Scan(&domain)
+	if err != nil {
+		return s.cfg.TrackingDomain // Fallback to config
+	}
+	return domain
+}
+
 type CampaignRequest struct {
 	Name        string     `json:"name"`
 	Subject     string     `json:"subject"`
@@ -258,6 +268,9 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Campaign cannot be started in current status"})
 	}
 
+	// Get tracking domain from settings
+	trackingDomain := s.getTrackingDomain()
+
 	// Get emails from list
 	rows, err := s.db.Query(`
 		SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
@@ -300,21 +313,22 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 		}
 
 		job := &queue.EmailJob{
-			ID:          uuid.New().String(),
-			CampaignID:  id,
-			EmailID:     emailID,
-			To:          email,
-			ToName:      nameStr,
-			From:        fromEmail,
-			FromName:    fromName,
-			ReplyTo:     replyTo,
-			Subject:     subject,
-			HTMLContent: htmlContent,
-			TextContent: textContent,
-			Variables:   variables,
-			TrackOpens:  trackOpens,
-			TrackClicks: trackClicks,
-			CreatedAt:   time.Now(),
+			ID:             uuid.New().String(),
+			CampaignID:     id,
+			EmailID:        emailID,
+			To:             email,
+			ToName:         nameStr,
+			From:           fromEmail,
+			FromName:       fromName,
+			ReplyTo:        replyTo,
+			Subject:        subject,
+			HTMLContent:    htmlContent,
+			TextContent:    textContent,
+			Variables:      variables,
+			TrackOpens:     trackOpens,
+			TrackClicks:    trackClicks,
+			TrackingDomain: trackingDomain,
+			CreatedAt:      time.Now(),
 		}
 
 		// Insert campaign_email record
@@ -440,10 +454,11 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 	// Get original campaign
 	var name, subject, fromName, fromEmail, replyTo, htmlContent, textContent, listID string
 	var sendRate int
+	var trackOpens, trackClicks bool
 	err := s.db.QueryRow(`
-		SELECT name, subject, from_name, from_email, reply_to, html_content, text_content, list_id, send_rate
+		SELECT name, subject, from_name, from_email, reply_to, html_content, text_content, list_id, send_rate, COALESCE(track_opens, true), COALESCE(track_clicks, true)
 		FROM campaigns WHERE id = $1
-	`, id).Scan(&name, &subject, &fromName, &fromEmail, &replyTo, &htmlContent, &textContent, &listID, &sendRate)
+	`, id).Scan(&name, &subject, &fromName, &fromEmail, &replyTo, &htmlContent, &textContent, &listID, &sendRate, &trackOpens, &trackClicks)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
@@ -454,9 +469,9 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 	newName := "Cópia de " + name
 
 	_, err = s.db.Exec(`
-		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to, html_content, text_content, list_id, send_rate, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'draft')
-	`, newID, newName, subject, fromName, fromEmail, replyTo, htmlContent, textContent, listID, sendRate)
+		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to, html_content, text_content, list_id, send_rate, track_opens, track_clicks, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'draft')
+	`, newID, newName, subject, fromName, fromEmail, replyTo, htmlContent, textContent, listID, sendRate, trackOpens, trackClicks)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to clone campaign"})
@@ -484,6 +499,9 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
 	}
 
+	// Get tracking domain from settings
+	trackingDomain := s.getTrackingDomain()
+
 	// Clear previous campaign_emails
 	s.db.Exec(`DELETE FROM campaign_emails WHERE campaign_id = $1`, id)
 
@@ -501,7 +519,7 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 	}
 	defer rows.Close()
 
-	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks)
+	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
 
 	// Update campaign status
 	s.db.Exec(`UPDATE campaigns SET status = 'running', started_at = NOW(), total_emails = $1 WHERE id = $2`, count, id)
@@ -528,6 +546,9 @@ func (s *Server) resendToFailed(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
 	}
 
+	// Get tracking domain from settings
+	trackingDomain := s.getTrackingDomain()
+
 	// Get failed emails
 	rows, err := s.db.Query(`
 		SELECT e.id, e.email, e.name, e.custom1, e.custom2, e.custom3, e.custom4, e.custom5
@@ -543,7 +564,7 @@ func (s *Server) resendToFailed(c *fiber.Ctx) error {
 	// Delete old failed records
 	s.db.Exec(`DELETE FROM campaign_emails WHERE campaign_id = $1 AND status = 'failed'`, id)
 
-	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks)
+	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
 
 	// Update campaign status
 	if count > 0 {
@@ -572,6 +593,9 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
 	}
 
+	// Get tracking domain from settings
+	trackingDomain := s.getTrackingDomain()
+
 	// Get emails that were sent but not opened
 	rows, err := s.db.Query(`
 		SELECT e.id, e.email, e.name, e.custom1, e.custom2, e.custom3, e.custom4, e.custom5
@@ -587,7 +611,7 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 	// Delete old sent records for non-openers
 	s.db.Exec(`DELETE FROM campaign_emails WHERE campaign_id = $1 AND status = 'sent' AND opened_at IS NULL`, id)
 
-	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks)
+	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
 
 	// Update campaign status
 	if count > 0 {
@@ -601,7 +625,7 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 }
 
 // queueEmails is a helper to queue emails from a rows result
-func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string, trackOpens, trackClicks bool) int {
+func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string, trackOpens, trackClicks bool, trackingDomain string) int {
 	count := 0
 	for rows.Next() {
 		var emailID, email string
@@ -631,21 +655,22 @@ func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, re
 		}
 
 		job := &queue.EmailJob{
-			ID:          uuid.New().String(),
-			CampaignID:  campaignID,
-			EmailID:     emailID,
-			To:          email,
-			ToName:      nameStr,
-			From:        fromEmail,
-			FromName:    fromName,
-			ReplyTo:     replyTo,
-			Subject:     subject,
-			HTMLContent: htmlContent,
-			TextContent: textContent,
-			Variables:   variables,
-			TrackOpens:  trackOpens,
-			TrackClicks: trackClicks,
-			CreatedAt:   time.Now(),
+			ID:             uuid.New().String(),
+			CampaignID:     campaignID,
+			EmailID:        emailID,
+			To:             email,
+			ToName:         nameStr,
+			From:           fromEmail,
+			FromName:       fromName,
+			ReplyTo:        replyTo,
+			Subject:        subject,
+			HTMLContent:    htmlContent,
+			TextContent:    textContent,
+			Variables:      variables,
+			TrackOpens:     trackOpens,
+			TrackClicks:    trackClicks,
+			TrackingDomain: trackingDomain,
+			CreatedAt:      time.Now(),
 		}
 
 		s.db.Exec(`

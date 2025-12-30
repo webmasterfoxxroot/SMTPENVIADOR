@@ -101,15 +101,21 @@ func (w *Worker) processJob() {
 	textContent := w.processVariables(job.TextContent, job.Variables, job.To, job.ToName)
 	subject := w.processVariables(job.Subject, job.Variables, job.To, job.ToName)
 
+	// Get tracking domain (from job or fallback to config)
+	trackingDomain := job.TrackingDomain
+	if trackingDomain == "" {
+		trackingDomain = w.cfg.TrackingDomain
+	}
+
 	// Add tracking pixel for open tracking
-	if job.TrackOpens {
-		trackingPixel := w.generateTrackingPixel(job.CampaignID, job.EmailID)
+	if job.TrackOpens && trackingDomain != "" {
+		trackingPixel := w.generateTrackingPixel(trackingDomain, job.CampaignID, job.EmailID)
 		htmlContent = strings.Replace(htmlContent, "</body>", trackingPixel+"</body>", 1)
 	}
 
 	// Process links for click tracking
-	if job.TrackClicks {
-		htmlContent = w.processLinks(htmlContent, job.CampaignID, job.EmailID)
+	if job.TrackClicks && trackingDomain != "" {
+		htmlContent = w.processLinks(trackingDomain, htmlContent, job.CampaignID, job.EmailID)
 	}
 
 	// Use email from SMTP sender, but name from campaign
@@ -218,15 +224,15 @@ func (w *Worker) processVariables(content string, variables map[string]string, e
 }
 
 // generateTrackingPixel generates a tracking pixel for opens
-func (w *Worker) generateTrackingPixel(campaignID, emailID string) string {
-	return `<img src="` + w.cfg.TrackingDomain + `/track/open/` + campaignID + `/` + emailID + `" width="1" height="1" style="display:none" />`
+func (w *Worker) generateTrackingPixel(trackingDomain, campaignID, emailID string) string {
+	return `<img src="` + trackingDomain + `/track/open/` + campaignID + `/` + emailID + `" width="1" height="1" style="display:none" />`
 }
 
 // processLinks replaces links with tracking URLs
-func (w *Worker) processLinks(content, campaignID, emailID string) string {
+func (w *Worker) processLinks(trackingDomain, content, campaignID, emailID string) string {
 	// Simple link replacement - in production use proper HTML parsing
 	// This replaces href="http..." with tracking URLs
-	trackBase := w.cfg.TrackingDomain + "/track/click/" + campaignID + "/" + emailID + "?url="
+	trackBase := trackingDomain + "/track/click/" + campaignID + "/" + emailID + "?url="
 
 	// Replace http:// links
 	content = strings.ReplaceAll(content, `href="http://`, `href="`+trackBase+`http://`)

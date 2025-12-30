@@ -19,23 +19,24 @@ const (
 )
 
 type EmailJob struct {
-	ID          string            `json:"id"`
-	CampaignID  string            `json:"campaign_id"`
-	EmailID     string            `json:"email_id"`
-	SMTPID      string            `json:"smtp_id"`
-	To          string            `json:"to"`
-	ToName      string            `json:"to_name"`
-	From        string            `json:"from"`
-	FromName    string            `json:"from_name"`
-	ReplyTo     string            `json:"reply_to"`
-	Subject     string            `json:"subject"`
-	HTMLContent string            `json:"html_content"`
-	TextContent string            `json:"text_content"`
-	Variables   map[string]string `json:"variables"`
-	TrackOpens  bool              `json:"track_opens"`
-	TrackClicks bool              `json:"track_clicks"`
-	Retries     int               `json:"retries"`
-	CreatedAt   time.Time         `json:"created_at"`
+	ID             string            `json:"id"`
+	CampaignID     string            `json:"campaign_id"`
+	EmailID        string            `json:"email_id"`
+	SMTPID         string            `json:"smtp_id"`
+	To             string            `json:"to"`
+	ToName         string            `json:"to_name"`
+	From           string            `json:"from"`
+	FromName       string            `json:"from_name"`
+	ReplyTo        string            `json:"reply_to"`
+	Subject        string            `json:"subject"`
+	HTMLContent    string            `json:"html_content"`
+	TextContent    string            `json:"text_content"`
+	Variables      map[string]string `json:"variables"`
+	TrackOpens     bool              `json:"track_opens"`
+	TrackClicks    bool              `json:"track_clicks"`
+	TrackingDomain string            `json:"tracking_domain"`
+	Retries        int               `json:"retries"`
+	CreatedAt      time.Time         `json:"created_at"`
 }
 
 type Manager struct {
