@@ -316,23 +316,23 @@ func (s *SMTPConnection) Send(params SendParams) error {
 	}
 	message += "\r\n"
 
-	// Text part - quoted-printable like Roundcube
+	// Text part - base64 encoded for maximum compatibility
 	textContent := params.TextContent
 	if textContent == "" {
 		textContent = "Email content"
 	}
 	message += "--" + boundary + "\r\n"
 	message += "Content-Type: text/plain; charset=UTF-8\r\n"
-	message += "Content-Transfer-Encoding: quoted-printable\r\n"
+	message += "Content-Transfer-Encoding: base64\r\n"
 	message += "\r\n"
-	message += encodeQuotedPrintable(textContent) + "\r\n"
+	message += encodeBase64WithLineBreaks([]byte(textContent))
 
-	// HTML part - quoted-printable like Roundcube
+	// HTML part - base64 encoded for maximum compatibility
 	message += "--" + boundary + "\r\n"
 	message += "Content-Type: text/html; charset=UTF-8\r\n"
-	message += "Content-Transfer-Encoding: quoted-printable\r\n"
+	message += "Content-Transfer-Encoding: base64\r\n"
 	message += "\r\n"
-	message += encodeQuotedPrintable(params.HTMLContent) + "\r\n"
+	message += encodeBase64WithLineBreaks([]byte(params.HTMLContent))
 	message += "--" + boundary + "--\r\n"
 
 	// Handle different TLS modes
