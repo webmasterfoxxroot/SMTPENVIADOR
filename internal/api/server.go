@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -62,26 +63,32 @@ func (s *Server) runAutoStartScheduler() {
 
 // checkAndAutoStartCampaigns checks for campaigns with passed auto_start_at and starts them
 func (s *Server) checkAndAutoStartCampaigns() {
-	// Find campaigns that need to be auto-started (comparing with current UTC time)
-	nowUTC := time.Now().UTC()
+	// Find campaigns that need to be auto-started using Unix timestamp comparison
+	nowUnix := time.Now().Unix()
 	rows, err := s.db.Query(`
-		SELECT id FROM campaigns
+		SELECT id, auto_start_at FROM campaigns
 		WHERE status = 'draft'
 		AND auto_start_at IS NOT NULL
-		AND auto_start_at <= $1
-	`, nowUTC)
+	`)
 	if err != nil {
+		fmt.Printf("[AutoStart] Error querying campaigns: %v\n", err)
 		return
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		var autoStartAt time.Time
+		if err := rows.Scan(&id, &autoStartAt); err != nil {
 			continue
 		}
-		// Start the campaign
-		s.autoStartCampaignByID(id)
+
+		// Compare Unix timestamps (timezone independent)
+		autoStartUnix := autoStartAt.Unix()
+		if autoStartUnix <= nowUnix {
+			fmt.Printf("[AutoStart] Starting campaign %s (target: %d, now: %d)\n", id, autoStartUnix, nowUnix)
+			s.autoStartCampaignByID(id)
+		}
 	}
 }
 

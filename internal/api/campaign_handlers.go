@@ -78,6 +78,13 @@ func (s *Server) listCampaigns(c *fiber.Ctx) error {
 			continue
 		}
 
+		// Format auto_start_at as UTC RFC3339 string for consistent frontend parsing
+		var autoStartAtStr *string
+		if autoStartAt != nil {
+			formatted := autoStartAt.UTC().Format(time.RFC3339)
+			autoStartAtStr = &formatted
+		}
+
 		campaigns = append(campaigns, fiber.Map{
 			"id":             id,
 			"name":           name,
@@ -92,7 +99,7 @@ func (s *Server) listCampaigns(c *fiber.Ctx) error {
 			"click_count":    clickCount,
 			"bounce_count":   bounceCount,
 			"scheduled_at":   scheduledAt,
-			"auto_start_at":  autoStartAt,
+			"auto_start_at":  autoStartAtStr,
 			"started_at":     startedAt,
 			"completed_at":   completedAt,
 			"created_at":     createdAt,
@@ -457,6 +464,8 @@ func (s *Server) cancelAutoStart(c *fiber.Ctx) error {
 
 // autoStartCampaignByID starts a campaign by ID (called by scheduler)
 func (s *Server) autoStartCampaignByID(id string) {
+	fmt.Printf("[AutoStart] autoStartCampaignByID called for campaign %s\n", id)
+
 	// Get campaign details
 	var listID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string
 	var trackOpens, trackClicks bool
@@ -466,8 +475,11 @@ func (s *Server) autoStartCampaignByID(id string) {
 	`, id).Scan(&listID, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
 
 	if err != nil {
+		fmt.Printf("[AutoStart] Error getting campaign %s: %v\n", id, err)
 		return
 	}
+
+	fmt.Printf("[AutoStart] Campaign %s - List: %s, From: %s\n", id, listID, fromEmail)
 
 	// Get tracking domain from settings
 	trackingDomain := s.getTrackingDomain()
@@ -479,18 +491,25 @@ func (s *Server) autoStartCampaignByID(id string) {
 		WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
 	`, listID)
 	if err != nil {
+		fmt.Printf("[AutoStart] Error getting emails for campaign %s: %v\n", id, err)
 		return
 	}
 	defer rows.Close()
 
 	// Queue emails
 	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+	fmt.Printf("[AutoStart] Queued %d emails for campaign %s\n", count, id)
 
 	// Update campaign status
-	s.db.Exec(`
+	_, err = s.db.Exec(`
 		UPDATE campaigns SET status = 'running', started_at = NOW(), total_emails = $1, auto_start_at = NULL
 		WHERE id = $2
 	`, count, id)
+	if err != nil {
+		fmt.Printf("[AutoStart] Error updating campaign %s status: %v\n", id, err)
+	} else {
+		fmt.Printf("[AutoStart] Campaign %s started successfully!\n", id)
+	}
 }
 
 // getCampaignStats returns campaign statistics
