@@ -294,11 +294,21 @@ func (s *SMTPConnection) Send(params SendParams) error {
 	var message string
 
 	// Headers - all ASCII
-	message += fmt.Sprintf("From: %s\r\n", params.From)
+	// Format From header with name if provided
+	if params.FromName != "" {
+		message += fmt.Sprintf("From: %s <%s>\r\n", encodeRFC2047(params.FromName), params.From)
+	} else {
+		message += fmt.Sprintf("From: %s\r\n", params.From)
+	}
 	message += fmt.Sprintf("Date: %s\r\n", time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 +0000"))
 	message += fmt.Sprintf("Subject: %s\r\n", encodeRFC2047(params.Subject))
 	message += fmt.Sprintf("Message-Id: %s\r\n", messageID)
-	message += fmt.Sprintf("To: %s\r\n", params.To)
+	// Format To header with name if provided
+	if params.ToName != "" {
+		message += fmt.Sprintf("To: %s <%s>\r\n", encodeRFC2047(params.ToName), params.To)
+	} else {
+		message += fmt.Sprintf("To: %s\r\n", params.To)
+	}
 	message += "MIME-Version: 1.0\r\n"
 	message += fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\r\n", boundary)
 	if params.ReplyTo != "" {
