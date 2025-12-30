@@ -378,7 +378,7 @@ func (s *SMTPConnection) sendWithSTARTTLS(addr, from, to string, msg []byte) err
 	defer client.Close()
 
 	// Say hello
-	if err := client.Hello("localhost"); err != nil {
+	if err := client.Hello("[127.0.0.1]"); err != nil {
 		return fmt.Errorf("failed to say hello: %w", err)
 	}
 
@@ -415,7 +415,7 @@ func (s *SMTPConnection) sendPlain(addr, from, to string, msg []byte) error {
 	defer client.Close()
 
 	// Say hello
-	if err := client.Hello("localhost"); err != nil {
+	if err := client.Hello("[127.0.0.1]"); err != nil {
 		return fmt.Errorf("failed to say hello: %w", err)
 	}
 
