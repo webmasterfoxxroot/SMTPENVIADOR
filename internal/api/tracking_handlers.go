@@ -22,22 +22,32 @@ func (s *Server) trackOpen(c *fiber.Ctx) error {
 	campaignID := c.Params("campaignId")
 	emailID := c.Params("emailId")
 
-	// Record open event
+	// Check if this is the first open for this email
+	var alreadyOpened bool
+	s.db.QueryRow(`
+		SELECT opened_at IS NOT NULL FROM campaign_emails
+		WHERE campaign_id = $1 AND email_id = $2
+	`, campaignID, emailID).Scan(&alreadyOpened)
+
+	// Record open event (for analytics)
 	go s.recordEvent(campaignID, emailID, "open", "", c.IP(), c.Get("User-Agent"))
 
-	// Update campaign_emails
-	go s.db.Exec(`
-		UPDATE campaign_emails SET opened_at = NOW()
-		WHERE campaign_id = $1 AND email_id = $2 AND opened_at IS NULL
-	`, campaignID, emailID)
+	// Only count if first open
+	if !alreadyOpened {
+		// Update campaign_emails
+		s.db.Exec(`
+			UPDATE campaign_emails SET opened_at = NOW()
+			WHERE campaign_id = $1 AND email_id = $2 AND opened_at IS NULL
+		`, campaignID, emailID)
 
-	// Update campaign open count
-	go s.db.Exec(`
-		UPDATE campaigns SET open_count = open_count + 1 WHERE id = $1
-	`, campaignID)
+		// Update campaign open count (only once per email)
+		s.db.Exec(`
+			UPDATE campaigns SET open_count = open_count + 1 WHERE id = $1
+		`, campaignID)
 
-	// Increment Redis stat
-	go s.queue.IncrementStat("opened", 1)
+		// Increment Redis stat
+		go s.queue.IncrementStat("opened", 1)
+	}
 
 	// Return tracking pixel
 	c.Set("Content-Type", "image/gif")
@@ -61,22 +71,32 @@ func (s *Server) trackClick(c *fiber.Ctx) error {
 		decodedURL = targetURL
 	}
 
-	// Record click event
+	// Check if this is the first click for this email
+	var alreadyClicked bool
+	s.db.QueryRow(`
+		SELECT clicked_at IS NOT NULL FROM campaign_emails
+		WHERE campaign_id = $1 AND email_id = $2
+	`, campaignID, emailID).Scan(&alreadyClicked)
+
+	// Record click event (for analytics - all clicks)
 	go s.recordEvent(campaignID, emailID, "click", decodedURL, c.IP(), c.Get("User-Agent"))
 
-	// Update campaign_emails
-	go s.db.Exec(`
-		UPDATE campaign_emails SET clicked_at = NOW()
-		WHERE campaign_id = $1 AND email_id = $2 AND clicked_at IS NULL
-	`, campaignID, emailID)
+	// Only count if first click
+	if !alreadyClicked {
+		// Update campaign_emails
+		s.db.Exec(`
+			UPDATE campaign_emails SET clicked_at = NOW()
+			WHERE campaign_id = $1 AND email_id = $2 AND clicked_at IS NULL
+		`, campaignID, emailID)
 
-	// Update campaign click count
-	go s.db.Exec(`
-		UPDATE campaigns SET click_count = click_count + 1 WHERE id = $1
-	`, campaignID)
+		// Update campaign click count (only once per email)
+		s.db.Exec(`
+			UPDATE campaigns SET click_count = click_count + 1 WHERE id = $1
+		`, campaignID)
 
-	// Increment Redis stat
-	go s.queue.IncrementStat("clicked", 1)
+		// Increment Redis stat
+		go s.queue.IncrementStat("clicked", 1)
+	}
 
 	// Redirect to target URL
 	return c.Redirect(decodedURL, 302)
