@@ -8,7 +8,9 @@ import {
   RefreshCw,
   TestTube,
   Loader2,
-  Server
+  Server,
+  Send,
+  X
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
@@ -244,10 +246,121 @@ function SMTPModal({ smtp, onClose, onSave }) {
   )
 }
 
+// Modal para enviar email de teste
+function SendTestModal({ smtp, onClose }) {
+  const [email, setEmail] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const handleSendTest = async (e) => {
+    e.preventDefault()
+    if (!email.trim()) {
+      toast.error('Digite um email de destino')
+      return
+    }
+
+    setLoading(true)
+    try {
+      await api.post(`/smtp/${smtp.id}/send-test`, {
+        to: email.trim()
+      })
+      toast.success('Email de teste enviado com sucesso!')
+      onClose()
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Falha ao enviar email de teste')
+      if (error.response?.data?.details) {
+        console.error('Detalhes:', error.response.data.details)
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-blue-100 rounded-xl">
+              <Send className="w-6 h-6 text-blue-600" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Enviar Email de Teste</h2>
+              <p className="text-sm text-gray-500">{smtp.name}</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <X className="w-5 h-5 text-gray-400" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSendTest}>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Email de Destino
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+              placeholder="seu@email.com"
+              autoFocus
+              required
+            />
+            <p className="text-xs text-gray-400 mt-2">
+              Um email de teste sera enviado para este endereco usando o servidor SMTP selecionado.
+            </p>
+          </div>
+
+          <div className="bg-gray-50 rounded-xl p-4 mb-6">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase mb-2">Detalhes do SMTP</h3>
+            <div className="space-y-1 text-sm">
+              <p><span className="text-gray-500">Host:</span> <span className="font-medium">{smtp.host}:{smtp.port}</span></p>
+              <p><span className="text-gray-500">Usuario:</span> <span className="font-medium">{smtp.username}</span></p>
+              <p><span className="text-gray-500">TLS:</span> <span className="font-medium">{smtp.tls_mode === 'tls' ? 'TLS' : smtp.tls_mode === 'starttls' ? 'STARTTLS' : 'Nenhum'}</span></p>
+            </div>
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 px-4 py-3 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Enviando...
+                </>
+              ) : (
+                <>
+                  <Send className="w-5 h-5" />
+                  Enviar Teste
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 function SMTPServers() {
   const [smtps, setSMTPs] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState({ open: false, smtp: null })
+  const [testModal, setTestModal] = useState({ open: false, smtp: null })
   const [testing, setTesting] = useState(null)
 
   useEffect(() => {
@@ -302,20 +415,23 @@ function SMTPServers() {
   const getStatusBadge = (status) => {
     switch (status) {
       case 'online':
-        return <span className="badge badge-success">Online</span>
+        return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700"><span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>Online</span>
       case 'offline':
-        return <span className="badge badge-danger">Offline</span>
+        return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700"><span className="w-1.5 h-1.5 bg-red-500 rounded-full"></span>Offline</span>
       case 'error':
-        return <span className="badge badge-warning">Erro</span>
+        return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700"><span className="w-1.5 h-1.5 bg-yellow-500 rounded-full"></span>Erro</span>
       default:
-        return <span className="badge badge-gray">Desconhecido</span>
+        return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600"><span className="w-1.5 h-1.5 bg-gray-400 rounded-full"></span>Desconhecido</span>
     }
   }
 
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Servidores SMTP</h1>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Servidores SMTP</h1>
+          <p className="text-sm text-gray-500 mt-1">Gerencie seus servidores de envio de email</p>
+        </div>
         <div className="flex gap-3">
           <button onClick={refreshSMTPs} className="btn btn-secondary flex items-center gap-2">
             <RefreshCw className="w-4 h-4" />
@@ -331,7 +447,7 @@ function SMTPServers() {
         </div>
       </div>
 
-      <div className="card">
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100">
         {loading ? (
           <div className="flex justify-center py-12">
             <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
@@ -342,50 +458,52 @@ function SMTPServers() {
             <p>Nenhum servidor SMTP cadastrado</p>
           </div>
         ) : (
-          <table className="table">
+          <table className="w-full">
             <thead>
-              <tr>
-                <th>Nome</th>
-                <th>Host</th>
-                <th>TLS</th>
-                <th>Status</th>
-                <th>Limite</th>
-                <th>Enviados</th>
-                <th>Ativo</th>
-                <th>Ações</th>
+              <tr className="border-b border-gray-100">
+                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Nome</th>
+                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Host</th>
+                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">TLS</th>
+                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Limite</th>
+                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Enviados</th>
+                <th className="text-center py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Ativo</th>
+                <th className="text-right py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Acoes</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-gray-50">
               {smtps.map((smtp) => (
-                <tr key={smtp.id}>
-                  <td className="font-medium">{smtp.name}</td>
-                  <td className="text-gray-600">
+                <tr key={smtp.id} className="hover:bg-gray-50 transition-colors">
+                  <td className="py-4 px-6">
+                    <span className="font-medium text-gray-900">{smtp.name}</span>
+                  </td>
+                  <td className="py-4 px-6 text-gray-600">
                     {smtp.host}:{smtp.port}
                   </td>
-                  <td className="text-gray-600 text-sm">
+                  <td className="py-4 px-6 text-gray-600 text-sm">
                     {smtp.tls_mode === 'tls' ? 'TLS' : smtp.tls_mode === 'starttls' ? 'STARTTLS' : 'Nenhum'}
                   </td>
-                  <td>{getStatusBadge(smtp.status)}</td>
-                  <td className="text-gray-600">
+                  <td className="py-4 px-6">{getStatusBadge(smtp.status)}</td>
+                  <td className="py-4 px-6 text-gray-600">
                     {smtp.max_per_minute}/min
                   </td>
-                  <td className="text-gray-600">
-                    {smtp.total_sent?.toLocaleString()}
+                  <td className="py-4 px-6">
+                    <span className="font-semibold text-gray-700">{smtp.total_sent?.toLocaleString()}</span>
                   </td>
-                  <td>
+                  <td className="py-4 px-6 text-center">
                     {smtp.active ? (
-                      <CheckCircle className="w-5 h-5 text-green-500" />
+                      <CheckCircle className="w-5 h-5 text-green-500 mx-auto" />
                     ) : (
-                      <XCircle className="w-5 h-5 text-gray-400" />
+                      <XCircle className="w-5 h-5 text-gray-400 mx-auto" />
                     )}
                   </td>
-                  <td>
-                    <div className="flex items-center gap-2">
+                  <td className="py-4 px-6">
+                    <div className="flex items-center justify-end gap-1">
                       <button
                         onClick={() => testSMTP(smtp.id)}
                         disabled={testing === smtp.id}
-                        className="p-2 text-blue-600 hover:bg-blue-50 rounded"
-                        title="Testar conexão"
+                        className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                        title="Testar conexao"
                       >
                         {testing === smtp.id ? (
                           <Loader2 className="w-4 h-4 animate-spin" />
@@ -394,15 +512,22 @@ function SMTPServers() {
                         )}
                       </button>
                       <button
+                        onClick={() => setTestModal({ open: true, smtp })}
+                        className="p-2 text-gray-500 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                        title="Enviar email de teste"
+                      >
+                        <Send className="w-4 h-4" />
+                      </button>
+                      <button
                         onClick={() => setModal({ open: true, smtp })}
-                        className="p-2 text-gray-600 hover:bg-gray-100 rounded"
+                        className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
                         title="Editar"
                       >
                         <Edit className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => deleteSMTP(smtp.id)}
-                        className="p-2 text-red-600 hover:bg-red-50 rounded"
+                        className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                         title="Excluir"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -424,6 +549,13 @@ function SMTPServers() {
             setModal({ open: false, smtp: null })
             fetchSMTPs()
           }}
+        />
+      )}
+
+      {testModal.open && (
+        <SendTestModal
+          smtp={testModal.smtp}
+          onClose={() => setTestModal({ open: false, smtp: null })}
         />
       )}
     </div>

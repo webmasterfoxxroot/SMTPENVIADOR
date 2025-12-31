@@ -456,6 +456,250 @@ func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
 	return nil, nil
 }
 
+// sendTestEmail sends a test email through an SMTP server
+func (s *Server) sendTestEmail(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	var req struct {
+		To      string `json:"to"`
+		Subject string `json:"subject"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	if req.To == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Email destination is required"})
+	}
+
+	if req.Subject == "" {
+		req.Subject = "Email de Teste - SMTP Enviador"
+	}
+
+	// Get SMTP details
+	var host, username, password, tlsMode, name string
+	var port int
+
+	err := s.db.QueryRow(`
+		SELECT name, host, port, username, password, tls_mode FROM smtp_servers WHERE id = $1
+	`, id).Scan(&name, &host, &port, &username, &password, &tlsMode)
+
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "SMTP server not found"})
+	}
+
+	// Build email message
+	from := username
+	subject := req.Subject
+	body := fmt.Sprintf(`<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; padding: 40px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .header { text-align: center; margin-bottom: 30px; }
+        .header h1 { color: #3b82f6; margin: 0; }
+        .success { background: #10b981; color: white; padding: 15px 25px; border-radius: 8px; text-align: center; font-size: 18px; margin: 20px 0; }
+        .details { background: #f8fafc; padding: 20px; border-radius: 8px; margin-top: 20px; }
+        .details p { margin: 8px 0; color: #64748b; }
+        .details strong { color: #334155; }
+        .footer { text-align: center; margin-top: 30px; color: #94a3b8; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>SMTP Enviador</h1>
+        </div>
+        <div class="success">
+            ✓ Email de teste enviado com sucesso!
+        </div>
+        <p style="text-align: center; color: #64748b;">
+            Este email confirma que seu servidor SMTP esta configurado corretamente.
+        </p>
+        <div class="details">
+            <p><strong>Servidor SMTP:</strong> %s</p>
+            <p><strong>Host:</strong> %s:%d</p>
+            <p><strong>Usuario:</strong> %s</p>
+            <p><strong>TLS:</strong> %s</p>
+            <p><strong>Data/Hora:</strong> %s</p>
+        </div>
+        <div class="footer">
+            <p>SMTP Enviador - Sistema de Email Marketing</p>
+        </div>
+    </div>
+</body>
+</html>`, name, host, port, username, tlsMode, time.Now().Format("02/01/2006 15:04:05"))
+
+	// Build message with headers
+	msg := fmt.Sprintf("From: %s\r\n", from)
+	msg += fmt.Sprintf("To: %s\r\n", req.To)
+	msg += fmt.Sprintf("Subject: %s\r\n", subject)
+	msg += "MIME-Version: 1.0\r\n"
+	msg += "Content-Type: text/html; charset=UTF-8\r\n"
+	msg += "\r\n"
+	msg += body
+
+	// Connect and send
+	addr := fmt.Sprintf("%s:%d", host, port)
+	var client *smtp.Client
+
+	// Handle different TLS modes
+	switch tlsMode {
+	case "tls":
+		tlsConfig := &tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: true,
+		}
+		conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", addr, tlsConfig)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "Falha na conexao TLS",
+				"details": err.Error(),
+			})
+		}
+		defer conn.Close()
+
+		client, err = smtp.NewClient(conn, host)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "Falha ao criar cliente SMTP",
+				"details": err.Error(),
+			})
+		}
+
+	case "starttls":
+		conn, err := net.DialTimeout("tcp", addr, 15*time.Second)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "Falha na conexao",
+				"details": err.Error(),
+			})
+		}
+		defer conn.Close()
+
+		client, err = smtp.NewClient(conn, host)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "Falha ao criar cliente SMTP",
+				"details": err.Error(),
+			})
+		}
+
+		if err := client.Hello("localhost"); err != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "SMTP HELO falhou",
+				"details": err.Error(),
+			})
+		}
+
+		tlsConfig := &tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: true,
+		}
+		if err := client.StartTLS(tlsConfig); err != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "STARTTLS falhou",
+				"details": err.Error(),
+			})
+		}
+
+	default:
+		conn, err := net.DialTimeout("tcp", addr, 15*time.Second)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "Falha na conexao",
+				"details": err.Error(),
+			})
+		}
+		defer conn.Close()
+
+		client, err = smtp.NewClient(conn, host)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "Falha ao criar cliente SMTP",
+				"details": err.Error(),
+			})
+		}
+
+		if err := client.Hello("localhost"); err != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "SMTP HELO falhou",
+				"details": err.Error(),
+			})
+		}
+	}
+	defer client.Close()
+
+	// Authenticate - try multiple methods
+	authErr := client.Auth(CRAMMD5Auth(username, password))
+	if authErr != nil {
+		authErr = client.Auth(LoginAuth(username, password))
+	}
+	if authErr != nil {
+		auth := smtp.PlainAuth("", username, password, host)
+		authErr = client.Auth(auth)
+	}
+	if authErr != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error":   "Falha na autenticacao",
+			"details": authErr.Error(),
+		})
+	}
+
+	// Set sender
+	if err := client.Mail(from); err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error":   "Falha ao definir remetente",
+			"details": err.Error(),
+		})
+	}
+
+	// Set recipient
+	if err := client.Rcpt(req.To); err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error":   "Falha ao definir destinatario",
+			"details": err.Error(),
+		})
+	}
+
+	// Send message body
+	w, err := client.Data()
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error":   "Falha ao iniciar envio",
+			"details": err.Error(),
+		})
+	}
+
+	_, err = w.Write([]byte(msg))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error":   "Falha ao escrever mensagem",
+			"details": err.Error(),
+		})
+	}
+
+	err = w.Close()
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error":   "Falha ao finalizar mensagem",
+			"details": err.Error(),
+		})
+	}
+
+	client.Quit()
+
+	// Update SMTP status
+	s.db.Exec(`UPDATE smtp_servers SET status = 'online', last_check = NOW() WHERE id = $1`, id)
+
+	return c.JSON(fiber.Map{
+		"message": "Email de teste enviado com sucesso!",
+		"to":      req.To,
+	})
+}
+
 // refreshSMTPs reloads SMTP servers into the engine
 func (s *Server) refreshSMTPs(c *fiber.Ctx) error {
 	if err := s.engine.RefreshSMTPs(); err != nil {

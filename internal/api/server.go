@@ -206,6 +206,7 @@ func (s *Server) setupRoutes() {
 	smtp.Put("/:id", s.updateSMTP)
 	smtp.Delete("/:id", s.deleteSMTP)
 	smtp.Post("/:id/test", s.testSMTP)
+	smtp.Post("/:id/send-test", s.sendTestEmail)
 	smtp.Post("/refresh", s.refreshSMTPs)
 	// SMTP Senders
 	smtp.Get("/:id/senders", s.listSMTPSenders)
