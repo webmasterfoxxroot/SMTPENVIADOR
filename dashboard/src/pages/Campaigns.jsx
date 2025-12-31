@@ -57,7 +57,15 @@ function Campaigns() {
   const fetchCampaigns = async () => {
     try {
       const response = await api.get('/campaigns')
-      setCampaigns(response.data.data || [])
+      const campaignsData = response.data.data || []
+      setCampaigns(campaignsData)
+
+      // Debug: log auto_start_at values
+      campaignsData.forEach(c => {
+        if (c.auto_start_at) {
+          console.log(`[Countdown] Campaign ${c.name}: auto_start_at=${c.auto_start_at}, status=${c.status}`)
+        }
+      })
 
       // Calculate time offset between server and client
       // If server_time is 100 and client is at 118, offset = 100 - 118 = -18
@@ -65,6 +73,7 @@ function Campaigns() {
       if (response.data.server_time) {
         const clientNow = Math.floor(Date.now() / 1000)
         const offset = response.data.server_time - clientNow
+        console.log(`[Countdown] Server time: ${response.data.server_time}, Client: ${clientNow}, Offset: ${offset}`)
         setServerTimeOffset(offset)
       }
     } catch (error) {

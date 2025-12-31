@@ -46,7 +46,7 @@ func (s *Server) listCampaigns(c *fiber.Ctx) error {
 		SELECT c.id, c.name, c.subject, c.from_name, c.from_email, c.status,
 		       c.total_emails, c.sent_count, c.failed_count, c.open_count,
 		       c.click_count, c.bounce_count, c.scheduled_at,
-		       EXTRACT(EPOCH FROM c.auto_start_at)::bigint as auto_start_at_unix,
+		       CASE WHEN c.auto_start_at IS NOT NULL THEN EXTRACT(EPOCH FROM c.auto_start_at)::bigint ELSE NULL END as auto_start_at_unix,
 		       c.started_at, c.completed_at, c.created_at, l.name as list_name
 		FROM campaigns c
 		LEFT JOIN email_lists l ON c.list_id = l.id
