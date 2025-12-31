@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Edit, Trash2, Upload, Users, Loader2, Mail } from 'lucide-react'
+import { Plus, Edit, Trash2, Upload, Users, Loader2, Mail, CheckCircle, XCircle, AlertTriangle } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
 
@@ -8,12 +8,14 @@ function UploadModal({ listId, onClose, onSuccess }) {
   const [loading, setLoading] = useState(false)
   const [hasHeader, setHasHeader] = useState(true)
   const [delimiter, setDelimiter] = useState(',')
+  const [result, setResult] = useState(null)
 
   const handleUpload = async (e) => {
     e.preventDefault()
     if (!file) return
 
     setLoading(true)
+    setResult(null)
     const formData = new FormData()
     formData.append('file', file)
     formData.append('has_header', hasHeader)
@@ -25,8 +27,10 @@ function UploadModal({ listId, onClose, onSuccess }) {
       const response = await api.post(`/lists/${listId}/upload`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       })
-      toast.success(`Importados: ${response.data.valid} emails`)
-      onSuccess()
+      setResult(response.data)
+      if (response.data.valid > 0) {
+        toast.success(`${response.data.valid} emails importados com sucesso!`)
+      }
     } catch (error) {
       toast.error(error.response?.data?.error || 'Erro no upload')
     } finally {
@@ -34,62 +38,128 @@ function UploadModal({ listId, onClose, onSuccess }) {
     }
   }
 
+  const handleClose = () => {
+    if (result && result.valid > 0) {
+      onSuccess()
+    }
+    onClose()
+  }
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-xl p-6 w-full max-w-md">
         <h2 className="text-xl font-bold mb-4">Upload de Emails</h2>
 
-        <form onSubmit={handleUpload} className="space-y-4">
-          <div>
-            <label className="label">Arquivo (CSV/TXT)</label>
-            <input
-              type="file"
-              accept=".csv,.txt"
-              onChange={(e) => setFile(e.target.files[0])}
-              className="input"
-              required
-            />
-          </div>
+        {result ? (
+          <div className="space-y-4">
+            <div className="text-center py-4">
+              <CheckCircle className="w-16 h-16 mx-auto text-green-500 mb-3" />
+              <h3 className="text-lg font-semibold text-gray-800">Importacao Concluida!</h3>
+            </div>
 
-          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="w-5 h-5 text-green-600" />
+                  <span className="text-green-800">Emails validos importados</span>
+                </div>
+                <span className="font-bold text-green-700">{result.valid}</span>
+              </div>
+
+              {result.invalid > 0 && (
+                <div className="flex items-center justify-between p-3 bg-red-50 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <XCircle className="w-5 h-5 text-red-600" />
+                    <span className="text-red-800">Emails invalidos removidos</span>
+                  </div>
+                  <span className="font-bold text-red-700">{result.invalid}</span>
+                </div>
+              )}
+
+              {result.duplicates > 0 && (
+                <div className="flex items-center justify-between p-3 bg-yellow-50 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-5 h-5 text-yellow-600" />
+                    <span className="text-yellow-800">Duplicados ignorados</span>
+                  </div>
+                  <span className="font-bold text-yellow-700">{result.duplicates}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between p-3 bg-gray-100 rounded-lg">
+                <span className="text-gray-600">Total processado</span>
+                <span className="font-bold text-gray-700">{result.total}</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-4">
+              <button onClick={handleClose} className="btn btn-primary">
+                Fechar
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form onSubmit={handleUpload} className="space-y-4">
             <div>
-              <label className="label">Delimitador</label>
-              <select
-                value={delimiter}
-                onChange={(e) => setDelimiter(e.target.value)}
+              <label className="label">Arquivo (CSV/TXT)</label>
+              <input
+                type="file"
+                accept=".csv,.txt"
+                onChange={(e) => setFile(e.target.files[0])}
                 className="input"
-              >
-                <option value=",">Vírgula (,)</option>
-                <option value=";">Ponto e vírgula (;)</option>
-                <option value="\t">Tab</option>
-              </select>
+                required
+              />
             </div>
-            <div className="flex items-end">
-              <label className="flex items-center gap-2 cursor-pointer pb-2">
-                <input
-                  type="checkbox"
-                  checked={hasHeader}
-                  onChange={(e) => setHasHeader(e.target.checked)}
-                  className="w-4 h-4"
-                />
-                Tem cabeçalho
-              </label>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">Delimitador</label>
+                <select
+                  value={delimiter}
+                  onChange={(e) => setDelimiter(e.target.value)}
+                  className="input"
+                >
+                  <option value=",">Virgula (,)</option>
+                  <option value=";">Ponto e virgula (;)</option>
+                  <option value="\t">Tab</option>
+                </select>
+              </div>
+              <div className="flex items-end">
+                <label className="flex items-center gap-2 cursor-pointer pb-2">
+                  <input
+                    type="checkbox"
+                    checked={hasHeader}
+                    onChange={(e) => setHasHeader(e.target.checked)}
+                    className="w-4 h-4"
+                  />
+                  Tem cabecalho
+                </label>
+              </div>
             </div>
-          </div>
 
-          <p className="text-sm text-gray-500">
-            Formato esperado: email,nome (primeira coluna é email)
-          </p>
+            <div className="p-3 bg-blue-50 rounded-lg text-sm text-blue-800">
+              <p className="font-medium mb-1">O sistema automaticamente:</p>
+              <ul className="list-disc list-inside space-y-1 text-blue-700">
+                <li>Valida formato dos emails</li>
+                <li>Remove emails duplicados</li>
+                <li>Remove emails da blacklist</li>
+              </ul>
+            </div>
 
-          <div className="flex justify-end gap-3 pt-4">
-            <button type="button" onClick={onClose} className="btn btn-secondary">
-              Cancelar
-            </button>
-            <button type="submit" disabled={loading} className="btn btn-primary">
-              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Importar'}
-            </button>
-          </div>
-        </form>
+            <p className="text-sm text-gray-500">
+              Formato esperado: email,nome (primeira coluna e email)
+            </p>
+
+            <div className="flex justify-end gap-3 pt-4">
+              <button type="button" onClick={onClose} className="btn btn-secondary">
+                Cancelar
+              </button>
+              <button type="submit" disabled={loading} className="btn btn-primary">
+                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Importar'}
+              </button>
+            </div>
+          </form>
+        )}
       </div>
     </div>
   )
