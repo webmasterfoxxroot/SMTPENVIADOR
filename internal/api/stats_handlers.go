@@ -22,17 +22,13 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 
 	// Define date filter based on period
 	var dateFilter string
-	var dateFilterHourly string
 	switch period {
 	case "week":
 		dateFilter = "created_at >= CURRENT_DATE - INTERVAL '7 days'"
-		dateFilterHourly = "sent_at >= CURRENT_DATE - INTERVAL '7 days'"
 	case "month":
 		dateFilter = "created_at >= CURRENT_DATE - INTERVAL '30 days'"
-		dateFilterHourly = "sent_at >= CURRENT_DATE - INTERVAL '30 days'"
 	default: // today
 		dateFilter = "DATE(created_at) = CURRENT_DATE"
-		dateFilterHourly = "DATE(sent_at) = CURRENT_DATE"
 	}
 
 	// Get today's stats from database (more reliable than Redis)
