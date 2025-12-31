@@ -997,10 +997,10 @@ func (s *Server) getCampaignDetails(c *fiber.Ctx) error {
 	})
 }
 
-// exportCampaignEmails exports emails that opened or clicked as CSV
+// exportCampaignEmails exports emails that opened or clicked (only email addresses, one per line)
 func (s *Server) exportCampaignEmails(c *fiber.Ctx) error {
 	id := c.Params("id")
-	exportType := c.Query("type", "opened") // opened, clicked, all
+	exportType := c.Query("type", "opened") // opened, clicked
 
 	// Verify campaign exists
 	var campaignName string
@@ -1009,12 +1009,12 @@ func (s *Server) exportCampaignEmails(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
 	}
 
-	// Build query based on export type
+	// Build query based on export type - only select email
 	var query string
 	switch exportType {
 	case "opened":
 		query = `
-			SELECT e.email, e.name, ce.opened_at
+			SELECT e.email
 			FROM campaign_emails ce
 			JOIN emails e ON ce.email_id = e.id
 			WHERE ce.campaign_id = $1 AND ce.opened_at IS NOT NULL
@@ -1022,31 +1022,15 @@ func (s *Server) exportCampaignEmails(c *fiber.Ctx) error {
 		`
 	case "clicked":
 		query = `
-			SELECT e.email, e.name, ce.clicked_at
+			SELECT e.email
 			FROM campaign_emails ce
 			JOIN emails e ON ce.email_id = e.id
 			WHERE ce.campaign_id = $1 AND ce.clicked_at IS NOT NULL
 			ORDER BY ce.clicked_at DESC
 		`
-	case "sent":
-		query = `
-			SELECT e.email, e.name, ce.sent_at
-			FROM campaign_emails ce
-			JOIN emails e ON ce.email_id = e.id
-			WHERE ce.campaign_id = $1 AND ce.status = 'sent'
-			ORDER BY ce.sent_at DESC
-		`
-	case "failed":
-		query = `
-			SELECT e.email, e.name, ce.error
-			FROM campaign_emails ce
-			JOIN emails e ON ce.email_id = e.id
-			WHERE ce.campaign_id = $1 AND ce.status = 'failed'
-			ORDER BY ce.created_at DESC
-		`
 	default:
 		query = `
-			SELECT e.email, e.name, ce.status
+			SELECT e.email
 			FROM campaign_emails ce
 			JOIN emails e ON ce.email_id = e.id
 			WHERE ce.campaign_id = $1
@@ -1060,53 +1044,20 @@ func (s *Server) exportCampaignEmails(c *fiber.Ctx) error {
 	}
 	defer rows.Close()
 
-	// Build CSV
-	var csv strings.Builder
-
-	// Header based on export type
-	switch exportType {
-	case "opened":
-		csv.WriteString("Email,Nome,Data Abertura\n")
-	case "clicked":
-		csv.WriteString("Email,Nome,Data Clique\n")
-	case "sent":
-		csv.WriteString("Email,Nome,Data Envio\n")
-	case "failed":
-		csv.WriteString("Email,Nome,Erro\n")
-	default:
-		csv.WriteString("Email,Nome,Status\n")
-	}
-
+	// Build simple list - one email per line
+	var result strings.Builder
 	for rows.Next() {
 		var email string
-		var name sql.NullString
-		var extra sql.NullString
-
-		if err := rows.Scan(&email, &name, &extra); err != nil {
+		if err := rows.Scan(&email); err != nil {
 			continue
 		}
-
-		nameStr := ""
-		if name.Valid {
-			nameStr = name.String
-		}
-
-		extraStr := ""
-		if extra.Valid {
-			extraStr = extra.String
-		}
-
-		// Escape fields for CSV
-		csv.WriteString(fmt.Sprintf("\"%s\",\"%s\",\"%s\"\n",
-			strings.ReplaceAll(email, "\"", "\"\""),
-			strings.ReplaceAll(nameStr, "\"", "\"\""),
-			strings.ReplaceAll(extraStr, "\"", "\"\"")))
+		result.WriteString(email + "\n")
 	}
 
 	// Set headers for file download
-	filename := fmt.Sprintf("%s_%s.csv", strings.ReplaceAll(campaignName, " ", "_"), exportType)
-	c.Set("Content-Type", "text/csv; charset=utf-8")
+	filename := fmt.Sprintf("%s_%s.txt", strings.ReplaceAll(campaignName, " ", "_"), exportType)
+	c.Set("Content-Type", "text/plain; charset=utf-8")
 	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 
-	return c.SendString(csv.String())
+	return c.SendString(result.String())
 }

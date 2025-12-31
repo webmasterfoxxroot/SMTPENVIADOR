@@ -218,9 +218,9 @@ function CampaignDetails() {
           </button>
         </div>
 
-        {/* Export buttons */}
+        {/* Export button - shows based on current filter */}
         <div className="flex gap-2 ml-auto">
-          {campaign?.open_count > 0 && (
+          {filter === 'opened' && campaign?.open_count > 0 && (
             <button
               onClick={() => handleExport('opened')}
               className="flex items-center gap-2 px-3 py-2 bg-purple-100 hover:bg-purple-200 text-purple-700 rounded text-sm font-medium"
@@ -229,7 +229,7 @@ function CampaignDetails() {
               Exportar Abertos
             </button>
           )}
-          {campaign?.click_count > 0 && (
+          {filter === 'clicked' && campaign?.click_count > 0 && (
             <button
               onClick={() => handleExport('clicked')}
               className="flex items-center gap-2 px-3 py-2 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded text-sm font-medium"
