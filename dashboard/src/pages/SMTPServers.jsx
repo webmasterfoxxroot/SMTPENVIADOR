@@ -246,14 +246,38 @@ function SMTPModal({ smtp, onClose, onSave }) {
   )
 }
 
-// Modal para enviar email de teste
+// Modal para enviar email de teste (estilo Mumara)
 function SendTestModal({ smtp, onClose }) {
-  const [email, setEmail] = useState('')
+  const [form, setForm] = useState({
+    to: '',
+    from_name: 'Teste SMTP',
+    subject: 'Email de Teste - Verificacao do Servidor SMTP',
+    body: `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+</head>
+<body style="font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px;">
+    <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; padding: 40px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+        <h1 style="color: #3b82f6; text-align: center;">Teste de SMTP</h1>
+        <div style="background: #10b981; color: white; padding: 15px 25px; border-radius: 8px; text-align: center; font-size: 18px; margin: 20px 0;">
+            ✓ Email de teste enviado com sucesso!
+        </div>
+        <p style="text-align: center; color: #64748b;">
+            Este email confirma que seu servidor SMTP esta configurado corretamente e pronto para envios.
+        </p>
+        <p style="text-align: center; color: #94a3b8; font-size: 12px; margin-top: 30px;">
+            SMTP Enviador - Sistema de Email Marketing
+        </p>
+    </div>
+</body>
+</html>`
+  })
   const [loading, setLoading] = useState(false)
 
   const handleSendTest = async (e) => {
     e.preventDefault()
-    if (!email.trim()) {
+    if (!form.to.trim()) {
       toast.error('Digite um email de destino')
       return
     }
@@ -261,14 +285,17 @@ function SendTestModal({ smtp, onClose }) {
     setLoading(true)
     try {
       await api.post(`/smtp/${smtp.id}/send-test`, {
-        to: email.trim()
+        to: form.to.trim(),
+        from_name: form.from_name.trim(),
+        subject: form.subject.trim(),
+        body: form.body
       })
       toast.success('Email de teste enviado com sucesso!')
       onClose()
     } catch (error) {
       toast.error(error.response?.data?.error || 'Falha ao enviar email de teste')
       if (error.response?.data?.details) {
-        console.error('Detalhes:', error.response.data.details)
+        toast.error(error.response.data.details)
       }
     } finally {
       setLoading(false)
@@ -276,16 +303,17 @@ function SendTestModal({ smtp, onClose }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
-        <div className="flex items-center justify-between mb-6">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-xl max-h-[90vh] overflow-y-auto">
+        {/* Header */}
+        <div className="flex items-center justify-between p-6 border-b border-gray-100">
           <div className="flex items-center gap-3">
             <div className="p-3 bg-blue-100 rounded-xl">
               <Send className="w-6 h-6 text-blue-600" />
             </div>
             <div>
               <h2 className="text-lg font-bold text-gray-900">Enviar Email de Teste</h2>
-              <p className="text-sm text-gray-500">{smtp.name}</p>
+              <p className="text-sm text-gray-500">{smtp.name} - {smtp.host}:{smtp.port}</p>
             </div>
           </div>
           <button
@@ -296,35 +324,79 @@ function SendTestModal({ smtp, onClose }) {
           </button>
         </div>
 
-        <form onSubmit={handleSendTest}>
-          <div className="mb-4">
+        <form onSubmit={handleSendTest} className="p-6 space-y-4">
+          {/* Email de Destino */}
+          <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Email de Destino
+              Email de Destino *
             </label>
             <input
               type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              value={form.to}
+              onChange={(e) => setForm({ ...form, to: e.target.value })}
               className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
               placeholder="seu@email.com"
               autoFocus
               required
             />
-            <p className="text-xs text-gray-400 mt-2">
-              Um email de teste sera enviado para este endereco usando o servidor SMTP selecionado.
-            </p>
           </div>
 
-          <div className="bg-gray-50 rounded-xl p-4 mb-6">
-            <h3 className="text-xs font-semibold text-gray-500 uppercase mb-2">Detalhes do SMTP</h3>
-            <div className="space-y-1 text-sm">
-              <p><span className="text-gray-500">Host:</span> <span className="font-medium">{smtp.host}:{smtp.port}</span></p>
-              <p><span className="text-gray-500">Usuario:</span> <span className="font-medium">{smtp.username}</span></p>
-              <p><span className="text-gray-500">TLS:</span> <span className="font-medium">{smtp.tls_mode === 'tls' ? 'TLS' : smtp.tls_mode === 'starttls' ? 'STARTTLS' : 'Nenhum'}</span></p>
+          {/* Nome do Remetente */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Nome do Remetente
+            </label>
+            <input
+              type="text"
+              value={form.from_name}
+              onChange={(e) => setForm({ ...form, from_name: e.target.value })}
+              className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+              placeholder="Nome que aparecera no email"
+            />
+            <p className="text-xs text-gray-400 mt-1">Email remetente: {smtp.username}</p>
+          </div>
+
+          {/* Assunto */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Assunto *
+            </label>
+            <input
+              type="text"
+              value={form.subject}
+              onChange={(e) => setForm({ ...form, subject: e.target.value })}
+              className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+              placeholder="Assunto do email de teste"
+              required
+            />
+          </div>
+
+          {/* Corpo do Email */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Corpo do Email (HTML)
+            </label>
+            <textarea
+              value={form.body}
+              onChange={(e) => setForm({ ...form, body: e.target.value })}
+              className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all font-mono text-sm"
+              rows={8}
+              placeholder="<html>...</html>"
+            />
+          </div>
+
+          {/* Info Box */}
+          <div className="bg-blue-50 rounded-xl p-4">
+            <h3 className="text-xs font-semibold text-blue-700 uppercase mb-2">Informacoes do Envio</h3>
+            <div className="space-y-1 text-sm text-blue-600">
+              <p><span className="opacity-70">Servidor:</span> <span className="font-medium">{smtp.host}:{smtp.port}</span></p>
+              <p><span className="opacity-70">Usuario:</span> <span className="font-medium">{smtp.username}</span></p>
+              <p><span className="opacity-70">TLS:</span> <span className="font-medium">{smtp.tls_mode === 'tls' ? 'TLS Implicito' : smtp.tls_mode === 'starttls' ? 'STARTTLS' : 'Sem criptografia'}</span></p>
             </div>
           </div>
 
-          <div className="flex gap-3">
+          {/* Buttons */}
+          <div className="flex gap-3 pt-2">
             <button
               type="button"
               onClick={onClose}
@@ -345,7 +417,7 @@ function SendTestModal({ smtp, onClose }) {
               ) : (
                 <>
                   <Send className="w-5 h-5" />
-                  Enviar Teste
+                  Enviar Email de Teste
                 </>
               )}
             </button>

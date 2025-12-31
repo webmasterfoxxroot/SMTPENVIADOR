@@ -461,8 +461,10 @@ func (s *Server) sendTestEmail(c *fiber.Ctx) error {
 	id := c.Params("id")
 
 	var req struct {
-		To      string `json:"to"`
-		Subject string `json:"subject"`
+		To       string `json:"to"`
+		FromName string `json:"from_name"`
+		Subject  string `json:"subject"`
+		Body     string `json:"body"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
@@ -476,22 +478,32 @@ func (s *Server) sendTestEmail(c *fiber.Ctx) error {
 		req.Subject = "Email de Teste - SMTP Enviador"
 	}
 
+	if req.FromName == "" {
+		req.FromName = "SMTP Enviador"
+	}
+
 	// Get SMTP details
-	var host, username, password, tlsMode, name string
+	var host, username, password, tlsMode, smtpName string
 	var port int
 
 	err := s.db.QueryRow(`
 		SELECT name, host, port, username, password, tls_mode FROM smtp_servers WHERE id = $1
-	`, id).Scan(&name, &host, &port, &username, &password, &tlsMode)
+	`, id).Scan(&smtpName, &host, &port, &username, &password, &tlsMode)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "SMTP server not found"})
 	}
 
 	// Build email message
-	from := username
+	fromEmail := username
 	subject := req.Subject
-	body := fmt.Sprintf(`<!DOCTYPE html>
+
+	// Use custom body or default
+	var body string
+	if req.Body != "" {
+		body = req.Body
+	} else {
+		body = fmt.Sprintf(`<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -530,10 +542,11 @@ func (s *Server) sendTestEmail(c *fiber.Ctx) error {
         </div>
     </div>
 </body>
-</html>`, name, host, port, username, tlsMode, time.Now().Format("02/01/2006 15:04:05"))
+</html>`, smtpName, host, port, username, tlsMode, time.Now().Format("02/01/2006 15:04:05"))
+	}
 
-	// Build message with headers
-	msg := fmt.Sprintf("From: %s\r\n", from)
+	// Build message with headers - use proper From format with name
+	msg := fmt.Sprintf("From: \"%s\" <%s>\r\n", req.FromName, fromEmail)
 	msg += fmt.Sprintf("To: %s\r\n", req.To)
 	msg += fmt.Sprintf("Subject: %s\r\n", subject)
 	msg += "MIME-Version: 1.0\r\n"
@@ -649,7 +662,7 @@ func (s *Server) sendTestEmail(c *fiber.Ctx) error {
 	}
 
 	// Set sender
-	if err := client.Mail(from); err != nil {
+	if err := client.Mail(fromEmail); err != nil {
 		return c.Status(400).JSON(fiber.Map{
 			"error":   "Falha ao definir remetente",
 			"details": err.Error(),
