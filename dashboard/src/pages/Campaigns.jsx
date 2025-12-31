@@ -428,7 +428,11 @@ function Campaigns() {
             </thead>
             <tbody>
               {campaigns.map((campaign) => (
-                <tr key={campaign.id}>
+                <tr
+                  key={campaign.id}
+                  onClick={() => navigate(`/campaigns/${campaign.id}/details`)}
+                  className="cursor-pointer hover:bg-gray-50"
+                >
                   <td>
                     <div>
                       <div className="font-medium">{campaign.name}</div>
@@ -482,7 +486,7 @@ function Campaigns() {
                     <div className="flex items-center gap-1">
                       {campaign.status === 'draft' && !hasActiveCountdown(campaign) && (
                         <button
-                          onClick={() => startCampaign(campaign.id)}
+                          onClick={(e) => { e.stopPropagation(); startCampaign(campaign.id) }}
                           className="p-2 text-green-600 hover:bg-green-50 rounded"
                           title="Iniciar"
                         >
@@ -491,7 +495,7 @@ function Campaigns() {
                       )}
                       {campaign.status === 'running' && (
                         <button
-                          onClick={() => pauseCampaign(campaign.id)}
+                          onClick={(e) => { e.stopPropagation(); pauseCampaign(campaign.id) }}
                           className="p-2 text-yellow-600 hover:bg-yellow-50 rounded"
                           title="Pausar"
                         >
@@ -501,14 +505,14 @@ function Campaigns() {
                       {campaign.status === 'paused' && (
                         <>
                           <button
-                            onClick={() => resumeCampaign(campaign.id)}
+                            onClick={(e) => { e.stopPropagation(); resumeCampaign(campaign.id) }}
                             className="p-2 text-green-600 hover:bg-green-50 rounded"
                             title="Retomar"
                           >
                             <Play className="w-4 h-4" />
                           </button>
                           <button
-                            onClick={() => cancelCampaign(campaign.id)}
+                            onClick={(e) => { e.stopPropagation(); cancelCampaign(campaign.id) }}
                             className="p-2 text-red-600 hover:bg-red-50 rounded"
                             title="Cancelar"
                           >
@@ -518,8 +522,9 @@ function Campaigns() {
                       )}
                       <Link
                         to={`/campaigns/${campaign.id}`}
+                        onClick={(e) => e.stopPropagation()}
                         className="p-2 text-gray-600 hover:bg-gray-100 rounded"
-                        title="Ver/Editar"
+                        title="Editar"
                       >
                         <Eye className="w-4 h-4" />
                       </Link>
@@ -535,7 +540,7 @@ function Campaigns() {
                         </button>
 
                         {actionMenu === campaign.id && (
-                          <div className="absolute right-0 top-full mt-1 bg-white border rounded-lg shadow-lg py-1 z-10 min-w-[180px]">
+                          <div className="absolute right-0 top-full mt-1 bg-white border rounded-lg shadow-lg py-1 z-10 min-w-[180px]" onClick={(e) => e.stopPropagation()}>
                             <button
                               onClick={() => cloneCampaign(campaign.id)}
                               className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
@@ -595,14 +600,6 @@ function Campaigns() {
                             )}
 
                             <hr className="my-1" />
-
-                            <Link
-                              to={`/campaigns/${campaign.id}/details`}
-                              className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
-                            >
-                              <List className="w-4 h-4" />
-                              Ver Detalhes
-                            </Link>
 
                             <button
                               onClick={() => exportCSV(campaign.id, campaign.name)}
