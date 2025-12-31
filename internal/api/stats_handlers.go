@@ -16,12 +16,35 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 	queueLen, _ := s.queue.GetQueueLength()
 	stats["queue_size"] = queueLen
 
-	// Get today's stats from Redis
-	redisStats, _ := s.queue.GetStats()
-	stats["today_sent"] = redisStats["sent"]
-	stats["today_failed"] = redisStats["failed"]
-	stats["today_opened"] = redisStats["opened"]
-	stats["today_clicked"] = redisStats["clicked"]
+	// Get today's stats from database (more reliable than Redis)
+	// Sent/Failed today - based on when email was processed
+	var todaySent, todayFailed int
+	s.db.QueryRow(`
+		SELECT
+			COUNT(CASE WHEN status = 'sent' THEN 1 END),
+			COUNT(CASE WHEN status = 'failed' THEN 1 END)
+		FROM campaign_emails
+		WHERE DATE(created_at) = CURRENT_DATE
+	`).Scan(&todaySent, &todayFailed)
+
+	// Opened today - based on when email was opened (can be from any campaign)
+	var todayOpened int
+	s.db.QueryRow(`
+		SELECT COUNT(*) FROM campaign_emails
+		WHERE DATE(opened_at) = CURRENT_DATE
+	`).Scan(&todayOpened)
+
+	// Clicked today - based on when link was clicked (can be from any campaign)
+	var todayClicked int
+	s.db.QueryRow(`
+		SELECT COUNT(*) FROM campaign_emails
+		WHERE DATE(clicked_at) = CURRENT_DATE
+	`).Scan(&todayClicked)
+
+	stats["today_sent"] = todaySent
+	stats["today_failed"] = todayFailed
+	stats["today_opened"] = todayOpened
+	stats["today_clicked"] = todayClicked
 
 	// Get engine stats
 	engineStats := s.engine.GetStats()
