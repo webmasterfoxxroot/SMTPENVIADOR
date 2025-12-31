@@ -196,6 +196,7 @@ func (s *Server) setupRoutes() {
 
 	// Dashboard stats
 	protected.Get("/stats", s.getStats)
+	protected.Get("/stats/activity", s.getRecentActivity)
 	protected.Get("/stats/realtime", websocket.New(s.realtimeStats))
 
 	// SMTP Servers

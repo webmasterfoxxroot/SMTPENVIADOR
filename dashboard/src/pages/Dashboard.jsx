@@ -154,11 +154,17 @@ function Dashboard() {
   })
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState('today')
+  const [activities, setActivities] = useState([])
 
   useEffect(() => {
     fetchStats()
-    const interval = setInterval(fetchStats, 5000)
-    return () => clearInterval(interval)
+    fetchActivities()
+    const statsInterval = setInterval(fetchStats, 5000)
+    const activityInterval = setInterval(fetchActivities, 3000)
+    return () => {
+      clearInterval(statsInterval)
+      clearInterval(activityInterval)
+    }
   }, [period])
 
   const fetchStats = async () => {
@@ -170,6 +176,26 @@ function Dashboard() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const fetchActivities = async () => {
+    try {
+      const response = await api.get('/stats/activity?limit=15')
+      setActivities(response.data.activities || [])
+    } catch (error) {
+      console.error('Failed to fetch activities:', error)
+    }
+  }
+
+  const formatTimeAgo = (timestamp) => {
+    const now = new Date()
+    const time = new Date(timestamp)
+    const diff = Math.floor((now - time) / 1000)
+
+    if (diff < 60) return `${diff}s atras`
+    if (diff < 3600) return `${Math.floor(diff / 60)}m atras`
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h atras`
+    return time.toLocaleDateString('pt-BR')
   }
 
   const formatNumber = (num) => {
@@ -445,6 +471,66 @@ function Dashboard() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Live Activity Feed */}
+      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+            <h2 className="text-lg font-semibold text-gray-800">Atividade em Tempo Real</h2>
+          </div>
+          <span className="text-xs text-gray-400">Atualiza a cada 3s</span>
+        </div>
+
+        {activities.length > 0 ? (
+          <div className="space-y-3 max-h-80 overflow-y-auto">
+            {activities.map((activity, index) => (
+              <div
+                key={index}
+                className={`flex items-center gap-4 p-3 rounded-lg transition-all ${
+                  index === 0 ? 'bg-blue-50 border border-blue-100' : 'bg-gray-50 hover:bg-gray-100'
+                }`}
+              >
+                <div className={`p-2 rounded-full ${
+                  activity.type === 'open'
+                    ? 'bg-purple-100 text-purple-600'
+                    : 'bg-orange-100 text-orange-600'
+                }`}>
+                  {activity.type === 'open' ? (
+                    <Eye className="h-4 w-4" />
+                  ) : (
+                    <MousePointer className="h-4 w-4" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-800 truncate">
+                    {activity.email}
+                  </p>
+                  <p className="text-xs text-gray-500 truncate">
+                    {activity.type === 'open' ? 'Abriu' : 'Clicou'} - {activity.campaign}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                    activity.type === 'open'
+                      ? 'bg-purple-100 text-purple-700'
+                      : 'bg-orange-100 text-orange-700'
+                  }`}>
+                    {activity.type === 'open' ? 'Abertura' : 'Clique'}
+                  </span>
+                  <p className="text-xs text-gray-400 mt-1">{formatTimeAgo(activity.timestamp)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-8 text-gray-500">
+            <Eye className="h-12 w-12 mx-auto text-gray-300 mb-3" />
+            <p className="text-sm">Nenhuma atividade recente</p>
+            <p className="text-xs text-gray-400 mt-1">As aberturas e cliques aparecerao aqui</p>
+          </div>
+        )}
       </div>
 
       {/* Domain Stats Section */}

@@ -282,6 +282,55 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 	return c.JSON(stats)
 }
 
+// getRecentActivity returns recent opens and clicks for live feed
+func (s *Server) getRecentActivity(c *fiber.Ctx) error {
+	limit := c.QueryInt("limit", 20)
+
+	rows, err := s.db.Query(`
+		SELECT
+			te.event_type,
+			e.email,
+			c.name as campaign_name,
+			te.link_url,
+			te.created_at
+		FROM tracking_events te
+		JOIN emails e ON te.email_id = e.id
+		JOIN campaigns c ON te.campaign_id = c.id
+		WHERE te.event_type IN ('open', 'click')
+		ORDER BY te.created_at DESC
+		LIMIT $1
+	`, limit)
+
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch activity"})
+	}
+	defer rows.Close()
+
+	var activities []map[string]interface{}
+	for rows.Next() {
+		var eventType, email, campaignName string
+		var linkURL *string
+		var createdAt time.Time
+
+		rows.Scan(&eventType, &email, &campaignName, &linkURL, &createdAt)
+
+		activity := map[string]interface{}{
+			"type":      eventType,
+			"email":     email,
+			"campaign":  campaignName,
+			"timestamp": createdAt,
+		}
+		if linkURL != nil {
+			activity["link"] = *linkURL
+		}
+		activities = append(activities, activity)
+	}
+
+	return c.JSON(fiber.Map{
+		"activities": activities,
+	})
+}
+
 // realtimeStats sends real-time stats via WebSocket
 func (s *Server) realtimeStats(c *websocket.Conn) {
 	ticker := time.NewTicker(1 * time.Second)
