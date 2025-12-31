@@ -177,32 +177,68 @@ function CampaignDetails() {
         </div>
       )}
 
-      {/* Filter buttons */}
-      <div className="flex gap-2 mb-4">
-        <button
-          onClick={() => { setFilter(''); setPage(1) }}
-          className={`px-4 py-2 rounded ${filter === '' ? 'bg-blue-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
-        >
-          Todos
-        </button>
-        <button
-          onClick={() => { setFilter('sent'); setPage(1) }}
-          className={`px-4 py-2 rounded ${filter === 'sent' ? 'bg-green-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
-        >
-          Enviados
-        </button>
-        <button
-          onClick={() => { setFilter('failed'); setPage(1) }}
-          className={`px-4 py-2 rounded ${filter === 'failed' ? 'bg-red-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
-        >
-          Falhos
-        </button>
-        <button
-          onClick={() => { setFilter('queued'); setPage(1) }}
-          className={`px-4 py-2 rounded ${filter === 'queued' ? 'bg-yellow-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
-        >
-          Na fila
-        </button>
+      {/* Filter buttons with export */}
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => { setFilter(''); setPage(1) }}
+            className={`px-4 py-2 rounded ${filter === '' ? 'bg-blue-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
+          >
+            Todos
+          </button>
+          <button
+            onClick={() => { setFilter('sent'); setPage(1) }}
+            className={`px-4 py-2 rounded ${filter === 'sent' ? 'bg-green-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
+          >
+            Enviados
+          </button>
+          <button
+            onClick={() => { setFilter('failed'); setPage(1) }}
+            className={`px-4 py-2 rounded ${filter === 'failed' ? 'bg-red-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
+          >
+            Falhos
+          </button>
+          <button
+            onClick={() => { setFilter('queued'); setPage(1) }}
+            className={`px-4 py-2 rounded ${filter === 'queued' ? 'bg-yellow-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
+          >
+            Na fila
+          </button>
+          <button
+            onClick={() => { setFilter('opened'); setPage(1) }}
+            className={`px-4 py-2 rounded ${filter === 'opened' ? 'bg-purple-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
+          >
+            Abertos
+          </button>
+          <button
+            onClick={() => { setFilter('clicked'); setPage(1) }}
+            className={`px-4 py-2 rounded ${filter === 'clicked' ? 'bg-orange-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
+          >
+            Cliques
+          </button>
+        </div>
+
+        {/* Export buttons */}
+        <div className="flex gap-2 ml-auto">
+          {campaign?.open_count > 0 && (
+            <button
+              onClick={() => handleExport('opened')}
+              className="flex items-center gap-2 px-3 py-2 bg-purple-100 hover:bg-purple-200 text-purple-700 rounded text-sm font-medium"
+            >
+              <Download className="w-4 h-4" />
+              Exportar Abertos
+            </button>
+          )}
+          {campaign?.click_count > 0 && (
+            <button
+              onClick={() => handleExport('clicked')}
+              className="flex items-center gap-2 px-3 py-2 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded text-sm font-medium"
+            >
+              <Download className="w-4 h-4" />
+              Exportar Cliques
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Emails table */}

@@ -937,7 +937,12 @@ func (s *Server) getCampaignDetails(c *fiber.Ctx) error {
 	`
 	args := []interface{}{id}
 
-	if status != "" {
+	// Handle special filters for opened/clicked
+	if status == "opened" {
+		query += " AND ce.opened_at IS NOT NULL"
+	} else if status == "clicked" {
+		query += " AND ce.clicked_at IS NOT NULL"
+	} else if status != "" {
 		query += " AND ce.status = $2"
 		args = append(args, status)
 	}
@@ -974,7 +979,11 @@ func (s *Server) getCampaignDetails(c *fiber.Ctx) error {
 	var total int
 	countQuery := `SELECT COUNT(*) FROM campaign_emails WHERE campaign_id = $1`
 	countArgs := []interface{}{id}
-	if status != "" {
+	if status == "opened" {
+		countQuery += " AND opened_at IS NOT NULL"
+	} else if status == "clicked" {
+		countQuery += " AND clicked_at IS NOT NULL"
+	} else if status != "" {
 		countQuery += " AND status = $2"
 		countArgs = append(countArgs, status)
 	}
