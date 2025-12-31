@@ -119,9 +119,10 @@ function SmallStatCard({ icon: Icon, label, value, subValue, iconBg }) {
 // Custom Tooltip for Charts
 function CustomTooltip({ active, payload, label }) {
   if (active && payload && payload.length) {
+    const isHour = typeof label === 'number' && label < 24
     return (
       <div className="bg-white p-4 rounded-lg shadow-lg border border-gray-100">
-        <p className="text-sm font-semibold text-gray-800 mb-2">{label}h</p>
+        <p className="text-sm font-semibold text-gray-800 mb-2">{isHour ? `${label}h` : label}</p>
         {payload.map((entry, index) => (
           <p key={index} className="text-sm" style={{ color: entry.color }}>
             {entry.name}: {entry.value?.toLocaleString()}
@@ -150,16 +151,17 @@ function Dashboard() {
     by_domain: []
   })
   const [loading, setLoading] = useState(true)
+  const [period, setPeriod] = useState('today')
 
   useEffect(() => {
     fetchStats()
     const interval = setInterval(fetchStats, 5000)
     return () => clearInterval(interval)
-  }, [])
+  }, [period])
 
   const fetchStats = async () => {
     try {
-      const response = await api.get('/stats')
+      const response = await api.get(`/stats?period=${period}`)
       setStats(response.data)
     } catch (error) {
       console.error('Failed to fetch stats:', error)
@@ -280,22 +282,60 @@ function Dashboard() {
         <div className="lg:col-span-2 bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
           <div className="flex items-center justify-between mb-6">
             <div>
-              <h2 className="text-lg font-semibold text-gray-800">Atividade por Hora</h2>
-              <p className="text-sm text-gray-500">Desempenho de hoje</p>
+              <h2 className="text-lg font-semibold text-gray-800">
+                {period === 'today' ? 'Atividade por Hora' : period === 'week' ? 'Ultimos 7 Dias' : 'Ultimos 30 Dias'}
+              </h2>
+              <p className="text-sm text-gray-500">
+                {period === 'today' ? 'Desempenho de hoje' : period === 'week' ? 'Desempenho semanal' : 'Desempenho mensal'}
+              </p>
             </div>
-            <div className="flex items-center gap-4 text-sm">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-blue-500"></div>
-                <span className="text-gray-600">Enviados</span>
+            <div className="flex items-center gap-2">
+              <div className="flex bg-gray-100 rounded-lg p-1">
+                <button
+                  onClick={() => setPeriod('today')}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                    period === 'today'
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-800'
+                  }`}
+                >
+                  Hoje
+                </button>
+                <button
+                  onClick={() => setPeriod('week')}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                    period === 'week'
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-800'
+                  }`}
+                >
+                  7 Dias
+                </button>
+                <button
+                  onClick={() => setPeriod('month')}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                    period === 'month'
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-800'
+                  }`}
+                >
+                  30 Dias
+                </button>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-purple-500"></div>
-                <span className="text-gray-600">Abertos</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-orange-500"></div>
-                <span className="text-gray-600">Cliques</span>
-              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-4 text-sm mb-4">
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+              <span className="text-gray-600">Enviados</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full bg-purple-500"></div>
+              <span className="text-gray-600">Abertos</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full bg-orange-500"></div>
+              <span className="text-gray-600">Cliques</span>
             </div>
           </div>
           <div className="h-72">
@@ -317,8 +357,8 @@ function Dashboard() {
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                 <XAxis
-                  dataKey="hour"
-                  tickFormatter={(h) => `${h}h`}
+                  dataKey={period === 'today' ? 'hour' : 'label'}
+                  tickFormatter={(val) => period === 'today' ? `${val}h` : val}
                   stroke="#9ca3af"
                   fontSize={12}
                 />
