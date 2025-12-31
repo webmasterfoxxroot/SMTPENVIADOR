@@ -46,7 +46,8 @@ function Dashboard() {
     total_lists: 0,
     total_emails: 0,
     hourly: [],
-    by_provider: []
+    by_provider: [],
+    by_domain: []
   })
   const [loading, setLoading] = useState(true)
 
@@ -227,12 +228,12 @@ function Dashboard() {
 
       {/* Provider Stats Table */}
       {(stats.by_provider || []).length > 0 && (
-        <div className="card">
-          <h2 className="text-lg font-semibold mb-4">Detalhes por Provedor SMTP</h2>
+        <div className="card mb-8">
+          <h2 className="text-lg font-semibold mb-4">Detalhes por Servidor SMTP</h2>
           <table className="table">
             <thead>
               <tr>
-                <th>Provedor</th>
+                <th>Servidor SMTP</th>
                 <th className="text-right">Enviados</th>
                 <th className="text-right">Falhos</th>
                 <th className="text-right">Abertos</th>
@@ -264,6 +265,75 @@ function Dashboard() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* Email Domain Stats */}
+      {(stats.by_domain || []).length > 0 && (
+        <>
+          {/* Domain Chart */}
+          <div className="card mb-8">
+            <h2 className="text-lg font-semibold mb-4">Envios por Domínio de Email (Hoje)</h2>
+            <div className="h-80">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={stats.by_domain || []} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis type="number" />
+                  <YAxis dataKey="domain" type="category" width={140} tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="sent" fill="#3b82f6" name="Enviados" />
+                  <Bar dataKey="opened" fill="#8b5cf6" name="Abertos" />
+                  <Bar dataKey="clicked" fill="#f97316" name="Cliques" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Domain Stats Table */}
+          <div className="card">
+            <h2 className="text-lg font-semibold mb-4">Detalhes por Domínio de Email</h2>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Domínio</th>
+                  <th className="text-right">Enviados</th>
+                  <th className="text-right">Falhos</th>
+                  <th className="text-right">Abertos</th>
+                  <th className="text-right">Cliques</th>
+                  <th className="text-right">Taxa Sucesso</th>
+                  <th className="text-right">Taxa Abertura</th>
+                  <th className="text-right">CTR</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(stats.by_domain || []).map((domain, index) => (
+                  <tr key={index}>
+                    <td className="font-medium">{domain.domain}</td>
+                    <td className="text-right text-blue-600">{domain.sent?.toLocaleString()}</td>
+                    <td className="text-right text-red-600">{domain.failed?.toLocaleString()}</td>
+                    <td className="text-right text-purple-600">{domain.opened?.toLocaleString()}</td>
+                    <td className="text-right text-orange-600">{domain.clicked?.toLocaleString()}</td>
+                    <td className="text-right">
+                      {domain.sent + domain.failed > 0
+                        ? Math.round((domain.sent / (domain.sent + domain.failed)) * 100) + '%'
+                        : '-'}
+                    </td>
+                    <td className="text-right">
+                      {domain.sent > 0
+                        ? Math.round((domain.opened / domain.sent) * 100) + '%'
+                        : '-'}
+                    </td>
+                    <td className="text-right">
+                      {domain.opened > 0
+                        ? Math.round((domain.clicked / domain.opened) * 100) + '%'
+                        : '-'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   )

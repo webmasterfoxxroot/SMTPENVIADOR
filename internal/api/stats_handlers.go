@@ -99,6 +99,40 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 		stats["by_provider"] = providerStats
 	}
 
+	// Get stats by email domain (today) - gmail.com, hotmail.com, etc.
+	domainRows, _ := s.db.Query(`
+		SELECT
+			LOWER(SPLIT_PART(e.email, '@', 2)) as domain,
+			COUNT(CASE WHEN ce.status = 'sent' THEN 1 END) as sent,
+			COUNT(CASE WHEN ce.status = 'failed' THEN 1 END) as failed,
+			COUNT(CASE WHEN ce.opened_at IS NOT NULL THEN 1 END) as opened,
+			COUNT(CASE WHEN ce.clicked_at IS NOT NULL THEN 1 END) as clicked
+		FROM campaign_emails ce
+		JOIN emails e ON ce.email_id = e.id
+		WHERE DATE(ce.created_at) = CURRENT_DATE
+		GROUP BY LOWER(SPLIT_PART(e.email, '@', 2))
+		ORDER BY sent DESC
+		LIMIT 15
+	`)
+	if domainRows != nil {
+		defer domainRows.Close()
+
+		var domainStats []map[string]interface{}
+		for domainRows.Next() {
+			var domain string
+			var sent, failed, opened, clicked int
+			domainRows.Scan(&domain, &sent, &failed, &opened, &clicked)
+			domainStats = append(domainStats, map[string]interface{}{
+				"domain":  domain,
+				"sent":    sent,
+				"failed":  failed,
+				"opened":  opened,
+				"clicked": clicked,
+			})
+		}
+		stats["by_domain"] = domainStats
+	}
+
 	return c.JSON(stats)
 }
 
