@@ -425,7 +425,7 @@ function Dashboard() {
                   }`}></div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-gray-800">
-                      <span className="font-semibold">{activity.email.split('@')[0]}</span>
+                      <span className="font-semibold">{activity.email}</span>
                       {activity.type === 'open' ? ' abriu o ' : ' clicou no '}
                       <span className="font-semibold text-blue-600">email</span>
                     </p>
