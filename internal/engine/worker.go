@@ -243,8 +243,17 @@ func (w *Worker) processLinks(trackingDomain, content, campaignID, emailID strin
 
 // updateEmailStatus updates the campaign_email status
 func (w *Worker) updateEmailStatus(id, status, errorMsg string) {
-	query := `UPDATE campaign_emails SET status = $1, error_message = $2, sent_at = CASE WHEN $1 = 'sent' THEN NOW() ELSE sent_at END WHERE id = $3`
-	result, err := w.db.Exec(query, status, errorMsg, id)
+	var query string
+	var err error
+	var result sql.Result
+
+	if status == "sent" {
+		query = `UPDATE campaign_emails SET status = $1, error_message = $2, sent_at = NOW() WHERE id = $3`
+	} else {
+		query = `UPDATE campaign_emails SET status = $1, error_message = $2 WHERE id = $3`
+	}
+
+	result, err = w.db.Exec(query, status, errorMsg, id)
 	if err != nil {
 		log.Printf("❌ Worker %d: Failed to update email status for %s: %v", w.id, id, err)
 		return
