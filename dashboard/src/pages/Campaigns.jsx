@@ -239,6 +239,9 @@ function Campaigns() {
     // Check if campaign has auto_start_at
     const countdown = getCountdownSeconds(campaign.auto_start_at)
 
+    // Debug log
+    console.log(`[StatusBadge] Campaign: ${campaign.name}, auto_start_at: ${campaign.auto_start_at}, countdown: ${countdown}, status: ${campaign.status}`)
+
     if (countdown !== null && countdown > 0 && campaign.status === 'draft') {
       return (
         <div className="flex flex-col items-start gap-1">
