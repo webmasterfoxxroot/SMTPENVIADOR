@@ -29,43 +29,6 @@ import {
 } from 'recharts'
 import api from '../services/api'
 
-// Circular Progress Component
-function CircularProgress({ value, size = 120, strokeWidth = 8, color = '#3b82f6' }) {
-  const radius = (size - strokeWidth) / 2
-  const circumference = radius * 2 * Math.PI
-  const offset = circumference - (value / 100) * circumference
-
-  return (
-    <div className="relative" style={{ width: size, height: size }}>
-      <svg width={size} height={size} className="transform -rotate-90">
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke="#e5e7eb"
-          strokeWidth={strokeWidth}
-        />
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke={color}
-          strokeWidth={strokeWidth}
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          strokeLinecap="round"
-          className="transition-all duration-500"
-        />
-      </svg>
-      <div className="absolute inset-0 flex items-center justify-center">
-        <span className="text-2xl font-bold text-gray-800">{value}%</span>
-      </div>
-    </div>
-  )
-}
-
 // Main Stat Card with gradient
 function MainStatCard({ icon: Icon, label, value, subValue, gradient, trend }) {
   return (
@@ -203,10 +166,6 @@ function Dashboard() {
     if (num >= 1000) return (num / 1000).toFixed(1) + 'K'
     return num?.toLocaleString() || '0'
   }
-
-  const successRate = stats.today_sent + stats.today_failed > 0
-    ? Math.round((stats.today_sent / (stats.today_sent + stats.today_failed)) * 100)
-    : 0
 
   const openRate = stats.today_sent > 0
     ? Math.round((stats.today_opened / stats.today_sent) * 100)
@@ -440,97 +399,49 @@ function Dashboard() {
           </div>
         </div>
 
-        {/* Performance Rates */}
+        {/* Live Events - Real-time Activity */}
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-800 mb-2">Taxas de Performance</h2>
-          <p className="text-sm text-gray-500 mb-6">Metricas do dia</p>
-
-          <div className="space-y-8">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Taxa de Sucesso</p>
-                <p className="text-xs text-gray-400 mt-1">Emails entregues</p>
-              </div>
-              <CircularProgress value={successRate} size={80} strokeWidth={6} color="#10b981" />
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <h2 className="text-lg font-semibold text-gray-800">Live Events</h2>
             </div>
-
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Taxa de Abertura</p>
-                <p className="text-xs text-gray-400 mt-1">Emails abertos</p>
-              </div>
-              <CircularProgress value={openRate} size={80} strokeWidth={6} color="#8b5cf6" />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Taxa de Cliques</p>
-                <p className="text-xs text-gray-400 mt-1">CTR</p>
-              </div>
-              <CircularProgress value={clickRate} size={80} strokeWidth={6} color="#f97316" />
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-400">Auto Refresh</span>
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Live Activity Feed */}
-      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-            <h2 className="text-lg font-semibold text-gray-800">Atividade em Tempo Real</h2>
-          </div>
-          <span className="text-xs text-gray-400">Atualiza a cada 3s</span>
-        </div>
-
-        {activities.length > 0 ? (
-          <div className="space-y-3 max-h-80 overflow-y-auto">
-            {activities.map((activity, index) => (
-              <div
-                key={index}
-                className={`flex items-center gap-4 p-3 rounded-lg transition-all ${
-                  index === 0 ? 'bg-blue-50 border border-blue-100' : 'bg-gray-50 hover:bg-gray-100'
-                }`}
-              >
-                <div className={`p-2 rounded-full ${
-                  activity.type === 'open'
-                    ? 'bg-purple-100 text-purple-600'
-                    : 'bg-orange-100 text-orange-600'
-                }`}>
-                  {activity.type === 'open' ? (
-                    <Eye className="h-4 w-4" />
-                  ) : (
-                    <MousePointer className="h-4 w-4" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-800 truncate">
-                    {activity.email}
-                  </p>
-                  <p className="text-xs text-gray-500 truncate">
-                    {activity.type === 'open' ? 'Abriu' : 'Clicou'} - {activity.campaign}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+          {activities.length > 0 ? (
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {activities.map((activity, index) => (
+                <div
+                  key={index}
+                  className="flex items-start gap-3 p-3 rounded-lg hover:bg-gray-50 transition-all border-b border-gray-100 last:border-0"
+                >
+                  <div className={`w-2 h-2 rounded-full mt-2 ${
                     activity.type === 'open'
-                      ? 'bg-purple-100 text-purple-700'
-                      : 'bg-orange-100 text-orange-700'
-                  }`}>
-                    {activity.type === 'open' ? 'Abertura' : 'Clique'}
-                  </span>
-                  <p className="text-xs text-gray-400 mt-1">{formatTimeAgo(activity.timestamp)}</p>
+                      ? 'bg-green-500'
+                      : 'bg-orange-500'
+                  }`}></div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-800">
+                      <span className="font-semibold">{activity.email.split('@')[0]}</span>
+                      {activity.type === 'open' ? ' has opened the ' : ' has clicked the '}
+                      <span className="font-semibold text-blue-600">email</span>
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1">{formatTimeAgo(activity.timestamp)}</p>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-8 text-gray-500">
-            <Eye className="h-12 w-12 mx-auto text-gray-300 mb-3" />
-            <p className="text-sm">Nenhuma atividade recente</p>
-            <p className="text-xs text-gray-400 mt-1">As aberturas e cliques aparecerao aqui</p>
-          </div>
-        )}
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-8 text-gray-500">
+              <Eye className="h-10 w-10 mx-auto text-gray-300 mb-3" />
+              <p className="text-sm">Nenhuma atividade recente</p>
+              <p className="text-xs text-gray-400 mt-1">As aberturas e cliques aparecerao aqui</p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Domain Stats Section */}
