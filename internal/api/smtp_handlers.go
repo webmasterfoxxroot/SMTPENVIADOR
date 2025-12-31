@@ -457,14 +457,12 @@ func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
 }
 
 // sendTestEmail sends a test email through an SMTP server
+// Uses the same method as campaigns to avoid SMTPUTF8 issues
 func (s *Server) sendTestEmail(c *fiber.Ctx) error {
 	id := c.Params("id")
 
 	var req struct {
-		To       string `json:"to"`
-		FromName string `json:"from_name"`
-		Subject  string `json:"subject"`
-		Body     string `json:"body"`
+		To string `json:"to"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
@@ -472,14 +470,6 @@ func (s *Server) sendTestEmail(c *fiber.Ctx) error {
 
 	if req.To == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "Email destination is required"})
-	}
-
-	if req.Subject == "" {
-		req.Subject = "Email de Teste - SMTP Enviador"
-	}
-
-	if req.FromName == "" {
-		req.FromName = "SMTP Enviador"
 	}
 
 	// Get SMTP details
@@ -494,215 +484,85 @@ func (s *Server) sendTestEmail(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "SMTP server not found"})
 	}
 
-	// Build email message
+	// Fixed test email content (like Mumara)
 	fromEmail := username
-	subject := req.Subject
-
-	// Use custom body or default
-	var body string
-	if req.Body != "" {
-		body = req.Body
-	} else {
-		body = fmt.Sprintf(`<!DOCTYPE html>
+	fromName := "Teste SMTP"
+	subject := "Email de Teste - SMTP Enviador"
+	htmlContent := fmt.Sprintf(`<!DOCTYPE html>
 <html>
-<head>
-    <meta charset="UTF-8">
-    <style>
-        body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; }
-        .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; padding: 40px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .header { text-align: center; margin-bottom: 30px; }
-        .header h1 { color: #3b82f6; margin: 0; }
-        .success { background: #10b981; color: white; padding: 15px 25px; border-radius: 8px; text-align: center; font-size: 18px; margin: 20px 0; }
-        .details { background: #f8fafc; padding: 20px; border-radius: 8px; margin-top: 20px; }
-        .details p { margin: 8px 0; color: #64748b; }
-        .details strong { color: #334155; }
-        .footer { text-align: center; margin-top: 30px; color: #94a3b8; font-size: 12px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>SMTP Enviador</h1>
-        </div>
-        <div class="success">
-            ✓ Email de teste enviado com sucesso!
-        </div>
-        <p style="text-align: center; color: #64748b;">
-            Este email confirma que seu servidor SMTP esta configurado corretamente.
-        </p>
-        <div class="details">
-            <p><strong>Servidor SMTP:</strong> %s</p>
-            <p><strong>Host:</strong> %s:%d</p>
-            <p><strong>Usuario:</strong> %s</p>
-            <p><strong>TLS:</strong> %s</p>
-            <p><strong>Data/Hora:</strong> %s</p>
-        </div>
-        <div class="footer">
-            <p>SMTP Enviador - Sistema de Email Marketing</p>
-        </div>
-    </div>
+<head><meta charset="UTF-8"></head>
+<body style="font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px;">
+<div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; padding: 40px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+<h1 style="color: #3b82f6; text-align: center; margin: 0 0 20px 0;">SMTP Enviador</h1>
+<div style="background: #10b981; color: white; padding: 15px 25px; border-radius: 8px; text-align: center; font-size: 18px; margin: 20px 0;">
+Email de teste enviado com sucesso!
+</div>
+<p style="text-align: center; color: #64748b;">
+Este email confirma que seu servidor SMTP esta configurado corretamente.
+</p>
+<div style="background: #f8fafc; padding: 20px; border-radius: 8px; margin-top: 20px;">
+<p style="margin: 8px 0; color: #64748b;"><strong style="color: #334155;">Servidor:</strong> %s</p>
+<p style="margin: 8px 0; color: #64748b;"><strong style="color: #334155;">Host:</strong> %s:%d</p>
+<p style="margin: 8px 0; color: #64748b;"><strong style="color: #334155;">Data/Hora:</strong> %s</p>
+</div>
+<p style="text-align: center; margin-top: 30px; color: #94a3b8; font-size: 12px;">
+SMTP Enviador - Sistema de Email Marketing
+</p>
+</div>
 </body>
-</html>`, smtpName, host, port, username, tlsMode, time.Now().Format("02/01/2006 15:04:05"))
-	}
+</html>`, smtpName, host, port, time.Now().Format("02/01/2006 15:04:05"))
 
-	// Build message with headers - use proper From format with name
-	msg := fmt.Sprintf("From: \"%s\" <%s>\r\n", req.FromName, fromEmail)
-	msg += fmt.Sprintf("To: %s\r\n", req.To)
-	msg += fmt.Sprintf("Subject: %s\r\n", subject)
-	msg += "MIME-Version: 1.0\r\n"
-	msg += "Content-Type: text/html; charset=UTF-8\r\n"
-	msg += "\r\n"
-	msg += body
+	textContent := fmt.Sprintf("Email de teste enviado com sucesso!\n\nServidor: %s\nHost: %s:%d\nData/Hora: %s",
+		smtpName, host, port, time.Now().Format("02/01/2006 15:04:05"))
 
-	// Connect and send
+	// Build message exactly like campaigns do (from smtp_pool.go)
+	boundary := fmt.Sprintf("=_%d_%d_=", time.Now().UnixNano(), time.Now().Unix())
+	messageID := fmt.Sprintf("<%d.%d@%s>", time.Now().UnixNano(), time.Now().Unix(), host)
+
+	var message string
+	message += fmt.Sprintf("From: %s <%s>\r\n", encodeRFC2047(fromName), fromEmail)
+	message += fmt.Sprintf("Date: %s\r\n", time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 +0000"))
+	message += fmt.Sprintf("Subject: %s\r\n", encodeRFC2047(subject))
+	message += fmt.Sprintf("Message-Id: %s\r\n", messageID)
+	message += fmt.Sprintf("To: %s\r\n", req.To)
+	message += "MIME-Version: 1.0\r\n"
+	message += fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\r\n", boundary)
+	message += "\r\n"
+
+	// Text part - base64 encoded
+	message += "--" + boundary + "\r\n"
+	message += "Content-Type: text/plain; charset=UTF-8\r\n"
+	message += "Content-Transfer-Encoding: base64\r\n"
+	message += "\r\n"
+	message += encodeBase64Lines(textContent)
+
+	// HTML part - base64 encoded
+	message += "--" + boundary + "\r\n"
+	message += "Content-Type: text/html; charset=UTF-8\r\n"
+	message += "Content-Transfer-Encoding: base64\r\n"
+	message += "\r\n"
+	message += encodeBase64Lines(htmlContent)
+	message += "--" + boundary + "--\r\n"
+
+	// Send using the same method as campaigns (raw SMTP commands)
 	addr := fmt.Sprintf("%s:%d", host, port)
-	var client *smtp.Client
 
-	// Handle different TLS modes
+	var sendErr error
 	switch tlsMode {
 	case "tls":
-		tlsConfig := &tls.Config{
-			ServerName:         host,
-			InsecureSkipVerify: true,
-		}
-		conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", addr, tlsConfig)
-		if err != nil {
-			return c.Status(400).JSON(fiber.Map{
-				"error":   "Falha na conexao TLS",
-				"details": err.Error(),
-			})
-		}
-		defer conn.Close()
-
-		client, err = smtp.NewClient(conn, host)
-		if err != nil {
-			return c.Status(400).JSON(fiber.Map{
-				"error":   "Falha ao criar cliente SMTP",
-				"details": err.Error(),
-			})
-		}
-
+		sendErr = sendTestWithTLS(addr, host, username, password, fromEmail, req.To, []byte(message))
 	case "starttls":
-		conn, err := net.DialTimeout("tcp", addr, 15*time.Second)
-		if err != nil {
-			return c.Status(400).JSON(fiber.Map{
-				"error":   "Falha na conexao",
-				"details": err.Error(),
-			})
-		}
-		defer conn.Close()
-
-		client, err = smtp.NewClient(conn, host)
-		if err != nil {
-			return c.Status(400).JSON(fiber.Map{
-				"error":   "Falha ao criar cliente SMTP",
-				"details": err.Error(),
-			})
-		}
-
-		if err := client.Hello("localhost"); err != nil {
-			return c.Status(400).JSON(fiber.Map{
-				"error":   "SMTP HELO falhou",
-				"details": err.Error(),
-			})
-		}
-
-		tlsConfig := &tls.Config{
-			ServerName:         host,
-			InsecureSkipVerify: true,
-		}
-		if err := client.StartTLS(tlsConfig); err != nil {
-			return c.Status(400).JSON(fiber.Map{
-				"error":   "STARTTLS falhou",
-				"details": err.Error(),
-			})
-		}
-
+		sendErr = sendTestWithSTARTTLS(addr, host, username, password, fromEmail, req.To, []byte(message))
 	default:
-		conn, err := net.DialTimeout("tcp", addr, 15*time.Second)
-		if err != nil {
-			return c.Status(400).JSON(fiber.Map{
-				"error":   "Falha na conexao",
-				"details": err.Error(),
-			})
-		}
-		defer conn.Close()
-
-		client, err = smtp.NewClient(conn, host)
-		if err != nil {
-			return c.Status(400).JSON(fiber.Map{
-				"error":   "Falha ao criar cliente SMTP",
-				"details": err.Error(),
-			})
-		}
-
-		if err := client.Hello("localhost"); err != nil {
-			return c.Status(400).JSON(fiber.Map{
-				"error":   "SMTP HELO falhou",
-				"details": err.Error(),
-			})
-		}
+		sendErr = sendTestPlain(addr, host, username, password, fromEmail, req.To, []byte(message))
 	}
-	defer client.Close()
 
-	// Authenticate - try multiple methods
-	authErr := client.Auth(CRAMMD5Auth(username, password))
-	if authErr != nil {
-		authErr = client.Auth(LoginAuth(username, password))
-	}
-	if authErr != nil {
-		auth := smtp.PlainAuth("", username, password, host)
-		authErr = client.Auth(auth)
-	}
-	if authErr != nil {
+	if sendErr != nil {
 		return c.Status(400).JSON(fiber.Map{
-			"error":   "Falha na autenticacao",
-			"details": authErr.Error(),
+			"error":   "Falha ao enviar email",
+			"details": sendErr.Error(),
 		})
 	}
-
-	// Set sender
-	if err := client.Mail(fromEmail); err != nil {
-		return c.Status(400).JSON(fiber.Map{
-			"error":   "Falha ao definir remetente",
-			"details": err.Error(),
-		})
-	}
-
-	// Set recipient
-	if err := client.Rcpt(req.To); err != nil {
-		return c.Status(400).JSON(fiber.Map{
-			"error":   "Falha ao definir destinatario",
-			"details": err.Error(),
-		})
-	}
-
-	// Send message body
-	w, err := client.Data()
-	if err != nil {
-		return c.Status(400).JSON(fiber.Map{
-			"error":   "Falha ao iniciar envio",
-			"details": err.Error(),
-		})
-	}
-
-	_, err = w.Write([]byte(msg))
-	if err != nil {
-		return c.Status(400).JSON(fiber.Map{
-			"error":   "Falha ao escrever mensagem",
-			"details": err.Error(),
-		})
-	}
-
-	err = w.Close()
-	if err != nil {
-		return c.Status(400).JSON(fiber.Map{
-			"error":   "Falha ao finalizar mensagem",
-			"details": err.Error(),
-		})
-	}
-
-	client.Quit()
 
 	// Update SMTP status
 	s.db.Exec(`UPDATE smtp_servers SET status = 'online', last_check = NOW() WHERE id = $1`, id)
@@ -711,6 +571,164 @@ func (s *Server) sendTestEmail(c *fiber.Ctx) error {
 		"message": "Email de teste enviado com sucesso!",
 		"to":      req.To,
 	})
+}
+
+// Helper functions for test email (same as smtp_pool.go)
+func encodeRFC2047(s string) string {
+	needsEncoding := false
+	for _, r := range s {
+		if r > 127 {
+			needsEncoding = true
+			break
+		}
+	}
+	if !needsEncoding {
+		return s
+	}
+	encoded := make([]byte, base64.StdEncoding.EncodedLen(len(s)))
+	base64.StdEncoding.Encode(encoded, []byte(s))
+	return "=?UTF-8?B?" + string(encoded) + "?="
+}
+
+func encodeBase64Lines(s string) string {
+	encoded := base64.StdEncoding.EncodeToString([]byte(s))
+	var result string
+	for i := 0; i < len(encoded); i += 76 {
+		end := i + 76
+		if end > len(encoded) {
+			end = len(encoded)
+		}
+		result += encoded[i:end] + "\r\n"
+	}
+	return result
+}
+
+func sendTestWithTLS(addr, host, username, password, from, to string, msg []byte) error {
+	tlsConfig := &tls.Config{ServerName: host, InsecureSkipVerify: true}
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", addr, tlsConfig)
+	if err != nil {
+		return fmt.Errorf("conexao TLS falhou: %w", err)
+	}
+	defer conn.Close()
+
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		return fmt.Errorf("cliente SMTP falhou: %w", err)
+	}
+	defer client.Close()
+
+	if err := authenticateSMTP(client, host, username, password); err != nil {
+		return err
+	}
+	return sendRawMessage(client, from, to, msg)
+}
+
+func sendTestWithSTARTTLS(addr, host, username, password, from, to string, msg []byte) error {
+	conn, err := net.DialTimeout("tcp", addr, 15*time.Second)
+	if err != nil {
+		return fmt.Errorf("conexao falhou: %w", err)
+	}
+
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("cliente SMTP falhou: %w", err)
+	}
+	defer client.Close()
+
+	if err := client.Hello("[127.0.0.1]"); err != nil {
+		return fmt.Errorf("HELO falhou: %w", err)
+	}
+
+	tlsConfig := &tls.Config{ServerName: host, InsecureSkipVerify: true}
+	if err := client.StartTLS(tlsConfig); err != nil {
+		return fmt.Errorf("STARTTLS falhou: %w", err)
+	}
+
+	if err := authenticateSMTP(client, host, username, password); err != nil {
+		return err
+	}
+	return sendRawMessage(client, from, to, msg)
+}
+
+func sendTestPlain(addr, host, username, password, from, to string, msg []byte) error {
+	conn, err := net.DialTimeout("tcp", addr, 15*time.Second)
+	if err != nil {
+		return fmt.Errorf("conexao falhou: %w", err)
+	}
+
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("cliente SMTP falhou: %w", err)
+	}
+	defer client.Close()
+
+	if err := client.Hello("[127.0.0.1]"); err != nil {
+		return fmt.Errorf("HELO falhou: %w", err)
+	}
+
+	if err := authenticateSMTP(client, host, username, password); err != nil {
+		return err
+	}
+	return sendRawMessage(client, from, to, msg)
+}
+
+func authenticateSMTP(client *smtp.Client, host, username, password string) error {
+	// Try CRAM-MD5 first
+	if err := client.Auth(CRAMMD5Auth(username, password)); err == nil {
+		return nil
+	}
+	// Try LOGIN
+	if err := client.Auth(LoginAuth(username, password)); err == nil {
+		return nil
+	}
+	// Try PLAIN
+	if err := client.Auth(smtp.PlainAuth("", username, password, host)); err != nil {
+		return fmt.Errorf("autenticacao falhou: %w", err)
+	}
+	return nil
+}
+
+// sendRawMessage sends email using raw SMTP commands (avoids SMTPUTF8)
+func sendRawMessage(client *smtp.Client, from, to string, msg []byte) error {
+	// MAIL FROM without SMTPUTF8 (raw command)
+	id, err := client.Text.Cmd("MAIL FROM:<%s>", from)
+	if err != nil {
+		return fmt.Errorf("MAIL FROM falhou: %w", err)
+	}
+	client.Text.StartResponse(id)
+	_, _, err = client.Text.ReadResponse(250)
+	client.Text.EndResponse(id)
+	if err != nil {
+		return fmt.Errorf("MAIL FROM rejeitado: %w", err)
+	}
+
+	// RCPT TO
+	id, err = client.Text.Cmd("RCPT TO:<%s>", to)
+	if err != nil {
+		return fmt.Errorf("RCPT TO falhou: %w", err)
+	}
+	client.Text.StartResponse(id)
+	_, _, err = client.Text.ReadResponse(250)
+	client.Text.EndResponse(id)
+	if err != nil {
+		return fmt.Errorf("RCPT TO rejeitado: %w", err)
+	}
+
+	// DATA
+	w, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("DATA falhou: %w", err)
+	}
+	if _, err := w.Write(msg); err != nil {
+		return fmt.Errorf("escrita falhou: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("finalizacao falhou: %w", err)
+	}
+
+	return client.Quit()
 }
 
 // refreshSMTPs reloads SMTP servers into the engine
