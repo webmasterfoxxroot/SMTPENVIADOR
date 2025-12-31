@@ -46,7 +46,6 @@ function Dashboard() {
     total_lists: 0,
     total_emails: 0,
     hourly: [],
-    by_provider: [],
     by_domain: []
   })
   const [loading, setLoading] = useState(true)
@@ -199,16 +198,16 @@ function Dashboard() {
           </div>
         </div>
 
-        {/* Provider Stats Chart */}
+        {/* Domain Stats Chart */}
         <div className="card">
-          <h2 className="text-lg font-semibold mb-4">Envios por Provedor (Hoje)</h2>
+          <h2 className="text-lg font-semibold mb-4">Envios por Domínio de Email (Hoje)</h2>
           <div className="h-72">
-            {(stats.by_provider || []).length > 0 ? (
+            {(stats.by_domain || []).length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={stats.by_provider || []} layout="vertical">
+                <BarChart data={stats.by_domain.slice(0, 10) || []} layout="vertical">
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis type="number" />
-                  <YAxis dataKey="provider" type="category" width={120} tick={{ fontSize: 12 }} />
+                  <YAxis dataKey="domain" type="category" width={120} tick={{ fontSize: 11 }} />
                   <Tooltip />
                   <Legend />
                   <Bar dataKey="sent" fill="#3b82f6" name="Enviados" />
@@ -219,76 +218,16 @@ function Dashboard() {
               </ResponsiveContainer>
             ) : (
               <div className="flex items-center justify-center h-full text-gray-400">
-                <p>Nenhum dado de provedor disponível</p>
+                <p>Nenhum dado de domínio disponível</p>
               </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* Provider Stats Table */}
-      {(stats.by_provider || []).length > 0 && (
-        <div className="card mb-8">
-          <h2 className="text-lg font-semibold mb-4">Detalhes por Servidor SMTP</h2>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Servidor SMTP</th>
-                <th className="text-right">Enviados</th>
-                <th className="text-right">Falhos</th>
-                <th className="text-right">Abertos</th>
-                <th className="text-right">Cliques</th>
-                <th className="text-right">Taxa Sucesso</th>
-                <th className="text-right">Taxa Abertura</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(stats.by_provider || []).map((provider, index) => (
-                <tr key={index}>
-                  <td className="font-medium">{provider.provider}</td>
-                  <td className="text-right text-blue-600">{provider.sent?.toLocaleString()}</td>
-                  <td className="text-right text-red-600">{provider.failed?.toLocaleString()}</td>
-                  <td className="text-right text-purple-600">{provider.opened?.toLocaleString()}</td>
-                  <td className="text-right text-orange-600">{provider.clicked?.toLocaleString()}</td>
-                  <td className="text-right">
-                    {provider.sent + provider.failed > 0
-                      ? Math.round((provider.sent / (provider.sent + provider.failed)) * 100) + '%'
-                      : '-'}
-                  </td>
-                  <td className="text-right">
-                    {provider.sent > 0
-                      ? Math.round((provider.opened / provider.sent) * 100) + '%'
-                      : '-'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* Email Domain Stats */}
+      {/* Email Domain Stats Table */}
       {(stats.by_domain || []).length > 0 && (
         <>
-          {/* Domain Chart */}
-          <div className="card mb-8">
-            <h2 className="text-lg font-semibold mb-4">Envios por Domínio de Email (Hoje)</h2>
-            <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={stats.by_domain || []} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis type="number" />
-                  <YAxis dataKey="domain" type="category" width={140} tick={{ fontSize: 11 }} />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="sent" fill="#3b82f6" name="Enviados" />
-                  <Bar dataKey="opened" fill="#8b5cf6" name="Abertos" />
-                  <Bar dataKey="clicked" fill="#f97316" name="Cliques" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
           {/* Domain Stats Table */}
           <div className="card overflow-x-auto">
             <h2 className="text-lg font-semibold mb-4">Detalhes por Domínio de Email</h2>
