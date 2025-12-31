@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -229,8 +230,22 @@ func (s *Server) uploadEmails(c *fiber.Ctx) error {
 	emailIdx := parseColIndex(emailCol)
 	nameIdx := parseColIndex(nameCol)
 
-	// Begin transaction
-	tx, _ := s.db.Begin()
+	// Batch size for commits (process 10k at a time)
+	const batchSize = 10000
+	batchCount := 0
+
+	// Begin first transaction
+	tx, err := s.db.Begin()
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to begin transaction"})
+	}
+
+	// Prepare statement for faster inserts
+	stmt, err := tx.Prepare(`INSERT INTO emails (id, list_id, email, name, valid) VALUES ($1, $2, $3, $4, true)`)
+	if err != nil {
+		tx.Rollback()
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to prepare statement"})
+	}
 
 	for scanner.Scan() {
 		lineNum++
@@ -279,21 +294,42 @@ func (s *Server) uploadEmails(c *fiber.Ctx) error {
 			continue
 		}
 
-		// Insert email
+		// Insert email using prepared statement
 		emailID := uuid.New().String()
-		_, err := tx.Exec(`
-			INSERT INTO emails (id, list_id, email, name, valid)
-			VALUES ($1, $2, $3, $4, true)
-		`, emailID, id, email, name)
+		_, err := stmt.Exec(emailID, id, email, name)
 
 		if err == nil {
 			validCount++
 			existingEmails[email] = true
+			batchCount++
+
+			// Commit every batchSize inserts
+			if batchCount >= batchSize {
+				stmt.Close()
+				tx.Commit()
+
+				// Start new transaction
+				tx, err = s.db.Begin()
+				if err != nil {
+					log.Printf("Failed to begin new transaction: %v", err)
+					break
+				}
+				stmt, err = tx.Prepare(`INSERT INTO emails (id, list_id, email, name, valid) VALUES ($1, $2, $3, $4, true)`)
+				if err != nil {
+					tx.Rollback()
+					log.Printf("Failed to prepare statement: %v", err)
+					break
+				}
+				batchCount = 0
+				log.Printf("Processed %d emails so far...", validCount)
+			}
 		} else {
 			invalidCount++
 		}
 	}
 
+	// Commit remaining
+	stmt.Close()
 	tx.Commit()
 
 	// Update list stats
