@@ -67,24 +67,91 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 	stats["total_lists"] = totalLists
 	stats["total_emails"] = totalEmails
 
-	// Get hourly stats for chart
-	rows, _ := s.db.Query(`
-		SELECT hour, sent_count, failed_count, open_count, click_count
-		FROM stats WHERE date = CURRENT_DATE ORDER BY hour
+	// Get hourly stats for chart - from campaign_emails table
+	hourlyRows, _ := s.db.Query(`
+		SELECT
+			EXTRACT(HOUR FROM sent_at)::int as hour,
+			COUNT(*) as sent,
+			0 as failed
+		FROM campaign_emails
+		WHERE DATE(sent_at) = CURRENT_DATE AND status = 'sent'
+		GROUP BY EXTRACT(HOUR FROM sent_at)
+		UNION ALL
+		SELECT
+			EXTRACT(HOUR FROM created_at)::int as hour,
+			0 as sent,
+			COUNT(*) as failed
+		FROM campaign_emails
+		WHERE DATE(created_at) = CURRENT_DATE AND status = 'failed'
+		GROUP BY EXTRACT(HOUR FROM created_at)
+		ORDER BY hour
 	`)
-	defer rows.Close()
 
+	// Aggregate hourly data
+	hourlyMap := make(map[int]map[string]int)
+	if hourlyRows != nil {
+		defer hourlyRows.Close()
+		for hourlyRows.Next() {
+			var hour, sent, failed int
+			hourlyRows.Scan(&hour, &sent, &failed)
+			if _, exists := hourlyMap[hour]; !exists {
+				hourlyMap[hour] = map[string]int{"sent": 0, "failed": 0, "opened": 0, "clicked": 0}
+			}
+			hourlyMap[hour]["sent"] += sent
+			hourlyMap[hour]["failed"] += failed
+		}
+	}
+
+	// Get opens by hour
+	openRows, _ := s.db.Query(`
+		SELECT EXTRACT(HOUR FROM opened_at)::int as hour, COUNT(*) as opened
+		FROM campaign_emails
+		WHERE DATE(opened_at) = CURRENT_DATE AND opened_at IS NOT NULL
+		GROUP BY EXTRACT(HOUR FROM opened_at)
+	`)
+	if openRows != nil {
+		defer openRows.Close()
+		for openRows.Next() {
+			var hour, opened int
+			openRows.Scan(&hour, &opened)
+			if _, exists := hourlyMap[hour]; !exists {
+				hourlyMap[hour] = map[string]int{"sent": 0, "failed": 0, "opened": 0, "clicked": 0}
+			}
+			hourlyMap[hour]["opened"] = opened
+		}
+	}
+
+	// Get clicks by hour
+	clickRows, _ := s.db.Query(`
+		SELECT EXTRACT(HOUR FROM clicked_at)::int as hour, COUNT(*) as clicked
+		FROM campaign_emails
+		WHERE DATE(clicked_at) = CURRENT_DATE AND clicked_at IS NOT NULL
+		GROUP BY EXTRACT(HOUR FROM clicked_at)
+	`)
+	if clickRows != nil {
+		defer clickRows.Close()
+		for clickRows.Next() {
+			var hour, clicked int
+			clickRows.Scan(&hour, &clicked)
+			if _, exists := hourlyMap[hour]; !exists {
+				hourlyMap[hour] = map[string]int{"sent": 0, "failed": 0, "opened": 0, "clicked": 0}
+			}
+			hourlyMap[hour]["clicked"] = clicked
+		}
+	}
+
+	// Convert map to slice
 	var hourlyStats []map[string]interface{}
-	for rows.Next() {
-		var hour, sent, failed, opened, clicked int
-		rows.Scan(&hour, &sent, &failed, &opened, &clicked)
-		hourlyStats = append(hourlyStats, map[string]interface{}{
-			"hour":    hour,
-			"sent":    sent,
-			"failed":  failed,
-			"opened":  opened,
-			"clicked": clicked,
-		})
+	for hour := 0; hour < 24; hour++ {
+		if data, exists := hourlyMap[hour]; exists {
+			hourlyStats = append(hourlyStats, map[string]interface{}{
+				"hour":    hour,
+				"sent":    data["sent"],
+				"failed":  data["failed"],
+				"opened":  data["opened"],
+				"clicked": data["clicked"],
+			})
+		}
 	}
 	stats["hourly"] = hourlyStats
 
