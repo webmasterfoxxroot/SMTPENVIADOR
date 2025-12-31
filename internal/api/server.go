@@ -58,6 +58,7 @@ func (s *Server) runAutoStartScheduler() {
 
 	for range ticker.C {
 		s.checkAndAutoStartCampaigns()
+		s.checkAndStartScheduledCampaigns()
 	}
 }
 
@@ -92,6 +93,75 @@ func (s *Server) checkAndAutoStartCampaigns() {
 			s.autoStartCampaignByID(id)
 		}
 	}
+}
+
+// checkAndStartScheduledCampaigns checks for scheduled campaigns and starts them when time comes
+func (s *Server) checkAndStartScheduledCampaigns() {
+	nowUnix := time.Now().Unix()
+	rows, err := s.db.Query(`
+		SELECT id, EXTRACT(EPOCH FROM scheduled_at)::bigint as scheduled_unix
+		FROM campaigns
+		WHERE status = 'scheduled'
+		AND scheduled_at IS NOT NULL
+	`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id string
+		var scheduledUnix int64
+		if err := rows.Scan(&id, &scheduledUnix); err != nil {
+			continue
+		}
+
+		if scheduledUnix <= nowUnix {
+			fmt.Printf("[Scheduler] Starting scheduled campaign %s\n", id)
+			s.startScheduledCampaign(id)
+		}
+	}
+}
+
+// startScheduledCampaign starts a scheduled campaign
+func (s *Server) startScheduledCampaign(id string) {
+	// Get campaign details
+	var listID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	var trackOpens, trackClicks bool
+	err := s.db.QueryRow(`
+		SELECT list_id, from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
+		FROM campaigns WHERE id = $1 AND status = 'scheduled'
+	`, id).Scan(&listID, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
+
+	if err != nil {
+		fmt.Printf("[Scheduler] Error getting campaign %s: %v\n", id, err)
+		return
+	}
+
+	// Get tracking domain from settings
+	trackingDomain := s.getTrackingDomain()
+
+	// Get emails from list
+	rows, err := s.db.Query(`
+		SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
+		FROM emails
+		WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
+	`, listID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	// Queue emails
+	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+	fmt.Printf("[Scheduler] Queued %d emails for campaign %s\n", count, id)
+
+	// Update campaign status
+	s.db.Exec(`
+		UPDATE campaigns SET status = 'running', started_at = NOW(), total_emails = $1, scheduled_at = NULL
+		WHERE id = $2
+	`, count, id)
+	fmt.Printf("[Scheduler] Campaign %s started!\n", id)
 }
 
 // setupMiddlewares configures middlewares
@@ -177,6 +247,8 @@ func (s *Server) setupRoutes() {
 	campaigns.Post("/:id/cancel-auto-start", s.cancelAutoStart)
 	campaigns.Get("/:id/stats", s.getCampaignStats)
 	campaigns.Post("/:id/clone", s.cloneCampaign)
+	campaigns.Post("/:id/schedule", s.scheduleCampaign)
+	campaigns.Post("/:id/cancel-schedule", s.cancelSchedule)
 	campaigns.Post("/:id/resend", s.resendCampaign)
 	campaigns.Post("/:id/resend-failed", s.resendToFailed)
 	campaigns.Post("/:id/resend-non-openers", s.resendToNonOpeners)

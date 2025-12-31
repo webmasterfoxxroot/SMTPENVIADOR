@@ -17,7 +17,8 @@ import {
   MoreVertical,
   List,
   X,
-  Clock
+  Clock,
+  Calendar
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
@@ -27,6 +28,9 @@ function Campaigns() {
   const [loading, setLoading] = useState(true)
   const [actionMenu, setActionMenu] = useState(null)
   const [serverTimeOffset, setServerTimeOffset] = useState(0) // Offset between server and client time
+  const [scheduleModal, setScheduleModal] = useState({ open: false, campaignId: null, campaignName: '' })
+  const [scheduleDate, setScheduleDate] = useState('')
+  const [scheduleTime, setScheduleTime] = useState('')
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -167,6 +171,53 @@ function Campaigns() {
     }
   }
 
+  const openScheduleModal = (campaign) => {
+    // Set default date/time to tomorrow at 9:00 AM
+    const tomorrow = new Date()
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    tomorrow.setHours(9, 0, 0, 0)
+
+    setScheduleDate(tomorrow.toISOString().split('T')[0])
+    setScheduleTime('09:00')
+    setScheduleModal({ open: true, campaignId: campaign.id, campaignName: campaign.name })
+    setActionMenu(null)
+  }
+
+  const scheduleCampaign = async () => {
+    if (!scheduleDate || !scheduleTime) {
+      toast.error('Selecione data e hora')
+      return
+    }
+
+    const scheduledAt = new Date(`${scheduleDate}T${scheduleTime}:00`)
+
+    if (scheduledAt <= new Date()) {
+      toast.error('A data deve ser no futuro')
+      return
+    }
+
+    try {
+      await api.post(`/campaigns/${scheduleModal.campaignId}/schedule`, {
+        scheduled_at: scheduledAt.toISOString()
+      })
+      toast.success(`Campanha agendada para ${scheduledAt.toLocaleString('pt-BR')}`)
+      setScheduleModal({ open: false, campaignId: null, campaignName: '' })
+      fetchCampaigns()
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Erro ao agendar campanha')
+    }
+  }
+
+  const cancelSchedule = async (id) => {
+    try {
+      await api.post(`/campaigns/${id}/cancel-schedule`)
+      toast.success('Agendamento cancelado')
+      fetchCampaigns()
+    } catch (error) {
+      toast.error('Erro ao cancelar agendamento')
+    }
+  }
+
   const resendCampaign = async (id) => {
     if (!confirm('Reenviar para TODOS os emails da lista?')) return
 
@@ -273,6 +324,21 @@ function Campaigns() {
       )
     }
 
+    // Show scheduled date/time for scheduled campaigns
+    if (campaign.status === 'scheduled' && campaign.scheduled_at) {
+      return (
+        <div className="flex flex-col items-start gap-1">
+          <span className="badge badge-info flex items-center gap-1">
+            <Calendar className="w-3 h-3" />
+            Agendada
+          </span>
+          <span className="text-xs text-gray-500">
+            {formatDate(campaign.scheduled_at)}
+          </span>
+        </div>
+      )
+    }
+
     const badges = {
       draft: 'badge-gray',
       scheduled: 'badge-info',
@@ -299,6 +365,19 @@ function Campaigns() {
   const getProgress = (campaign) => {
     if (campaign.total_emails === 0) return 0
     return Math.round((campaign.sent_count / campaign.total_emails) * 100)
+  }
+
+  // Format date for display
+  const formatDate = (dateStr) => {
+    if (!dateStr) return '-'
+    const date = new Date(dateStr)
+    return date.toLocaleDateString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
   }
 
   const toggleMenu = (e, id) => {
@@ -342,6 +421,8 @@ function Campaigns() {
                 <th>Progresso</th>
                 <th>Aberturas</th>
                 <th>Cliques</th>
+                <th>Criada</th>
+                <th>Iniciada</th>
                 <th>Ações</th>
               </tr>
             </thead>
@@ -390,6 +471,12 @@ function Campaigns() {
                         ({Math.round((campaign.click_count / campaign.open_count) * 100)}%)
                       </span>
                     )}
+                  </td>
+                  <td className="text-gray-500 text-sm whitespace-nowrap">
+                    {formatDate(campaign.created_at)}
+                  </td>
+                  <td className="text-gray-500 text-sm whitespace-nowrap">
+                    {formatDate(campaign.started_at)}
                   </td>
                   <td>
                     <div className="flex items-center gap-1">
@@ -456,6 +543,26 @@ function Campaigns() {
                               <Copy className="w-4 h-4" />
                               Clonar
                             </button>
+
+                            {campaign.status === 'draft' && !hasActiveCountdown(campaign) && (
+                              <button
+                                onClick={() => openScheduleModal(campaign)}
+                                className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2 text-blue-600"
+                              >
+                                <Calendar className="w-4 h-4" />
+                                Agendar
+                              </button>
+                            )}
+
+                            {campaign.status === 'scheduled' && (
+                              <button
+                                onClick={() => cancelSchedule(campaign.id)}
+                                className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2 text-orange-600"
+                              >
+                                <X className="w-4 h-4" />
+                                Cancelar Agendamento
+                              </button>
+                            )}
 
                             {(campaign.status === 'completed' || campaign.status === 'cancelled') && (
                               <>
@@ -527,6 +634,69 @@ function Campaigns() {
           </table>
         )}
       </div>
+
+      {/* Schedule Modal */}
+      {scheduleModal.open && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">Agendar Campanha</h3>
+              <button
+                onClick={() => setScheduleModal({ open: false, campaignId: null, campaignName: '' })}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-gray-600 mb-4">
+              Agendar: <strong>{scheduleModal.campaignName}</strong>
+            </p>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Data
+                </label>
+                <input
+                  type="date"
+                  value={scheduleDate}
+                  onChange={(e) => setScheduleDate(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Horário
+                </label>
+                <input
+                  type="time"
+                  value={scheduleTime}
+                  onChange={(e) => setScheduleTime(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => setScheduleModal({ open: false, campaignId: null, campaignName: '' })}
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={scheduleCampaign}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2"
+              >
+                <Calendar className="w-4 h-4" />
+                Agendar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

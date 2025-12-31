@@ -461,6 +461,70 @@ func (s *Server) cancelAutoStart(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Auto-start cancelled"})
 }
 
+// scheduleCampaign schedules a campaign to start at a specific time
+func (s *Server) scheduleCampaign(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	var req struct {
+		ScheduledAt string `json:"scheduled_at"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	// Parse the scheduled time
+	scheduledAt, err := time.Parse(time.RFC3339, req.ScheduledAt)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid date format"})
+	}
+
+	// Ensure it's in the future
+	if scheduledAt.Before(time.Now()) {
+		return c.Status(400).JSON(fiber.Map{"error": "Scheduled time must be in the future"})
+	}
+
+	// Update campaign with scheduled time and status
+	result, err := s.db.Exec(`
+		UPDATE campaigns
+		SET scheduled_at = $1, status = 'scheduled', auto_start_at = NULL
+		WHERE id = $2 AND status = 'draft'
+	`, scheduledAt, id)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to schedule campaign"})
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "Campaign not found or not in draft status"})
+	}
+
+	return c.JSON(fiber.Map{
+		"message":      "Campaign scheduled",
+		"scheduled_at": scheduledAt.Format(time.RFC3339),
+	})
+}
+
+// cancelSchedule cancels a scheduled campaign
+func (s *Server) cancelSchedule(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	result, err := s.db.Exec(`
+		UPDATE campaigns
+		SET scheduled_at = NULL, status = 'draft'
+		WHERE id = $1 AND status = 'scheduled'
+	`, id)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to cancel schedule"})
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "Campaign not found or not scheduled"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Schedule cancelled"})
+}
+
 // autoStartCampaignByID starts a campaign by ID (called by scheduler)
 func (s *Server) autoStartCampaignByID(id string) {
 	fmt.Printf("[AutoStart] autoStartCampaignByID called for campaign %s\n", id)
