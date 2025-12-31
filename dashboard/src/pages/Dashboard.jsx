@@ -399,14 +399,14 @@ function Dashboard() {
           </div>
         </div>
 
-        {/* Live Events - Real-time Activity */}
+        {/* Eventos ao Vivo */}
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
-              <h2 className="text-lg font-semibold text-gray-800">Live Events</h2>
+              <h2 className="text-lg font-semibold text-gray-800">Eventos ao Vivo</h2>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-400">Auto Refresh</span>
+              <span className="text-xs text-gray-400">Atualiza automatico</span>
               <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
             </div>
           </div>
@@ -426,7 +426,7 @@ function Dashboard() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-gray-800">
                       <span className="font-semibold">{activity.email.split('@')[0]}</span>
-                      {activity.type === 'open' ? ' has opened the ' : ' has clicked the '}
+                      {activity.type === 'open' ? ' abriu o ' : ' clicou no '}
                       <span className="font-semibold text-blue-600">email</span>
                     </p>
                     <p className="text-xs text-gray-400 mt-1">{formatTimeAgo(activity.timestamp)}</p>
