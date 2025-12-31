@@ -290,43 +290,73 @@ function Dashboard() {
           </div>
 
           {/* Domain Stats Table */}
-          <div className="card">
+          <div className="card overflow-x-auto">
             <h2 className="text-lg font-semibold mb-4">Detalhes por Domínio de Email</h2>
-            <table className="table">
+            <table className="w-full text-sm">
               <thead>
-                <tr>
-                  <th>Domínio</th>
-                  <th className="text-right">Enviados</th>
-                  <th className="text-right">Falhos</th>
-                  <th className="text-right">Abertos</th>
-                  <th className="text-right">Cliques</th>
-                  <th className="text-right">Taxa Sucesso</th>
-                  <th className="text-right">Taxa Abertura</th>
-                  <th className="text-right">CTR</th>
+                <tr className="border-b border-gray-200">
+                  <th className="text-left py-3 px-2 font-semibold text-gray-600 w-48">DOMÍNIO</th>
+                  <th className="text-center py-3 px-2 font-semibold text-gray-600 w-24">ENVIADOS</th>
+                  <th className="text-center py-3 px-2 font-semibold text-gray-600 w-20">FALHOS</th>
+                  <th className="text-center py-3 px-2 font-semibold text-gray-600 w-20">ABERTOS</th>
+                  <th className="text-center py-3 px-2 font-semibold text-gray-600 w-20">CLIQUES</th>
+                  <th className="text-center py-3 px-2 font-semibold text-gray-600 w-24">SUCESSO</th>
+                  <th className="text-center py-3 px-2 font-semibold text-gray-600 w-24">ABERTURA</th>
+                  <th className="text-center py-3 px-2 font-semibold text-gray-600 w-20">CTR</th>
                 </tr>
               </thead>
               <tbody>
                 {(stats.by_domain || []).map((domain, index) => (
-                  <tr key={index}>
-                    <td className="font-medium">{domain.domain}</td>
-                    <td className="text-right text-blue-600">{domain.sent?.toLocaleString()}</td>
-                    <td className="text-right text-red-600">{domain.failed?.toLocaleString()}</td>
-                    <td className="text-right text-purple-600">{domain.opened?.toLocaleString()}</td>
-                    <td className="text-right text-orange-600">{domain.clicked?.toLocaleString()}</td>
-                    <td className="text-right">
-                      {domain.sent + domain.failed > 0
-                        ? Math.round((domain.sent / (domain.sent + domain.failed)) * 100) + '%'
-                        : '-'}
+                  <tr key={index} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="py-3 px-2 font-medium text-gray-800">{domain.domain}</td>
+                    <td className="py-3 px-2 text-center">
+                      <span className="inline-block min-w-[50px] text-blue-600 font-medium">
+                        {domain.sent?.toLocaleString() || 0}
+                      </span>
                     </td>
-                    <td className="text-right">
-                      {domain.sent > 0
-                        ? Math.round((domain.opened / domain.sent) * 100) + '%'
-                        : '-'}
+                    <td className="py-3 px-2 text-center">
+                      <span className="inline-block min-w-[50px] text-red-600 font-medium">
+                        {domain.failed?.toLocaleString() || 0}
+                      </span>
                     </td>
-                    <td className="text-right">
-                      {domain.opened > 0
-                        ? Math.round((domain.clicked / domain.opened) * 100) + '%'
-                        : '-'}
+                    <td className="py-3 px-2 text-center">
+                      <span className="inline-block min-w-[50px] text-purple-600 font-medium">
+                        {domain.opened?.toLocaleString() || 0}
+                      </span>
+                    </td>
+                    <td className="py-3 px-2 text-center">
+                      <span className="inline-block min-w-[50px] text-orange-600 font-medium">
+                        {domain.clicked?.toLocaleString() || 0}
+                      </span>
+                    </td>
+                    <td className="py-3 px-2 text-center">
+                      <span className={`inline-block min-w-[50px] px-2 py-1 rounded text-xs font-medium ${
+                        domain.sent + domain.failed > 0
+                          ? (domain.sent / (domain.sent + domain.failed)) >= 0.9 ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                          : 'bg-gray-100 text-gray-500'
+                      }`}>
+                        {domain.sent + domain.failed > 0
+                          ? Math.round((domain.sent / (domain.sent + domain.failed)) * 100) + '%'
+                          : '-'}
+                      </span>
+                    </td>
+                    <td className="py-3 px-2 text-center">
+                      <span className={`inline-block min-w-[50px] px-2 py-1 rounded text-xs font-medium ${
+                        domain.sent > 0 && domain.opened > 0 ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-500'
+                      }`}>
+                        {domain.sent > 0
+                          ? Math.round((domain.opened / domain.sent) * 100) + '%'
+                          : '-'}
+                      </span>
+                    </td>
+                    <td className="py-3 px-2 text-center">
+                      <span className={`inline-block min-w-[50px] px-2 py-1 rounded text-xs font-medium ${
+                        domain.opened > 0 && domain.clicked > 0 ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-500'
+                      }`}>
+                        {domain.opened > 0
+                          ? Math.round((domain.clicked / domain.opened) * 100) + '%'
+                          : '-'}
+                      </span>
                     </td>
                   </tr>
                 ))}
