@@ -29,9 +29,9 @@ type Server struct {
 func NewServer(cfg *config.Config, db *sql.DB, q *queue.Manager, eng *engine.Engine) *Server {
 	app := fiber.New(fiber.Config{
 		AppName:      "SMTPENVIADOR API",
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		BodyLimit:    50 * 1024 * 1024, // 50MB for list uploads
+		ReadTimeout:  10 * time.Minute, // 10 min for large file uploads
+		WriteTimeout: 10 * time.Minute, // 10 min for large file uploads
+		BodyLimit:    100 * 1024 * 1024, // 100MB for list uploads
 	})
 
 	server := &Server{

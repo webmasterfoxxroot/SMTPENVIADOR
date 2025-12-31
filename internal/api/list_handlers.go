@@ -199,12 +199,19 @@ func (s *Server) uploadEmails(c *fiber.Ctx) error {
 	// Update list status
 	s.db.Exec(`UPDATE email_lists SET status = 'processing' WHERE id = $1`, id)
 
-	// Process file
+	// Process file with larger buffer for big files
 	scanner := bufio.NewScanner(f)
+	// Increase buffer size for large files (1MB buffer)
+	const maxCapacity = 1024 * 1024
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+
 	lineNum := 0
 	validCount := 0
 	invalidCount := 0
 	duplicateCount := 0
+
+	log.Printf("Starting email import for list %s from file %s", id, file.Filename)
 
 	// Get existing emails for duplicate check
 	existingEmails := make(map[string]bool)
@@ -328,9 +335,22 @@ func (s *Server) uploadEmails(c *fiber.Ctx) error {
 		}
 	}
 
+	// Check for scanner errors
+	if err := scanner.Err(); err != nil {
+		log.Printf("Scanner error during import: %v", err)
+		stmt.Close()
+		tx.Rollback()
+		return c.Status(500).JSON(fiber.Map{"error": "Error reading file: " + err.Error()})
+	}
+
 	// Commit remaining
 	stmt.Close()
-	tx.Commit()
+	if err := tx.Commit(); err != nil {
+		log.Printf("Failed to commit final batch: %v", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to save emails"})
+	}
+
+	log.Printf("Import complete: %d valid, %d invalid, %d duplicates out of %d lines", validCount, invalidCount, duplicateCount, lineNum)
 
 	// Update list stats
 	s.db.Exec(`
@@ -347,7 +367,7 @@ func (s *Server) uploadEmails(c *fiber.Ctx) error {
 		"valid":      validCount,
 		"invalid":    invalidCount,
 		"duplicates": duplicateCount,
-		"total":      lineNum - 1,
+		"total":      lineNum,
 	})
 }
 

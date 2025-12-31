@@ -25,14 +25,17 @@ function UploadModal({ listId, onClose, onSuccess }) {
 
     try {
       const response = await api.post(`/lists/${listId}/upload`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 600000 // 10 minutes timeout for large files
       })
       setResult(response.data)
       if (response.data.valid > 0) {
         toast.success(`${response.data.valid} emails importados com sucesso!`)
       }
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Erro no upload')
+      console.error('Upload error:', error)
+      const errorMsg = error.response?.data?.error || error.message || 'Erro no upload'
+      toast.error(errorMsg)
     } finally {
       setLoading(false)
     }
