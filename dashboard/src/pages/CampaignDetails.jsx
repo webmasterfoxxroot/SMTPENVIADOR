@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Loader2, CheckCircle, XCircle, Clock, Eye, MousePointer } from 'lucide-react'
+import { ArrowLeft, Loader2, CheckCircle, XCircle, Clock, Eye, MousePointer, Download } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
 
@@ -46,6 +46,28 @@ function CampaignDetails() {
       toast.error('Erro ao carregar detalhes')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleExport = async (type) => {
+    try {
+      const response = await api.get(`/campaigns/${id}/export-emails?type=${type}`, {
+        responseType: 'blob'
+      })
+
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', `${campaign?.name || 'campaign'}_${type}.csv`)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+
+      toast.success(`Exportação de ${type === 'opened' ? 'aberturas' : type === 'clicked' ? 'cliques' : type === 'sent' ? 'enviados' : 'falhos'} concluída!`)
+    } catch (error) {
+      toast.error('Erro ao exportar')
     }
   }
 
@@ -100,21 +122,57 @@ function CampaignDetails() {
             <div className="text-2xl font-bold text-blue-600">{campaign.total_emails?.toLocaleString()}</div>
             <div className="text-sm text-gray-500">Total</div>
           </div>
-          <div className="card text-center">
+          <div className="card text-center relative group">
             <div className="text-2xl font-bold text-green-600">{campaign.sent_count?.toLocaleString()}</div>
             <div className="text-sm text-gray-500">Enviados</div>
+            {campaign.sent_count > 0 && (
+              <button
+                onClick={() => handleExport('sent')}
+                className="absolute top-2 right-2 p-1.5 bg-green-100 hover:bg-green-200 text-green-600 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Exportar enviados"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+            )}
           </div>
-          <div className="card text-center">
+          <div className="card text-center relative group">
             <div className="text-2xl font-bold text-red-600">{campaign.failed_count?.toLocaleString()}</div>
             <div className="text-sm text-gray-500">Falhos</div>
+            {campaign.failed_count > 0 && (
+              <button
+                onClick={() => handleExport('failed')}
+                className="absolute top-2 right-2 p-1.5 bg-red-100 hover:bg-red-200 text-red-600 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Exportar falhos"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+            )}
           </div>
-          <div className="card text-center">
+          <div className="card text-center relative group">
             <div className="text-2xl font-bold text-purple-600">{campaign.open_count?.toLocaleString()}</div>
             <div className="text-sm text-gray-500">Aberturas</div>
+            {campaign.open_count > 0 && (
+              <button
+                onClick={() => handleExport('opened')}
+                className="absolute top-2 right-2 p-1.5 bg-purple-100 hover:bg-purple-200 text-purple-600 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Exportar aberturas"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+            )}
           </div>
-          <div className="card text-center">
+          <div className="card text-center relative group">
             <div className="text-2xl font-bold text-orange-600">{campaign.click_count?.toLocaleString()}</div>
             <div className="text-sm text-gray-500">Cliques</div>
+            {campaign.click_count > 0 && (
+              <button
+                onClick={() => handleExport('clicked')}
+                className="absolute top-2 right-2 p-1.5 bg-orange-100 hover:bg-orange-200 text-orange-600 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Exportar cliques"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
       )}

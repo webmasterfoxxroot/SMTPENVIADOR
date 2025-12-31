@@ -987,3 +987,117 @@ func (s *Server) getCampaignDetails(c *fiber.Ctx) error {
 		"limit": limit,
 	})
 }
+
+// exportCampaignEmails exports emails that opened or clicked as CSV
+func (s *Server) exportCampaignEmails(c *fiber.Ctx) error {
+	id := c.Params("id")
+	exportType := c.Query("type", "opened") // opened, clicked, all
+
+	// Verify campaign exists
+	var campaignName string
+	err := s.db.QueryRow(`SELECT name FROM campaigns WHERE id = $1`, id).Scan(&campaignName)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
+	}
+
+	// Build query based on export type
+	var query string
+	switch exportType {
+	case "opened":
+		query = `
+			SELECT e.email, e.name, ce.opened_at
+			FROM campaign_emails ce
+			JOIN emails e ON ce.email_id = e.id
+			WHERE ce.campaign_id = $1 AND ce.opened_at IS NOT NULL
+			ORDER BY ce.opened_at DESC
+		`
+	case "clicked":
+		query = `
+			SELECT e.email, e.name, ce.clicked_at
+			FROM campaign_emails ce
+			JOIN emails e ON ce.email_id = e.id
+			WHERE ce.campaign_id = $1 AND ce.clicked_at IS NOT NULL
+			ORDER BY ce.clicked_at DESC
+		`
+	case "sent":
+		query = `
+			SELECT e.email, e.name, ce.sent_at
+			FROM campaign_emails ce
+			JOIN emails e ON ce.email_id = e.id
+			WHERE ce.campaign_id = $1 AND ce.status = 'sent'
+			ORDER BY ce.sent_at DESC
+		`
+	case "failed":
+		query = `
+			SELECT e.email, e.name, ce.error
+			FROM campaign_emails ce
+			JOIN emails e ON ce.email_id = e.id
+			WHERE ce.campaign_id = $1 AND ce.status = 'failed'
+			ORDER BY ce.created_at DESC
+		`
+	default:
+		query = `
+			SELECT e.email, e.name, ce.status
+			FROM campaign_emails ce
+			JOIN emails e ON ce.email_id = e.id
+			WHERE ce.campaign_id = $1
+			ORDER BY ce.created_at DESC
+		`
+	}
+
+	rows, err := s.db.Query(query, id)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch emails"})
+	}
+	defer rows.Close()
+
+	// Build CSV
+	var csv strings.Builder
+
+	// Header based on export type
+	switch exportType {
+	case "opened":
+		csv.WriteString("Email,Nome,Data Abertura\n")
+	case "clicked":
+		csv.WriteString("Email,Nome,Data Clique\n")
+	case "sent":
+		csv.WriteString("Email,Nome,Data Envio\n")
+	case "failed":
+		csv.WriteString("Email,Nome,Erro\n")
+	default:
+		csv.WriteString("Email,Nome,Status\n")
+	}
+
+	for rows.Next() {
+		var email string
+		var name sql.NullString
+		var extra sql.NullString
+
+		if err := rows.Scan(&email, &name, &extra); err != nil {
+			continue
+		}
+
+		nameStr := ""
+		if name.Valid {
+			nameStr = name.String
+		}
+
+		extraStr := ""
+		if extra.Valid {
+			extraStr = extra.String
+		}
+
+		// Escape fields for CSV
+		csv.WriteString(fmt.Sprintf("\"%s\",\"%s\",\"%s\"\n",
+			strings.ReplaceAll(email, "\"", "\"\""),
+			strings.ReplaceAll(nameStr, "\"", "\"\""),
+			strings.ReplaceAll(extraStr, "\"", "\"\"")))
+	}
+
+	// Set headers for file download
+	filename := fmt.Sprintf("%s_%s.csv", strings.ReplaceAll(campaignName, " ", "_"), exportType)
+	c.Set("Content-Type", "text/csv; charset=utf-8")
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+
+	return c.SendString(csv.String())
+}

@@ -254,6 +254,7 @@ func (s *Server) setupRoutes() {
 	campaigns.Post("/:id/resend-failed", s.resendToFailed)
 	campaigns.Post("/:id/resend-non-openers", s.resendToNonOpeners)
 	campaigns.Get("/:id/export", s.exportCampaignCSV)
+	campaigns.Get("/:id/export-emails", s.exportCampaignEmails)
 	campaigns.Get("/:id/details", s.getCampaignDetails)
 
 	// Blacklist
