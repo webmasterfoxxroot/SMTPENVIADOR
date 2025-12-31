@@ -16,6 +16,8 @@ import {
 import {
   AreaChart,
   Area,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -340,55 +342,74 @@ function Dashboard() {
           </div>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={stats.hourly || []}>
-                <defs>
-                  <linearGradient id="colorSent" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-                  </linearGradient>
-                  <linearGradient id="colorOpened" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}/>
-                  </linearGradient>
-                  <linearGradient id="colorClicked" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f97316" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#f97316" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis
-                  dataKey={period === 'today' ? 'hour' : 'label'}
-                  tickFormatter={(val) => period === 'today' ? `${val}h` : val}
-                  stroke="#9ca3af"
-                  fontSize={12}
-                />
-                <YAxis stroke="#9ca3af" fontSize={12} />
-                <Tooltip content={<CustomTooltip />} />
-                <Area
-                  type="monotone"
-                  dataKey="sent"
-                  stroke="#3b82f6"
-                  strokeWidth={2}
-                  fill="url(#colorSent)"
-                  name="Enviados"
-                />
-                <Area
-                  type="monotone"
-                  dataKey="opened"
-                  stroke="#8b5cf6"
-                  strokeWidth={2}
-                  fill="url(#colorOpened)"
-                  name="Abertos"
-                />
-                <Area
-                  type="monotone"
-                  dataKey="clicked"
-                  stroke="#f97316"
-                  strokeWidth={2}
-                  fill="url(#colorClicked)"
-                  name="Cliques"
-                />
-              </AreaChart>
+              {period === 'today' ? (
+                <AreaChart data={stats.hourly || []}>
+                  <defs>
+                    <linearGradient id="colorSent" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                    </linearGradient>
+                    <linearGradient id="colorOpened" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}/>
+                    </linearGradient>
+                    <linearGradient id="colorClicked" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#f97316" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#f97316" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis
+                    dataKey="hour"
+                    tickFormatter={(val) => `${val}h`}
+                    stroke="#9ca3af"
+                    fontSize={12}
+                  />
+                  <YAxis stroke="#9ca3af" fontSize={12} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Area
+                    type="monotone"
+                    dataKey="sent"
+                    stroke="#3b82f6"
+                    strokeWidth={2}
+                    fill="url(#colorSent)"
+                    name="Enviados"
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="opened"
+                    stroke="#8b5cf6"
+                    strokeWidth={2}
+                    fill="url(#colorOpened)"
+                    name="Abertos"
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="clicked"
+                    stroke="#f97316"
+                    strokeWidth={2}
+                    fill="url(#colorClicked)"
+                    name="Cliques"
+                  />
+                </AreaChart>
+              ) : (
+                <BarChart data={stats.hourly || []}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis
+                    dataKey="label"
+                    stroke="#9ca3af"
+                    fontSize={11}
+                    angle={-45}
+                    textAnchor="end"
+                    height={60}
+                  />
+                  <YAxis stroke="#9ca3af" fontSize={12} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Bar dataKey="sent" fill="#3b82f6" name="Enviados" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="opened" fill="#8b5cf6" name="Abertos" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="clicked" fill="#f97316" name="Cliques" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              )}
             </ResponsiveContainer>
           </div>
         </div>
