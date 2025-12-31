@@ -34,9 +34,12 @@ func (s *Server) trackOpen(c *fiber.Ctx) error {
 
 	// Only count if first open
 	if !alreadyOpened {
-		// Update campaign_emails
+		// Update campaign_emails - also set status to 'sent' if still queued (tracking proves delivery)
 		s.db.Exec(`
-			UPDATE campaign_emails SET opened_at = NOW()
+			UPDATE campaign_emails
+			SET opened_at = NOW(),
+			    status = CASE WHEN status = 'queued' THEN 'sent' ELSE status END,
+			    sent_at = CASE WHEN sent_at IS NULL THEN NOW() ELSE sent_at END
 			WHERE campaign_id = $1 AND email_id = $2 AND opened_at IS NULL
 		`, campaignID, emailID)
 
@@ -44,6 +47,15 @@ func (s *Server) trackOpen(c *fiber.Ctx) error {
 		s.db.Exec(`
 			UPDATE campaigns SET open_count = open_count + 1 WHERE id = $1
 		`, campaignID)
+
+		// Also update sent_count if status was queued
+		s.db.Exec(`
+			UPDATE campaigns SET sent_count = sent_count + 1
+			WHERE id = $1 AND EXISTS (
+				SELECT 1 FROM campaign_emails
+				WHERE campaign_id = $1 AND email_id = $2 AND status = 'sent'
+			)
+		`, campaignID, emailID)
 
 		// Increment Redis stat
 		go s.queue.IncrementStat("opened", 1)
@@ -83,9 +95,12 @@ func (s *Server) trackClick(c *fiber.Ctx) error {
 
 	// Only count if first click
 	if !alreadyClicked {
-		// Update campaign_emails
+		// Update campaign_emails - also set status to 'sent' if still queued (tracking proves delivery)
 		s.db.Exec(`
-			UPDATE campaign_emails SET clicked_at = NOW()
+			UPDATE campaign_emails
+			SET clicked_at = NOW(),
+			    status = CASE WHEN status = 'queued' THEN 'sent' ELSE status END,
+			    sent_at = CASE WHEN sent_at IS NULL THEN NOW() ELSE sent_at END
 			WHERE campaign_id = $1 AND email_id = $2 AND clicked_at IS NULL
 		`, campaignID, emailID)
 
