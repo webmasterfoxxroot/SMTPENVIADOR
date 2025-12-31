@@ -65,6 +65,40 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 	}
 	stats["hourly"] = hourlyStats
 
+	// Get stats by SMTP provider (today)
+	smtpRows, _ := s.db.Query(`
+		SELECT
+			COALESCE(ss.host, 'Desconhecido') as provider,
+			COUNT(CASE WHEN ce.status = 'sent' THEN 1 END) as sent,
+			COUNT(CASE WHEN ce.status = 'failed' THEN 1 END) as failed,
+			COUNT(CASE WHEN ce.opened_at IS NOT NULL THEN 1 END) as opened,
+			COUNT(CASE WHEN ce.clicked_at IS NOT NULL THEN 1 END) as clicked
+		FROM campaign_emails ce
+		LEFT JOIN smtp_servers ss ON ce.smtp_id = ss.id
+		WHERE DATE(ce.created_at) = CURRENT_DATE
+		GROUP BY ss.host
+		ORDER BY sent DESC
+		LIMIT 10
+	`)
+	if smtpRows != nil {
+		defer smtpRows.Close()
+
+		var providerStats []map[string]interface{}
+		for smtpRows.Next() {
+			var provider string
+			var sent, failed, opened, clicked int
+			smtpRows.Scan(&provider, &sent, &failed, &opened, &clicked)
+			providerStats = append(providerStats, map[string]interface{}{
+				"provider": provider,
+				"sent":     sent,
+				"failed":   failed,
+				"opened":   opened,
+				"clicked":  clicked,
+			})
+		}
+		stats["by_provider"] = providerStats
+	}
+
 	return c.JSON(stats)
 }
 

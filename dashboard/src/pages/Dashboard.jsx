@@ -10,7 +10,7 @@ import {
   Zap,
   TrendingUp
 } from 'lucide-react'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts'
 import api from '../services/api'
 
 function StatCard({ icon: Icon, label, value, color, subValue }) {
@@ -45,7 +45,8 @@ function Dashboard() {
     total_smtps: 0,
     total_lists: 0,
     total_emails: 0,
-    hourly: []
+    hourly: [],
+    by_provider: []
   })
   const [loading, setLoading] = useState(true)
 
@@ -151,41 +152,119 @@ function Dashboard() {
         />
       </div>
 
-      {/* Chart */}
-      <div className="card">
-        <h2 className="text-lg font-semibold mb-4">Envios por Hora (Hoje)</h2>
-        <div className="h-80">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={stats.hourly || []}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="hour" tickFormatter={(h) => `${h}h`} />
-              <YAxis />
-              <Tooltip />
-              <Line
-                type="monotone"
-                dataKey="sent"
-                stroke="#3b82f6"
-                strokeWidth={2}
-                name="Enviados"
-              />
-              <Line
-                type="monotone"
-                dataKey="opened"
-                stroke="#8b5cf6"
-                strokeWidth={2}
-                name="Abertos"
-              />
-              <Line
-                type="monotone"
-                dataKey="clicked"
-                stroke="#f97316"
-                strokeWidth={2}
-                name="Cliques"
-              />
-            </LineChart>
-          </ResponsiveContainer>
+      {/* Charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        {/* Hourly Chart */}
+        <div className="card">
+          <h2 className="text-lg font-semibold mb-4">Envios por Hora (Hoje)</h2>
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={stats.hourly || []}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="hour" tickFormatter={(h) => `${h}h`} />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="sent"
+                  stroke="#3b82f6"
+                  strokeWidth={2}
+                  name="Enviados"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="failed"
+                  stroke="#ef4444"
+                  strokeWidth={2}
+                  name="Falhos"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="opened"
+                  stroke="#8b5cf6"
+                  strokeWidth={2}
+                  name="Abertos"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="clicked"
+                  stroke="#f97316"
+                  strokeWidth={2}
+                  name="Cliques"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Provider Stats Chart */}
+        <div className="card">
+          <h2 className="text-lg font-semibold mb-4">Envios por Provedor (Hoje)</h2>
+          <div className="h-72">
+            {(stats.by_provider || []).length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={stats.by_provider || []} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis type="number" />
+                  <YAxis dataKey="provider" type="category" width={120} tick={{ fontSize: 12 }} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="sent" fill="#3b82f6" name="Enviados" />
+                  <Bar dataKey="failed" fill="#ef4444" name="Falhos" />
+                  <Bar dataKey="opened" fill="#8b5cf6" name="Abertos" />
+                  <Bar dataKey="clicked" fill="#f97316" name="Cliques" />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-full text-gray-400">
+                <p>Nenhum dado de provedor disponível</p>
+              </div>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* Provider Stats Table */}
+      {(stats.by_provider || []).length > 0 && (
+        <div className="card">
+          <h2 className="text-lg font-semibold mb-4">Detalhes por Provedor SMTP</h2>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Provedor</th>
+                <th className="text-right">Enviados</th>
+                <th className="text-right">Falhos</th>
+                <th className="text-right">Abertos</th>
+                <th className="text-right">Cliques</th>
+                <th className="text-right">Taxa Sucesso</th>
+                <th className="text-right">Taxa Abertura</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(stats.by_provider || []).map((provider, index) => (
+                <tr key={index}>
+                  <td className="font-medium">{provider.provider}</td>
+                  <td className="text-right text-blue-600">{provider.sent?.toLocaleString()}</td>
+                  <td className="text-right text-red-600">{provider.failed?.toLocaleString()}</td>
+                  <td className="text-right text-purple-600">{provider.opened?.toLocaleString()}</td>
+                  <td className="text-right text-orange-600">{provider.clicked?.toLocaleString()}</td>
+                  <td className="text-right">
+                    {provider.sent + provider.failed > 0
+                      ? Math.round((provider.sent / (provider.sent + provider.failed)) * 100) + '%'
+                      : '-'}
+                  </td>
+                  <td className="text-right">
+                    {provider.sent > 0
+                      ? Math.round((provider.opened / provider.sent) * 100) + '%'
+                      : '-'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }
