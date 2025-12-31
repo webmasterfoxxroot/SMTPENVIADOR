@@ -356,13 +356,20 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 		}
 
 		// Insert campaign_email record
-		s.db.Exec(`
+		_, err = s.db.Exec(`
 			INSERT INTO campaign_emails (id, campaign_id, email_id, status)
 			VALUES ($1, $2, $3, 'queued')
 		`, job.ID, id, emailID)
+		if err != nil {
+			log.Printf("❌ Failed to insert campaign_email for %s: %v", email, err)
+			continue // Skip this email if we can't track it
+		}
 
 		// Push to queue
-		s.queue.Push(job)
+		if err := s.queue.Push(job); err != nil {
+			log.Printf("❌ Failed to push job to queue for %s: %v", email, err)
+			continue
+		}
 		count++
 	}
 
@@ -801,6 +808,7 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 // queueEmails is a helper to queue emails from a rows result
 func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string, trackOpens, trackClicks bool, trackingDomain string) int {
 	count := 0
+	var err error
 	for rows.Next() {
 		var emailID, email string
 		var name, c1, c2, c3, c4, c5 *string
@@ -847,12 +855,19 @@ func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, re
 			CreatedAt:      time.Now(),
 		}
 
-		s.db.Exec(`
+		_, err = s.db.Exec(`
 			INSERT INTO campaign_emails (id, campaign_id, email_id, status)
 			VALUES ($1, $2, $3, 'queued')
 		`, job.ID, campaignID, emailID)
+		if err != nil {
+			log.Printf("❌ Failed to insert campaign_email for %s: %v", email, err)
+			continue
+		}
 
-		s.queue.Push(job)
+		if err := s.queue.Push(job); err != nil {
+			log.Printf("❌ Failed to push job to queue for %s: %v", email, err)
+			continue
+		}
 		count++
 	}
 	return count
