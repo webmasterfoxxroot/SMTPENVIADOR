@@ -3,43 +3,11 @@ import { Plus, Edit, Trash2, Upload, Users, Loader2, Mail, CheckCircle, XCircle,
 import toast from 'react-hot-toast'
 import api from '../services/api'
 
-function UploadModal({ listId, onClose, onSuccess }) {
+function UploadModal({ listId, onClose, onUploadStarted }) {
   const [file, setFile] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [hasHeader, setHasHeader] = useState(false)
   const [delimiter, setDelimiter] = useState(',')
-  const [jobId, setJobId] = useState(null)
-  const [jobStatus, setJobStatus] = useState(null)
-  const pollInterval = useRef(null)
-
-  // Poll for job status
-  useEffect(() => {
-    if (jobId && jobStatus?.status !== 'completed' && jobStatus?.status !== 'failed') {
-      pollInterval.current = setInterval(async () => {
-        try {
-          const response = await api.get(`/import-status/${jobId}`)
-          setJobStatus(response.data)
-
-          if (response.data.status === 'completed') {
-            clearInterval(pollInterval.current)
-            toast.success(`${response.data.valid.toLocaleString()} emails importados!`)
-            onSuccess()
-          } else if (response.data.status === 'failed') {
-            clearInterval(pollInterval.current)
-            toast.error(response.data.error || 'Erro na importacao')
-          }
-        } catch (error) {
-          console.error('Status poll error:', error)
-        }
-      }, 1000)
-    }
-
-    return () => {
-      if (pollInterval.current) {
-        clearInterval(pollInterval.current)
-      }
-    }
-  }, [jobId, jobStatus?.status])
 
   const handleUpload = async (e) => {
     e.preventDefault()
@@ -52,24 +20,14 @@ function UploadModal({ listId, onClose, onSuccess }) {
     formData.append('delimiter', delimiter)
 
     try {
-      // Use async upload endpoint
       const response = await api.post(`/lists/${listId}/upload-async`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 300000 // 5 min for file upload
+        timeout: 300000
       })
 
-      setJobId(response.data.job_id)
-      setJobStatus({
-        status: 'pending',
-        total_lines: response.data.total_lines,
-        file_name: response.data.file_name,
-        progress: 0,
-        valid: 0,
-        invalid: 0,
-        duplicates: 0
-      })
-
-      toast.success('Arquivo enviado! Processando em background...')
+      toast.success('Upload iniciado! Processando em background...')
+      onUploadStarted(listId, response.data.job_id)
+      onClose()
     } catch (error) {
       console.error('Upload error:', error)
       const errorMsg = error.response?.data?.error || error.message || 'Erro no upload'
@@ -78,124 +36,6 @@ function UploadModal({ listId, onClose, onSuccess }) {
     }
   }
 
-  const handleClose = () => {
-    if (pollInterval.current) {
-      clearInterval(pollInterval.current)
-    }
-    onClose()
-  }
-
-  // Show progress/results
-  if (jobStatus) {
-    const isProcessing = jobStatus.status === 'pending' || jobStatus.status === 'processing'
-    const isCompleted = jobStatus.status === 'completed'
-    const isFailed = jobStatus.status === 'failed'
-
-    return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-        <div className="bg-white rounded-xl p-6 w-full max-w-md">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold">
-              {isProcessing ? 'Importando...' : isCompleted ? 'Importacao Concluida!' : 'Erro na Importacao'}
-            </h2>
-            {!isProcessing && (
-              <button onClick={handleClose} className="text-gray-400 hover:text-gray-600">
-                <X className="w-5 h-5" />
-              </button>
-            )}
-          </div>
-
-          <div className="space-y-4">
-            {/* File info */}
-            <div className="text-sm text-gray-600">
-              <span className="font-medium">Arquivo:</span> {jobStatus.file_name}
-            </div>
-
-            {/* Progress bar */}
-            {isProcessing && (
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Progresso</span>
-                  <span className="font-medium">{jobStatus.progress || 0}%</span>
-                </div>
-                <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-blue-500 rounded-full transition-all duration-300"
-                    style={{ width: `${jobStatus.progress || 0}%` }}
-                  />
-                </div>
-                <div className="text-xs text-gray-500 text-center">
-                  {(jobStatus.processed || 0).toLocaleString()} / {(jobStatus.total_lines || 0).toLocaleString()} linhas
-                </div>
-              </div>
-            )}
-
-            {/* Stats */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <CheckCircle className="w-5 h-5 text-green-600" />
-                  <span className="text-green-800">Emails validos</span>
-                </div>
-                <span className="font-bold text-green-700">{(jobStatus.valid || 0).toLocaleString()}</span>
-              </div>
-
-              {(jobStatus.invalid || 0) > 0 && (
-                <div className="flex items-center justify-between p-3 bg-red-50 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <XCircle className="w-5 h-5 text-red-600" />
-                    <span className="text-red-800">Emails invalidos</span>
-                  </div>
-                  <span className="font-bold text-red-700">{(jobStatus.invalid || 0).toLocaleString()}</span>
-                </div>
-              )}
-
-              {(jobStatus.duplicates || 0) > 0 && (
-                <div className="flex items-center justify-between p-3 bg-yellow-50 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <AlertTriangle className="w-5 h-5 text-yellow-600" />
-                    <span className="text-yellow-800">Duplicados</span>
-                  </div>
-                  <span className="font-bold text-yellow-700">{(jobStatus.duplicates || 0).toLocaleString()}</span>
-                </div>
-              )}
-
-              {isFailed && jobStatus.error && (
-                <div className="p-3 bg-red-50 rounded-lg text-red-800 text-sm">
-                  {jobStatus.error}
-                </div>
-              )}
-            </div>
-
-            {/* Actions */}
-            <div className="flex justify-end gap-3 pt-4">
-              {isProcessing ? (
-                <div className="flex items-center gap-2 text-gray-600">
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  <span className="text-sm">Voce pode fechar esta janela. A importacao continua em background.</span>
-                </div>
-              ) : (
-                <button onClick={handleClose} className="btn btn-primary">
-                  Fechar
-                </button>
-              )}
-            </div>
-
-            {isProcessing && (
-              <button
-                onClick={handleClose}
-                className="w-full text-sm text-gray-500 hover:text-gray-700"
-              >
-                Fechar e continuar em background
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // Upload form
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-xl p-6 w-full max-w-md">
@@ -254,7 +94,7 @@ function UploadModal({ listId, onClose, onSuccess }) {
             <p className="font-medium mb-1">Upload em background:</p>
             <ul className="list-disc list-inside space-y-1 text-blue-700">
               <li>Suporta arquivos grandes (milhoes de emails)</li>
-              <li>Voce pode fechar a janela durante o processamento</li>
+              <li>Progresso mostrado na lista</li>
               <li>Valida e remove duplicados automaticamente</li>
             </ul>
           </div>
@@ -352,14 +192,131 @@ function ListModal({ list, onClose, onSave }) {
   )
 }
 
+// List Card with import progress
+function ListCard({ list, importJob, onEdit, onDelete, onUpload }) {
+  const isImporting = importJob && (importJob.status === 'pending' || importJob.status === 'processing')
+  const importCompleted = importJob && importJob.status === 'completed'
+
+  return (
+    <div className="card">
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <h3 className="font-semibold text-lg">{list.name}</h3>
+          {list.description && (
+            <p className="text-sm text-gray-500 mt-1">{list.description}</p>
+          )}
+        </div>
+        <div className="flex gap-1">
+          <button
+            onClick={onEdit}
+            className="p-2 text-gray-600 hover:bg-gray-100 rounded"
+            disabled={isImporting}
+          >
+            <Edit className="w-4 h-4" />
+          </button>
+          <button
+            onClick={onDelete}
+            className="p-2 text-red-600 hover:bg-red-50 rounded"
+            disabled={isImporting}
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Import Progress */}
+      {isImporting && (
+        <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-blue-800">Importando...</span>
+            <span className="text-sm text-blue-600">{importJob.progress || 0}%</span>
+          </div>
+          <div className="w-full h-2 bg-blue-200 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-500 rounded-full transition-all duration-300"
+              style={{ width: `${importJob.progress || 0}%` }}
+            />
+          </div>
+          <div className="flex justify-between mt-2 text-xs text-blue-600">
+            <span>{(importJob.processed || 0).toLocaleString()} / {(importJob.total_lines || 0).toLocaleString()}</span>
+            <span className="text-green-600">+{(importJob.valid || 0).toLocaleString()} validos</span>
+          </div>
+        </div>
+      )}
+
+      {/* Import Completed Summary */}
+      {importCompleted && (
+        <div className="mb-4 p-3 bg-green-50 rounded-lg">
+          <div className="flex items-center gap-2 mb-2">
+            <CheckCircle className="w-4 h-4 text-green-600" />
+            <span className="text-sm font-medium text-green-800">Importacao concluida!</span>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <div className="text-green-600">
+              <span className="font-bold">{(importJob.valid || 0).toLocaleString()}</span> validos
+            </div>
+            {importJob.invalid > 0 && (
+              <div className="text-red-600">
+                <span className="font-bold">{(importJob.invalid || 0).toLocaleString()}</span> invalidos
+              </div>
+            )}
+            {importJob.duplicates > 0 && (
+              <div className="text-yellow-600">
+                <span className="font-bold">{(importJob.duplicates || 0).toLocaleString()}</span> duplicados
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center gap-6 text-sm text-gray-600 mb-4">
+        <div className="flex items-center gap-2">
+          <Users className="w-4 h-4" />
+          {(list.valid_emails || 0).toLocaleString()} emails
+        </div>
+        <span className={`badge ${
+          isImporting ? 'badge-warning' :
+          list.status === 'ready' ? 'badge-success' : 'badge-warning'
+        }`}>
+          {isImporting ? 'Importando' : list.status === 'ready' ? 'Pronta' : 'Processando'}
+        </span>
+      </div>
+
+      <button
+        onClick={onUpload}
+        disabled={isImporting}
+        className="btn btn-secondary w-full flex items-center justify-center gap-2"
+      >
+        {isImporting ? (
+          <>
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Importando...
+          </>
+        ) : (
+          <>
+            <Upload className="w-4 h-4" />
+            Upload de Emails
+          </>
+        )}
+      </button>
+    </div>
+  )
+}
+
 function EmailLists() {
   const [lists, setLists] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState({ open: false, list: null })
   const [uploadModal, setUploadModal] = useState({ open: false, listId: null })
+  const [importJobs, setImportJobs] = useState({}) // { listId: jobStatus }
+  const pollIntervals = useRef({})
 
   useEffect(() => {
     fetchLists()
+    return () => {
+      // Cleanup all poll intervals
+      Object.values(pollIntervals.current).forEach(clearInterval)
+    }
   }, [])
 
   const fetchLists = async () => {
@@ -374,15 +331,70 @@ function EmailLists() {
   }
 
   const deleteList = async (id) => {
-    if (!confirm('Tem certeza? Todos os emails serão perdidos.')) return
+    if (!confirm('Tem certeza? Todos os emails serao perdidos.')) return
 
     try {
       await api.delete(`/lists/${id}`)
-      toast.success('Lista excluída')
+      toast.success('Lista excluida')
       fetchLists()
     } catch (error) {
       toast.error('Erro ao excluir')
     }
+  }
+
+  const startJobPolling = (listId, jobId) => {
+    // Clear any existing poll for this list
+    if (pollIntervals.current[listId]) {
+      clearInterval(pollIntervals.current[listId])
+    }
+
+    // Start polling
+    pollIntervals.current[listId] = setInterval(async () => {
+      try {
+        const response = await api.get(`/import-status/${jobId}`)
+        const job = response.data
+
+        setImportJobs(prev => ({
+          ...prev,
+          [listId]: job
+        }))
+
+        if (job.status === 'completed') {
+          clearInterval(pollIntervals.current[listId])
+          delete pollIntervals.current[listId]
+          toast.success(`${job.valid.toLocaleString()} emails importados!`)
+          fetchLists() // Refresh list to get updated count
+
+          // Keep completed status for 10 seconds then clear
+          setTimeout(() => {
+            setImportJobs(prev => {
+              const newJobs = { ...prev }
+              delete newJobs[listId]
+              return newJobs
+            })
+          }, 10000)
+        } else if (job.status === 'failed') {
+          clearInterval(pollIntervals.current[listId])
+          delete pollIntervals.current[listId]
+          toast.error(job.error || 'Erro na importacao')
+          setImportJobs(prev => {
+            const newJobs = { ...prev }
+            delete newJobs[listId]
+            return newJobs
+          })
+        }
+      } catch (error) {
+        console.error('Poll error:', error)
+      }
+    }, 1000)
+  }
+
+  const handleUploadStarted = (listId, jobId) => {
+    setImportJobs(prev => ({
+      ...prev,
+      [listId]: { status: 'pending', progress: 0, valid: 0, invalid: 0, duplicates: 0 }
+    }))
+    startJobPolling(listId, jobId)
   }
 
   return (
@@ -410,48 +422,14 @@ function EmailLists() {
           </div>
         ) : (
           lists.map((list) => (
-            <div key={list.id} className="card">
-              <div className="flex items-start justify-between mb-4">
-                <div>
-                  <h3 className="font-semibold text-lg">{list.name}</h3>
-                  {list.description && (
-                    <p className="text-sm text-gray-500 mt-1">{list.description}</p>
-                  )}
-                </div>
-                <div className="flex gap-1">
-                  <button
-                    onClick={() => setModal({ open: true, list })}
-                    className="p-2 text-gray-600 hover:bg-gray-100 rounded"
-                  >
-                    <Edit className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => deleteList(list.id)}
-                    className="p-2 text-red-600 hover:bg-red-50 rounded"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-6 text-sm text-gray-600 mb-4">
-                <div className="flex items-center gap-2">
-                  <Users className="w-4 h-4" />
-                  {list.valid_emails?.toLocaleString()} emails
-                </div>
-                <span className={`badge ${list.status === 'ready' ? 'badge-success' : 'badge-warning'}`}>
-                  {list.status === 'ready' ? 'Pronta' : 'Processando'}
-                </span>
-              </div>
-
-              <button
-                onClick={() => setUploadModal({ open: true, listId: list.id })}
-                className="btn btn-secondary w-full flex items-center justify-center gap-2"
-              >
-                <Upload className="w-4 h-4" />
-                Upload de Emails
-              </button>
-            </div>
+            <ListCard
+              key={list.id}
+              list={list}
+              importJob={importJobs[list.id]}
+              onEdit={() => setModal({ open: true, list })}
+              onDelete={() => deleteList(list.id)}
+              onUpload={() => setUploadModal({ open: true, listId: list.id })}
+            />
           ))
         )}
       </div>
@@ -471,10 +449,7 @@ function EmailLists() {
         <UploadModal
           listId={uploadModal.listId}
           onClose={() => setUploadModal({ open: false, listId: null })}
-          onSuccess={() => {
-            setUploadModal({ open: false, listId: null })
-            fetchLists()
-          }}
+          onUploadStarted={handleUploadStarted}
         />
       )}
     </div>
