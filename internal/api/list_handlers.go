@@ -526,6 +526,19 @@ func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
 
 // processImportJob processes the import file in background
 func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool, delimiter string) {
+	// Recover from panics
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Import job %s: PANIC recovered: %v", jobID, r)
+			importJobsMu.Lock()
+			if job, ok := importJobs[jobID]; ok {
+				job.Status = "failed"
+				job.Error = fmt.Sprintf("Panic: %v", r)
+			}
+			importJobsMu.Unlock()
+		}
+	}()
+
 	importJobsMu.Lock()
 	job := importJobs[jobID]
 	job.Status = "processing"
@@ -623,6 +636,8 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 
 	log.Printf("Import job %s: starting processing, total lines: %d", jobID, job.TotalLines)
 
+	lastProgressLog := time.Now()
+
 	for scanner.Scan() {
 		lineNum++
 
@@ -633,12 +648,6 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
-			// Update progress even for empty lines
-			if lineNum%1000 == 0 {
-				importJobsMu.Lock()
-				job.Processed = lineNum
-				importJobsMu.Unlock()
-			}
 			continue
 		}
 
@@ -659,81 +668,96 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 		email = strings.ToLower(email)
 		if !emailRegex.MatchString(email) {
 			invalidCount++
-			// Update progress frequently
-			if lineNum%1000 == 0 {
-				importJobsMu.Lock()
-				job.Processed = lineNum
-				job.Valid = validCount
-				job.Invalid = invalidCount
-				job.Duplicates = duplicateCount
-				importJobsMu.Unlock()
-			}
-			continue
-		}
-
-		// Check blacklist
-		if blacklisted[email] {
+		} else if blacklisted[email] {
+			// Check blacklist
 			invalidCount++
-			continue
-		}
-
-		// Check duplicate
-		if existingEmails[email] {
+		} else if existingEmails[email] {
+			// Check duplicate
 			duplicateCount++
-			continue
-		}
-
-		// Insert email
-		emailID := uuid.New().String()
-		_, err := stmt.Exec(emailID, listID, email, name)
-
-		if err == nil {
-			validCount++
-			existingEmails[email] = true
-			batchCount++
-
-			// Update progress every 1000 lines
-			if lineNum%1000 == 0 {
-				importJobsMu.Lock()
-				job.Processed = lineNum
-				job.Valid = validCount
-				job.Invalid = invalidCount
-				job.Duplicates = duplicateCount
-				importJobsMu.Unlock()
-			}
-
-			// Commit every batchSize
-			if batchCount >= batchSize {
-				stmt.Close()
-				tx.Commit()
-
-				log.Printf("Import job %s: committed batch, processed %d, valid %d", jobID, lineNum, validCount)
-
-				// Start new transaction
-				tx, err = s.db.Begin()
-				if err != nil {
-					log.Printf("Failed to begin new transaction: %v", err)
-					break
-				}
-				stmt, err = tx.Prepare(`INSERT INTO emails (id, list_id, email, name, valid) VALUES ($1, $2, $3, $4, true)`)
-				if err != nil {
-					tx.Rollback()
-					log.Printf("Failed to prepare statement: %v", err)
-					break
-				}
-				batchCount = 0
-			}
 		} else {
-			invalidCount++
+			// Insert email
+			emailID := uuid.New().String()
+			_, err := stmt.Exec(emailID, listID, email, name)
+
+			if err == nil {
+				validCount++
+				existingEmails[email] = true
+				batchCount++
+
+				// Commit every batchSize valid emails
+				if batchCount >= batchSize {
+					stmt.Close()
+					if err := tx.Commit(); err != nil {
+						log.Printf("Import job %s: commit error: %v", jobID, err)
+					}
+
+					log.Printf("Import job %s: committed batch, processed %d/%d, valid %d, invalid %d, dups %d",
+						jobID, lineNum, job.TotalLines, validCount, invalidCount, duplicateCount)
+
+					// Start new transaction
+					tx, err = s.db.Begin()
+					if err != nil {
+						log.Printf("Import job %s: failed to begin new transaction: %v", jobID, err)
+						break
+					}
+					stmt, err = tx.Prepare(`INSERT INTO emails (id, list_id, email, name, valid) VALUES ($1, $2, $3, $4, true)`)
+					if err != nil {
+						tx.Rollback()
+						log.Printf("Import job %s: failed to prepare statement: %v", jobID, err)
+						break
+					}
+					batchCount = 0
+				}
+			} else {
+				// Log insert errors (might be duplicate key)
+				if lineNum < 100 || lineNum%10000 == 0 {
+					log.Printf("Import job %s: insert error at line %d: %v", jobID, lineNum, err)
+				}
+				invalidCount++
+			}
 		}
+
+		// Update progress every 5000 lines (regardless of valid/invalid)
+		if lineNum%5000 == 0 {
+			importJobsMu.Lock()
+			job.Processed = lineNum
+			job.Valid = validCount
+			job.Invalid = invalidCount
+			job.Duplicates = duplicateCount
+			importJobsMu.Unlock()
+
+			// Log progress every 10 seconds
+			if time.Since(lastProgressLog) > 10*time.Second {
+				log.Printf("Import job %s: progress %d/%d (%.1f%%), valid: %d, invalid: %d, dups: %d",
+					jobID, lineNum, job.TotalLines, float64(lineNum)*100/float64(job.TotalLines),
+					validCount, invalidCount, duplicateCount)
+				lastProgressLog = time.Now()
+			}
+		}
+	}
+
+	// Check for scanner errors
+	if err := scanner.Err(); err != nil {
+		log.Printf("Import job %s: scanner error: %v", jobID, err)
+		importJobsMu.Lock()
+		job.Status = "failed"
+		job.Error = "Erro ao ler arquivo: " + err.Error()
+		importJobsMu.Unlock()
+		stmt.Close()
+		tx.Rollback()
+		return
 	}
 
 	// Commit remaining
 	stmt.Close()
-	tx.Commit()
+	if err := tx.Commit(); err != nil {
+		log.Printf("Import job %s: final commit error: %v", jobID, err)
+	}
+
+	log.Printf("Import job %s: file processing complete, updating database...", jobID)
 
 	// Update list stats
-	s.db.Exec(`
+	_, err = s.db.Exec(`
 		UPDATE email_lists SET
 			total_emails = total_emails + $1,
 			valid_emails = valid_emails + $2,
@@ -741,6 +765,9 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 			status = 'ready'
 		WHERE id = $4
 	`, validCount+invalidCount, validCount, invalidCount, listID)
+	if err != nil {
+		log.Printf("Import job %s: error updating list stats: %v", jobID, err)
+	}
 
 	// Mark job as completed
 	importJobsMu.Lock()
@@ -752,7 +779,7 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 	job.CompletedAt = time.Now()
 	importJobsMu.Unlock()
 
-	log.Printf("Import job %s completed: %d valid, %d invalid, %d duplicates", jobID, validCount, invalidCount, duplicateCount)
+	log.Printf("Import job %s COMPLETED: %d lines processed, %d valid, %d invalid, %d duplicates", jobID, lineNum, validCount, invalidCount, duplicateCount)
 }
 
 // getImportStatus returns the status of an import job
@@ -797,6 +824,7 @@ func (s *Server) getListImportJobs(c *fiber.Ctx) error {
 
 	var jobs []fiber.Map
 	for _, job := range importJobs {
+		log.Printf("getListImportJobs: checking job %s for list %s, job.ListID=%s, job.Status=%s", job.ID, listID, job.ListID, job.Status)
 		if job.ListID == listID && (job.Status == "pending" || job.Status == "processing") {
 			progress := 0
 			if job.TotalLines > 0 {
@@ -820,6 +848,7 @@ func (s *Server) getListImportJobs(c *fiber.Ctx) error {
 		jobs = []fiber.Map{}
 	}
 
+	log.Printf("getListImportJobs: returning %d active jobs for list %s", len(jobs), listID)
 	return c.JSON(fiber.Map{"jobs": jobs})
 }
 
