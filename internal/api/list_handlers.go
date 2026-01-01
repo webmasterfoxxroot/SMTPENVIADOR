@@ -424,7 +424,10 @@ func (s *Server) uploadEmails(c *fiber.Ctx) error {
 // uploadEmailsAsync handles large file uploads asynchronously
 // The file is saved to disk first, then processed in the background
 func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
-	listID := c.Params("id")
+	// IMPORTANT: Copy listID immediately to avoid Fiber buffer reuse issues
+	listID := string([]byte(c.Params("id")))
+
+	log.Printf("uploadEmailsAsync START: listID='%s'", listID)
 
 	// Check if list exists
 	var exists bool
@@ -496,15 +499,10 @@ func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
 		lineCount--
 	}
 
-	// Copy listID to avoid potential memory reference issues
-	listIDCopy := string([]byte(listID))
-
-	log.Printf("uploadEmailsAsync: listID from params = '%s', listIDCopy = '%s'", listID, listIDCopy)
-
-	// Create import job
+	// Create import job (listID already copied at function start)
 	job := &ImportJob{
 		ID:         jobID,
-		ListID:     listIDCopy,
+		ListID:     listID,
 		FileName:   file.Filename,
 		Status:     "pending",
 		TotalLines: lineCount,
@@ -521,10 +519,10 @@ func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
 	importJobsMu.Unlock()
 
 	// Update list status
-	s.db.Exec(`UPDATE email_lists SET status = 'importing' WHERE id = $1`, listIDCopy)
+	s.db.Exec(`UPDATE email_lists SET status = 'importing' WHERE id = $1`, listID)
 
-	// Start background processing - pass the copy
-	go s.processImportJob(jobID, savedPath, listIDCopy, hasHeader, delimiter)
+	// Start background processing
+	go s.processImportJob(jobID, savedPath, listID, hasHeader, delimiter)
 
 	return c.JSON(fiber.Map{
 		"message":     "Upload iniciado",
