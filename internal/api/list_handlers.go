@@ -424,10 +424,11 @@ func (s *Server) uploadEmails(c *fiber.Ctx) error {
 // uploadEmailsAsync handles large file uploads asynchronously
 // The file is saved to disk first, then processed in the background
 func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
-	// IMPORTANT: Copy listID immediately to avoid Fiber buffer reuse issues
-	listID := string([]byte(c.Params("id")))
+	// IMPORTANT: Create completely new string to avoid Fiber buffer reuse issues
+	// Using fmt.Sprintf forces Go to allocate a new string
+	listID := fmt.Sprintf("%s", c.Params("id"))
 
-	log.Printf("uploadEmailsAsync START: listID='%s'", listID)
+	log.Printf("uploadEmailsAsync START: listID='%s' (len=%d)", listID, len(listID))
 
 	// Check if list exists
 	var exists bool
@@ -499,30 +500,36 @@ func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
 		lineCount--
 	}
 
-	// Create import job (listID already copied at function start)
+	// Create ANOTHER copy of listID for the job to ensure complete isolation
+	jobListID := fmt.Sprintf("%s", listID)
+
+	// Create import job
 	job := &ImportJob{
 		ID:         jobID,
-		ListID:     listID,
+		ListID:     jobListID,
 		FileName:   file.Filename,
 		Status:     "pending",
 		TotalLines: lineCount,
 		StartedAt:  time.Now(),
 	}
 
-	log.Printf("Creating import job: ID=%s, ListID=%s, FileName=%s, TotalLines=%d", jobID, job.ListID, file.Filename, lineCount)
+	log.Printf("Creating import job: ID=%s, ListID=%s (len=%d), FileName=%s, TotalLines=%d", jobID, job.ListID, len(job.ListID), file.Filename, lineCount)
 
 	importJobsMu.Lock()
 	importJobs[jobID] = job
 	// Verify immediately after adding to map
 	verifyJob := importJobs[jobID]
-	log.Printf("Verify job in map: ID=%s, ListID=%s", verifyJob.ID, verifyJob.ListID)
+	log.Printf("Verify job in map: ID=%s, ListID=%s (len=%d)", verifyJob.ID, verifyJob.ListID, len(verifyJob.ListID))
 	importJobsMu.Unlock()
 
 	// Update list status
-	s.db.Exec(`UPDATE email_lists SET status = 'importing' WHERE id = $1`, listID)
+	s.db.Exec(`UPDATE email_lists SET status = 'importing' WHERE id = $1`, jobListID)
 
-	// Start background processing
-	go s.processImportJob(jobID, savedPath, listID, hasHeader, delimiter)
+	// Create ANOTHER copy for the goroutine
+	goroutineListID := fmt.Sprintf("%s", jobListID)
+
+	// Start background processing with isolated copy
+	go s.processImportJob(jobID, savedPath, goroutineListID, hasHeader, delimiter)
 
 	return c.JSON(fiber.Map{
 		"message":     "Upload iniciado",
