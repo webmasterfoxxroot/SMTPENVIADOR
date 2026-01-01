@@ -224,8 +224,13 @@ func (s *Server) setupRoutes() {
 	lists.Put("/:id", s.updateEmailList)
 	lists.Delete("/:id", s.deleteEmailList)
 	lists.Post("/:id/upload", s.uploadEmails)
+	lists.Post("/:id/upload-async", s.uploadEmailsAsync)
+	lists.Get("/:id/import-jobs", s.getListImportJobs)
 	lists.Get("/:id/emails", s.getListEmails)
 	lists.Delete("/:id/emails/:emailId", s.deleteEmail)
+
+	// Import job status (outside of lists group for simpler access)
+	protected.Get("/import-status/:jobId", s.getImportStatus)
 
 	// Templates
 	templates := protected.Group("/templates")

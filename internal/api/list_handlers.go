@@ -2,9 +2,14 @@ package api
 
 import (
 	"bufio"
+	"fmt"
+	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -15,6 +20,28 @@ type EmailListRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
+
+// ImportJob tracks the status of a background import
+type ImportJob struct {
+	ID           string    `json:"id"`
+	ListID       string    `json:"list_id"`
+	FileName     string    `json:"file_name"`
+	Status       string    `json:"status"` // pending, processing, completed, failed
+	TotalLines   int       `json:"total_lines"`
+	Processed    int       `json:"processed"`
+	Valid        int       `json:"valid"`
+	Invalid      int       `json:"invalid"`
+	Duplicates   int       `json:"duplicates"`
+	Error        string    `json:"error,omitempty"`
+	StartedAt    time.Time `json:"started_at"`
+	CompletedAt  time.Time `json:"completed_at,omitempty"`
+}
+
+// Import job storage (in-memory, could be moved to Redis/DB for persistence)
+var (
+	importJobs   = make(map[string]*ImportJob)
+	importJobsMu sync.RWMutex
+)
 
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
 
@@ -369,6 +396,343 @@ func (s *Server) uploadEmails(c *fiber.Ctx) error {
 		"duplicates": duplicateCount,
 		"total":      lineNum,
 	})
+}
+
+// uploadEmailsAsync handles large file uploads asynchronously
+// The file is saved to disk first, then processed in the background
+func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
+	listID := c.Params("id")
+
+	// Check if list exists
+	var exists bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_lists WHERE id = $1)`, listID).Scan(&exists)
+	if !exists {
+		return c.Status(404).JSON(fiber.Map{"error": "Lista nao encontrada"})
+	}
+
+	// Get file
+	file, err := c.FormFile("file")
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Nenhum arquivo enviado"})
+	}
+
+	// Get options
+	hasHeader := c.FormValue("has_header", "true") == "true"
+	delimiter := c.FormValue("delimiter", ",")
+
+	// Create uploads directory if not exists
+	uploadDir := "/tmp/smtpenviador/uploads"
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao criar diretorio de uploads"})
+	}
+
+	// Generate unique filename
+	jobID := uuid.New().String()
+	ext := filepath.Ext(file.Filename)
+	savedPath := filepath.Join(uploadDir, fmt.Sprintf("%s%s", jobID, ext))
+
+	// Save file to disk
+	src, err := file.Open()
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao abrir arquivo"})
+	}
+	defer src.Close()
+
+	dst, err := os.Create(savedPath)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao salvar arquivo"})
+	}
+	defer dst.Close()
+
+	// Copy file to disk
+	written, err := io.Copy(dst, src)
+	if err != nil {
+		os.Remove(savedPath)
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao copiar arquivo"})
+	}
+
+	log.Printf("File saved: %s (%d bytes)", savedPath, written)
+
+	// Count lines in file for progress tracking
+	dst.Seek(0, 0)
+	lineCount := 0
+	scanner := bufio.NewScanner(dst)
+	for scanner.Scan() {
+		lineCount++
+	}
+	if hasHeader && lineCount > 0 {
+		lineCount--
+	}
+
+	// Create import job
+	job := &ImportJob{
+		ID:         jobID,
+		ListID:     listID,
+		FileName:   file.Filename,
+		Status:     "pending",
+		TotalLines: lineCount,
+		StartedAt:  time.Now(),
+	}
+
+	importJobsMu.Lock()
+	importJobs[jobID] = job
+	importJobsMu.Unlock()
+
+	// Update list status
+	s.db.Exec(`UPDATE email_lists SET status = 'importing' WHERE id = $1`, listID)
+
+	// Start background processing
+	go s.processImportJob(jobID, savedPath, listID, hasHeader, delimiter)
+
+	return c.JSON(fiber.Map{
+		"message":     "Upload iniciado",
+		"job_id":      jobID,
+		"total_lines": lineCount,
+		"file_name":   file.Filename,
+	})
+}
+
+// processImportJob processes the import file in background
+func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool, delimiter string) {
+	importJobsMu.Lock()
+	job := importJobs[jobID]
+	job.Status = "processing"
+	importJobsMu.Unlock()
+
+	defer func() {
+		// Clean up file after processing
+		os.Remove(filePath)
+	}()
+
+	// Open file
+	f, err := os.Open(filePath)
+	if err != nil {
+		importJobsMu.Lock()
+		job.Status = "failed"
+		job.Error = "Falha ao abrir arquivo: " + err.Error()
+		importJobsMu.Unlock()
+		return
+	}
+	defer f.Close()
+
+	// Get existing emails for duplicate check
+	existingEmails := make(map[string]bool)
+	rows, _ := s.db.Query(`SELECT email FROM emails WHERE list_id = $1`, listID)
+	for rows.Next() {
+		var email string
+		rows.Scan(&email)
+		existingEmails[strings.ToLower(email)] = true
+	}
+	rows.Close()
+
+	// Get blacklist
+	blacklisted := make(map[string]bool)
+	blRows, _ := s.db.Query(`SELECT email FROM blacklist`)
+	for blRows.Next() {
+		var email string
+		blRows.Scan(&email)
+		blacklisted[strings.ToLower(email)] = true
+	}
+	blRows.Close()
+
+	// Process file
+	scanner := bufio.NewScanner(f)
+	const maxCapacity = 1024 * 1024
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+
+	lineNum := 0
+	validCount := 0
+	invalidCount := 0
+	duplicateCount := 0
+
+	const batchSize = 5000
+	batchCount := 0
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		importJobsMu.Lock()
+		job.Status = "failed"
+		job.Error = "Falha ao iniciar transacao"
+		importJobsMu.Unlock()
+		return
+	}
+
+	stmt, err := tx.Prepare(`INSERT INTO emails (id, list_id, email, name, valid) VALUES ($1, $2, $3, $4, true)`)
+	if err != nil {
+		tx.Rollback()
+		importJobsMu.Lock()
+		job.Status = "failed"
+		job.Error = "Falha ao preparar statement"
+		importJobsMu.Unlock()
+		return
+	}
+
+	for scanner.Scan() {
+		lineNum++
+
+		// Skip header
+		if lineNum == 1 && hasHeader {
+			continue
+		}
+
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		// Parse line
+		parts := strings.Split(line, delimiter)
+		if len(parts) == 0 {
+			continue
+		}
+
+		// Get email (first column)
+		var email, name string
+		email = strings.TrimSpace(parts[0])
+		if len(parts) > 1 {
+			name = strings.TrimSpace(parts[1])
+		}
+
+		// Validate email
+		email = strings.ToLower(email)
+		if !emailRegex.MatchString(email) {
+			invalidCount++
+			continue
+		}
+
+		// Check blacklist
+		if blacklisted[email] {
+			invalidCount++
+			continue
+		}
+
+		// Check duplicate
+		if existingEmails[email] {
+			duplicateCount++
+			continue
+		}
+
+		// Insert email
+		emailID := uuid.New().String()
+		_, err := stmt.Exec(emailID, listID, email, name)
+
+		if err == nil {
+			validCount++
+			existingEmails[email] = true
+			batchCount++
+
+			// Commit every batchSize
+			if batchCount >= batchSize {
+				stmt.Close()
+				tx.Commit()
+
+				// Update job progress
+				importJobsMu.Lock()
+				job.Processed = lineNum
+				job.Valid = validCount
+				job.Invalid = invalidCount
+				job.Duplicates = duplicateCount
+				importJobsMu.Unlock()
+
+				// Start new transaction
+				tx, err = s.db.Begin()
+				if err != nil {
+					log.Printf("Failed to begin new transaction: %v", err)
+					break
+				}
+				stmt, err = tx.Prepare(`INSERT INTO emails (id, list_id, email, name, valid) VALUES ($1, $2, $3, $4, true)`)
+				if err != nil {
+					tx.Rollback()
+					log.Printf("Failed to prepare statement: %v", err)
+					break
+				}
+				batchCount = 0
+
+				if validCount%50000 == 0 {
+					log.Printf("Import job %s: processed %d, valid %d", jobID, lineNum, validCount)
+				}
+			}
+		} else {
+			invalidCount++
+		}
+	}
+
+	// Commit remaining
+	stmt.Close()
+	tx.Commit()
+
+	// Update list stats
+	s.db.Exec(`
+		UPDATE email_lists SET
+			total_emails = total_emails + $1,
+			valid_emails = valid_emails + $2,
+			invalid_emails = invalid_emails + $3,
+			status = 'ready'
+		WHERE id = $4
+	`, validCount+invalidCount, validCount, invalidCount, listID)
+
+	// Mark job as completed
+	importJobsMu.Lock()
+	job.Status = "completed"
+	job.Processed = lineNum
+	job.Valid = validCount
+	job.Invalid = invalidCount
+	job.Duplicates = duplicateCount
+	job.CompletedAt = time.Now()
+	importJobsMu.Unlock()
+
+	log.Printf("Import job %s completed: %d valid, %d invalid, %d duplicates", jobID, validCount, invalidCount, duplicateCount)
+}
+
+// getImportStatus returns the status of an import job
+func (s *Server) getImportStatus(c *fiber.Ctx) error {
+	jobID := c.Params("jobId")
+
+	importJobsMu.RLock()
+	job, exists := importJobs[jobID]
+	importJobsMu.RUnlock()
+
+	if !exists {
+		return c.Status(404).JSON(fiber.Map{"error": "Job nao encontrado"})
+	}
+
+	progress := 0
+	if job.TotalLines > 0 {
+		progress = (job.Processed * 100) / job.TotalLines
+	}
+
+	return c.JSON(fiber.Map{
+		"id":          job.ID,
+		"status":      job.Status,
+		"file_name":   job.FileName,
+		"total_lines": job.TotalLines,
+		"processed":   job.Processed,
+		"progress":    progress,
+		"valid":       job.Valid,
+		"invalid":     job.Invalid,
+		"duplicates":  job.Duplicates,
+		"error":       job.Error,
+		"started_at":  job.StartedAt,
+		"completed_at": job.CompletedAt,
+	})
+}
+
+// getListImportJobs returns active import jobs for a list
+func (s *Server) getListImportJobs(c *fiber.Ctx) error {
+	listID := c.Params("id")
+
+	importJobsMu.RLock()
+	defer importJobsMu.RUnlock()
+
+	var jobs []*ImportJob
+	for _, job := range importJobs {
+		if job.ListID == listID && (job.Status == "pending" || job.Status == "processing") {
+			jobs = append(jobs, job)
+		}
+	}
+
+	return c.JSON(fiber.Map{"jobs": jobs})
 }
 
 // getListEmails returns emails from a list

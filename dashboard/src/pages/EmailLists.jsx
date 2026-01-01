@@ -1,168 +1,280 @@
-import { useState, useEffect } from 'react'
-import { Plus, Edit, Trash2, Upload, Users, Loader2, Mail, CheckCircle, XCircle, AlertTriangle } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Plus, Edit, Trash2, Upload, Users, Loader2, Mail, CheckCircle, XCircle, AlertTriangle, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
 
 function UploadModal({ listId, onClose, onSuccess }) {
   const [file, setFile] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [hasHeader, setHasHeader] = useState(true)
+  const [uploading, setUploading] = useState(false)
+  const [hasHeader, setHasHeader] = useState(false)
   const [delimiter, setDelimiter] = useState(',')
-  const [result, setResult] = useState(null)
+  const [jobId, setJobId] = useState(null)
+  const [jobStatus, setJobStatus] = useState(null)
+  const pollInterval = useRef(null)
+
+  // Poll for job status
+  useEffect(() => {
+    if (jobId && jobStatus?.status !== 'completed' && jobStatus?.status !== 'failed') {
+      pollInterval.current = setInterval(async () => {
+        try {
+          const response = await api.get(`/import-status/${jobId}`)
+          setJobStatus(response.data)
+
+          if (response.data.status === 'completed') {
+            clearInterval(pollInterval.current)
+            toast.success(`${response.data.valid.toLocaleString()} emails importados!`)
+            onSuccess()
+          } else if (response.data.status === 'failed') {
+            clearInterval(pollInterval.current)
+            toast.error(response.data.error || 'Erro na importacao')
+          }
+        } catch (error) {
+          console.error('Status poll error:', error)
+        }
+      }, 1000)
+    }
+
+    return () => {
+      if (pollInterval.current) {
+        clearInterval(pollInterval.current)
+      }
+    }
+  }, [jobId, jobStatus?.status])
 
   const handleUpload = async (e) => {
     e.preventDefault()
     if (!file) return
 
-    setLoading(true)
-    setResult(null)
+    setUploading(true)
     const formData = new FormData()
     formData.append('file', file)
     formData.append('has_header', hasHeader)
     formData.append('delimiter', delimiter)
-    formData.append('email_column', '0')
-    formData.append('name_column', '1')
 
     try {
-      const response = await api.post(`/lists/${listId}/upload`, formData, {
+      // Use async upload endpoint
+      const response = await api.post(`/lists/${listId}/upload-async`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 600000 // 10 minutes timeout for large files
+        timeout: 300000 // 5 min for file upload
       })
-      setResult(response.data)
-      if (response.data.valid > 0) {
-        toast.success(`${response.data.valid} emails importados com sucesso!`)
-      }
+
+      setJobId(response.data.job_id)
+      setJobStatus({
+        status: 'pending',
+        total_lines: response.data.total_lines,
+        file_name: response.data.file_name,
+        progress: 0,
+        valid: 0,
+        invalid: 0,
+        duplicates: 0
+      })
+
+      toast.success('Arquivo enviado! Processando em background...')
     } catch (error) {
       console.error('Upload error:', error)
       const errorMsg = error.response?.data?.error || error.message || 'Erro no upload'
       toast.error(errorMsg)
-    } finally {
-      setLoading(false)
+      setUploading(false)
     }
   }
 
   const handleClose = () => {
-    if (result && result.valid > 0) {
-      onSuccess()
+    if (pollInterval.current) {
+      clearInterval(pollInterval.current)
     }
     onClose()
   }
 
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl p-6 w-full max-w-md">
-        <h2 className="text-xl font-bold mb-4">Upload de Emails</h2>
+  // Show progress/results
+  if (jobStatus) {
+    const isProcessing = jobStatus.status === 'pending' || jobStatus.status === 'processing'
+    const isCompleted = jobStatus.status === 'completed'
+    const isFailed = jobStatus.status === 'failed'
 
-        {result ? (
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="bg-white rounded-xl p-6 w-full max-w-md">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold">
+              {isProcessing ? 'Importando...' : isCompleted ? 'Importacao Concluida!' : 'Erro na Importacao'}
+            </h2>
+            {!isProcessing && (
+              <button onClick={handleClose} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            )}
+          </div>
+
           <div className="space-y-4">
-            <div className="text-center py-4">
-              <CheckCircle className="w-16 h-16 mx-auto text-green-500 mb-3" />
-              <h3 className="text-lg font-semibold text-gray-800">Importacao Concluida!</h3>
+            {/* File info */}
+            <div className="text-sm text-gray-600">
+              <span className="font-medium">Arquivo:</span> {jobStatus.file_name}
             </div>
 
-            <div className="space-y-3">
+            {/* Progress bar */}
+            {isProcessing && (
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-600">Progresso</span>
+                  <span className="font-medium">{jobStatus.progress || 0}%</span>
+                </div>
+                <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                    style={{ width: `${jobStatus.progress || 0}%` }}
+                  />
+                </div>
+                <div className="text-xs text-gray-500 text-center">
+                  {(jobStatus.processed || 0).toLocaleString()} / {(jobStatus.total_lines || 0).toLocaleString()} linhas
+                </div>
+              </div>
+            )}
+
+            {/* Stats */}
+            <div className="space-y-2">
               <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
                 <div className="flex items-center gap-2">
                   <CheckCircle className="w-5 h-5 text-green-600" />
-                  <span className="text-green-800">Emails validos importados</span>
+                  <span className="text-green-800">Emails validos</span>
                 </div>
-                <span className="font-bold text-green-700">{result.valid}</span>
+                <span className="font-bold text-green-700">{(jobStatus.valid || 0).toLocaleString()}</span>
               </div>
 
-              {result.invalid > 0 && (
+              {(jobStatus.invalid || 0) > 0 && (
                 <div className="flex items-center justify-between p-3 bg-red-50 rounded-lg">
                   <div className="flex items-center gap-2">
                     <XCircle className="w-5 h-5 text-red-600" />
-                    <span className="text-red-800">Emails invalidos removidos</span>
+                    <span className="text-red-800">Emails invalidos</span>
                   </div>
-                  <span className="font-bold text-red-700">{result.invalid}</span>
+                  <span className="font-bold text-red-700">{(jobStatus.invalid || 0).toLocaleString()}</span>
                 </div>
               )}
 
-              {result.duplicates > 0 && (
+              {(jobStatus.duplicates || 0) > 0 && (
                 <div className="flex items-center justify-between p-3 bg-yellow-50 rounded-lg">
                   <div className="flex items-center gap-2">
                     <AlertTriangle className="w-5 h-5 text-yellow-600" />
-                    <span className="text-yellow-800">Duplicados ignorados</span>
+                    <span className="text-yellow-800">Duplicados</span>
                   </div>
-                  <span className="font-bold text-yellow-700">{result.duplicates}</span>
+                  <span className="font-bold text-yellow-700">{(jobStatus.duplicates || 0).toLocaleString()}</span>
                 </div>
               )}
 
-              <div className="flex items-center justify-between p-3 bg-gray-100 rounded-lg">
-                <span className="text-gray-600">Total processado</span>
-                <span className="font-bold text-gray-700">{result.total}</span>
-              </div>
+              {isFailed && jobStatus.error && (
+                <div className="p-3 bg-red-50 rounded-lg text-red-800 text-sm">
+                  {jobStatus.error}
+                </div>
+              )}
             </div>
 
-            <div className="flex justify-end pt-4">
-              <button onClick={handleClose} className="btn btn-primary">
-                Fechar
+            {/* Actions */}
+            <div className="flex justify-end gap-3 pt-4">
+              {isProcessing ? (
+                <div className="flex items-center gap-2 text-gray-600">
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <span className="text-sm">Voce pode fechar esta janela. A importacao continua em background.</span>
+                </div>
+              ) : (
+                <button onClick={handleClose} className="btn btn-primary">
+                  Fechar
+                </button>
+              )}
+            </div>
+
+            {isProcessing && (
+              <button
+                onClick={handleClose}
+                className="w-full text-sm text-gray-500 hover:text-gray-700"
+              >
+                Fechar e continuar em background
               </button>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Upload form
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl p-6 w-full max-w-md">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-bold">Upload de Emails</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <form onSubmit={handleUpload} className="space-y-4">
+          <div>
+            <label className="label">Arquivo (CSV/TXT)</label>
+            <input
+              type="file"
+              accept=".csv,.txt"
+              onChange={(e) => setFile(e.target.files[0])}
+              className="input"
+              required
+            />
+            {file && (
+              <p className="text-xs text-gray-500 mt-1">
+                {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
+              </p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Delimitador</label>
+              <select
+                value={delimiter}
+                onChange={(e) => setDelimiter(e.target.value)}
+                className="input"
+              >
+                <option value=",">Virgula (,)</option>
+                <option value=";">Ponto e virgula (;)</option>
+                <option value="\t">Tab</option>
+                <option value=" ">Espaco</option>
+              </select>
+            </div>
+            <div className="flex items-end">
+              <label className="flex items-center gap-2 cursor-pointer pb-2">
+                <input
+                  type="checkbox"
+                  checked={hasHeader}
+                  onChange={(e) => setHasHeader(e.target.checked)}
+                  className="w-4 h-4"
+                />
+                Tem cabecalho
+              </label>
             </div>
           </div>
-        ) : (
-          <form onSubmit={handleUpload} className="space-y-4">
-            <div>
-              <label className="label">Arquivo (CSV/TXT)</label>
-              <input
-                type="file"
-                accept=".csv,.txt"
-                onChange={(e) => setFile(e.target.files[0])}
-                className="input"
-                required
-              />
-            </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="label">Delimitador</label>
-                <select
-                  value={delimiter}
-                  onChange={(e) => setDelimiter(e.target.value)}
-                  className="input"
-                >
-                  <option value=",">Virgula (,)</option>
-                  <option value=";">Ponto e virgula (;)</option>
-                  <option value="\t">Tab</option>
-                </select>
-              </div>
-              <div className="flex items-end">
-                <label className="flex items-center gap-2 cursor-pointer pb-2">
-                  <input
-                    type="checkbox"
-                    checked={hasHeader}
-                    onChange={(e) => setHasHeader(e.target.checked)}
-                    className="w-4 h-4"
-                  />
-                  Tem cabecalho
-                </label>
-              </div>
-            </div>
+          <div className="p-3 bg-blue-50 rounded-lg text-sm text-blue-800">
+            <p className="font-medium mb-1">Upload em background:</p>
+            <ul className="list-disc list-inside space-y-1 text-blue-700">
+              <li>Suporta arquivos grandes (milhoes de emails)</li>
+              <li>Voce pode fechar a janela durante o processamento</li>
+              <li>Valida e remove duplicados automaticamente</li>
+            </ul>
+          </div>
 
-            <div className="p-3 bg-blue-50 rounded-lg text-sm text-blue-800">
-              <p className="font-medium mb-1">O sistema automaticamente:</p>
-              <ul className="list-disc list-inside space-y-1 text-blue-700">
-                <li>Valida formato dos emails</li>
-                <li>Remove emails duplicados</li>
-                <li>Remove emails da blacklist</li>
-              </ul>
-            </div>
-
-            <p className="text-sm text-gray-500">
-              Formato esperado: email,nome (primeira coluna e email)
-            </p>
-
-            <div className="flex justify-end gap-3 pt-4">
-              <button type="button" onClick={onClose} className="btn btn-secondary">
-                Cancelar
-              </button>
-              <button type="submit" disabled={loading} className="btn btn-primary">
-                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Importar'}
-              </button>
-            </div>
-          </form>
-        )}
+          <div className="flex justify-end gap-3 pt-4">
+            <button type="button" onClick={onClose} className="btn btn-secondary">
+              Cancelar
+            </button>
+            <button type="submit" disabled={uploading || !file} className="btn btn-primary">
+              {uploading ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                  Enviando...
+                </>
+              ) : (
+                'Iniciar Upload'
+              )}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   )
