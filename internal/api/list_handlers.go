@@ -298,7 +298,7 @@ func (s *Server) uploadEmails(c *fiber.Ctx) error {
 	}
 
 	// Prepare statement for faster inserts
-	stmt, err := tx.Prepare(`INSERT INTO emails (id, list_id, email, name, valid) VALUES ($1, $2, $3, $4, true)`)
+	stmt, err := tx.Prepare(`INSERT INTO emails (id, list_id, email, name, valid) VALUES ($1, $2, $3, $4, true) ON CONFLICT (list_id, email) DO NOTHING`)
 	if err != nil {
 		tx.Rollback()
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to prepare statement"})
@@ -506,6 +506,8 @@ func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
 		StartedAt:  time.Now(),
 	}
 
+	log.Printf("Creating import job: ID=%s, ListID=%s, FileName=%s, TotalLines=%d", jobID, listID, file.Filename, lineCount)
+
 	importJobsMu.Lock()
 	importJobs[jobID] = job
 	importJobsMu.Unlock()
@@ -526,6 +528,8 @@ func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
 
 // processImportJob processes the import file in background
 func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool, delimiter string) {
+	log.Printf("processImportJob STARTED: jobID=%s, listID=%s, filePath=%s", jobID, listID, filePath)
+
 	// Recover from panics
 	defer func() {
 		if r := recover(); r != nil {
@@ -541,6 +545,12 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 
 	importJobsMu.Lock()
 	job := importJobs[jobID]
+	// Verify ListID in job matches what we received
+	log.Printf("processImportJob: job.ListID from map = %s, received listID = %s", job.ListID, listID)
+	if job.ListID != listID {
+		log.Printf("WARNING: ListID mismatch! job.ListID=%s != listID=%s. Correcting...", job.ListID, listID)
+		job.ListID = listID
+	}
 	job.Status = "processing"
 	importJobsMu.Unlock()
 
@@ -624,7 +634,7 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 		return
 	}
 
-	stmt, err := tx.Prepare(`INSERT INTO emails (id, list_id, email, name, valid) VALUES ($1, $2, $3, $4, true)`)
+	stmt, err := tx.Prepare(`INSERT INTO emails (id, list_id, email, name, valid) VALUES ($1, $2, $3, $4, true) ON CONFLICT (list_id, email) DO NOTHING`)
 	if err != nil {
 		tx.Rollback()
 		importJobsMu.Lock()
