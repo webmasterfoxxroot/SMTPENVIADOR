@@ -534,6 +534,7 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 	defer func() {
 		// Clean up file after processing
 		os.Remove(filePath)
+		log.Printf("Import job %s: cleaned up file %s", jobID, filePath)
 	}()
 
 	// Open file
@@ -547,25 +548,45 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 	}
 	defer f.Close()
 
-	// Get existing emails for duplicate check
+	log.Printf("Import job %s: loading existing emails for list %s", jobID, listID)
+
+	// Get existing emails for duplicate check - use a simpler query that's faster
 	existingEmails := make(map[string]bool)
-	rows, _ := s.db.Query(`SELECT email FROM emails WHERE list_id = $1`, listID)
-	for rows.Next() {
-		var email string
-		rows.Scan(&email)
-		existingEmails[strings.ToLower(email)] = true
+	rows, err := s.db.Query(`SELECT email FROM emails WHERE list_id = $1`, listID)
+	if err != nil {
+		log.Printf("Import job %s: error querying existing emails: %v", jobID, err)
+	} else {
+		count := 0
+		for rows.Next() {
+			var email string
+			rows.Scan(&email)
+			existingEmails[strings.ToLower(email)] = true
+			count++
+		}
+		rows.Close()
+		log.Printf("Import job %s: loaded %d existing emails", jobID, count)
 	}
-	rows.Close()
+
+	log.Printf("Import job %s: loading blacklist", jobID)
 
 	// Get blacklist
 	blacklisted := make(map[string]bool)
-	blRows, _ := s.db.Query(`SELECT email FROM blacklist`)
-	for blRows.Next() {
-		var email string
-		blRows.Scan(&email)
-		blacklisted[strings.ToLower(email)] = true
+	blRows, err := s.db.Query(`SELECT email FROM blacklist`)
+	if err != nil {
+		log.Printf("Import job %s: error querying blacklist: %v", jobID, err)
+	} else {
+		count := 0
+		for blRows.Next() {
+			var email string
+			blRows.Scan(&email)
+			blacklisted[strings.ToLower(email)] = true
+			count++
+		}
+		blRows.Close()
+		log.Printf("Import job %s: loaded %d blacklisted emails", jobID, count)
 	}
-	blRows.Close()
+
+	log.Printf("Import job %s: starting file processing", jobID)
 
 	// Process file
 	scanner := bufio.NewScanner(f)
