@@ -4,11 +4,32 @@ import (
 	"database/sql"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 )
+
+// getSettingValue returns a setting value by key with a default fallback
+func (s *Server) getSettingValue(key string, defaultValue string) string {
+	var value string
+	err := s.db.QueryRow(`SELECT value FROM settings WHERE key = $1`, key).Scan(&value)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
+// getMaxUploadSizeMB returns the max upload size in MB
+func (s *Server) getMaxUploadSizeMB() int64 {
+	value := s.getSettingValue("max_upload_size_mb", "500")
+	size, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 500
+	}
+	return size
+}
 
 // Setting represents a system setting
 type Setting struct {

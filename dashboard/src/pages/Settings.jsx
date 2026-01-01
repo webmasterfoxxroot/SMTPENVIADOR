@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings as SettingsIcon, Save, RefreshCw, Globe, RotateCcw, AlertCircle, Server, Power } from 'lucide-react'
+import { Settings as SettingsIcon, Save, RefreshCw, Globe, RotateCcw, AlertCircle, Server, Power, Upload } from 'lucide-react'
 import api from '../services/api'
 import toast from 'react-hot-toast'
 
@@ -191,6 +191,49 @@ function Settings() {
             <p className="text-gray-500 text-xs mt-1">
               Segundos entre tentativas (10-3600)
             </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Upload Settings */}
+      <div className="card">
+        <div className="flex items-center gap-2 mb-4">
+          <Upload className="w-5 h-5 text-purple-500" />
+          <h2 className="text-lg font-semibold">Configuracoes de Upload</h2>
+        </div>
+        <p className="text-gray-400 text-sm mb-4">
+          Configure o tamanho maximo permitido para upload de listas de emails.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              Tamanho Maximo de Upload (MB)
+            </label>
+            <input
+              type="number"
+              value={settings.max_upload_size_mb || '500'}
+              onChange={(e) => handleChange('max_upload_size_mb', e.target.value)}
+              min="10"
+              max="2000"
+              className="input w-full"
+            />
+            <p className="text-gray-500 text-xs mt-1">
+              Maximo em megabytes (10-2000 MB)
+            </p>
+          </div>
+          <div className="flex items-center">
+            <div className="bg-gray-700 rounded-lg p-4 w-full">
+              <p className="text-gray-300 text-sm">
+                <span className="font-semibold text-purple-400">{settings.max_upload_size_mb || '500'} MB</span> = aproximadamente{' '}
+                <span className="font-semibold text-green-400">
+                  {Math.round((settings.max_upload_size_mb || 500) / 0.00003).toLocaleString()}
+                </span>{' '}
+                emails
+              </p>
+              <p className="text-gray-500 text-xs mt-1">
+                Estimativa baseada em ~30 bytes por email
+              </p>
+            </div>
           </div>
         </div>
       </div>

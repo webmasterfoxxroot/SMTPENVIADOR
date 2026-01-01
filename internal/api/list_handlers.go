@@ -176,20 +176,43 @@ func (s *Server) updateEmailList(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Email list updated"})
 }
 
-// deleteEmailList deletes an email list
+// deleteEmailList deletes an email list and all its emails
 func (s *Server) deleteEmailList(c *fiber.Ctx) error {
 	id := c.Params("id")
 
-	result, err := s.db.Exec(`DELETE FROM email_lists WHERE id = $1`, id)
+	// Start transaction
+	tx, err := s.db.Begin()
 	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to start transaction"})
+	}
+
+	// First delete all emails in this list
+	_, err = tx.Exec(`DELETE FROM emails WHERE list_id = $1`, id)
+	if err != nil {
+		tx.Rollback()
+		log.Printf("Failed to delete emails for list %s: %v", id, err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete emails"})
+	}
+
+	// Then delete the list
+	result, err := tx.Exec(`DELETE FROM email_lists WHERE id = $1`, id)
+	if err != nil {
+		tx.Rollback()
+		log.Printf("Failed to delete list %s: %v", id, err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete email list"})
 	}
 
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
+		tx.Rollback()
 		return c.Status(404).JSON(fiber.Map{"error": "Email list not found"})
 	}
 
+	if err := tx.Commit(); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to commit deletion"})
+	}
+
+	log.Printf("Deleted email list %s with all its emails", id)
 	return c.JSON(fiber.Map{"message": "Email list deleted"})
 }
 
@@ -414,6 +437,15 @@ func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
 	file, err := c.FormFile("file")
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Nenhum arquivo enviado"})
+	}
+
+	// Check file size against configured limit
+	maxSizeMB := s.getMaxUploadSizeMB()
+	maxSizeBytes := maxSizeMB * 1024 * 1024
+	if file.Size > maxSizeBytes {
+		return c.Status(413).JSON(fiber.Map{
+			"error": fmt.Sprintf("Arquivo muito grande. Maximo permitido: %d MB. Seu arquivo: %d MB", maxSizeMB, file.Size/(1024*1024)),
+		})
 	}
 
 	// Get options
