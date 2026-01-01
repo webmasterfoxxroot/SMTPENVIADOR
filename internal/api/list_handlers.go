@@ -371,7 +371,7 @@ func (s *Server) uploadEmails(c *fiber.Ctx) error {
 					log.Printf("Failed to begin new transaction: %v", err)
 					break
 				}
-				stmt, err = tx.Prepare(`INSERT INTO emails (id, list_id, email, name, valid) VALUES ($1, $2, $3, $4, true)`)
+				stmt, err = tx.Prepare(`INSERT INTO emails (id, list_id, email, name, valid) VALUES ($1, $2, $3, $4, true) ON CONFLICT (list_id, email) DO NOTHING`)
 				if err != nil {
 					tx.Rollback()
 					log.Printf("Failed to prepare statement: %v", err)
@@ -710,7 +710,7 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 						log.Printf("Import job %s: failed to begin new transaction: %v", jobID, err)
 						break
 					}
-					stmt, err = tx.Prepare(`INSERT INTO emails (id, list_id, email, name, valid) VALUES ($1, $2, $3, $4, true)`)
+					stmt, err = tx.Prepare(`INSERT INTO emails (id, list_id, email, name, valid) VALUES ($1, $2, $3, $4, true) ON CONFLICT (list_id, email) DO NOTHING`)
 					if err != nil {
 						tx.Rollback()
 						log.Printf("Import job %s: failed to prepare statement: %v", jobID, err)
