@@ -496,27 +496,35 @@ func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
 		lineCount--
 	}
 
+	// Copy listID to avoid potential memory reference issues
+	listIDCopy := string([]byte(listID))
+
+	log.Printf("uploadEmailsAsync: listID from params = '%s', listIDCopy = '%s'", listID, listIDCopy)
+
 	// Create import job
 	job := &ImportJob{
 		ID:         jobID,
-		ListID:     listID,
+		ListID:     listIDCopy,
 		FileName:   file.Filename,
 		Status:     "pending",
 		TotalLines: lineCount,
 		StartedAt:  time.Now(),
 	}
 
-	log.Printf("Creating import job: ID=%s, ListID=%s, FileName=%s, TotalLines=%d", jobID, listID, file.Filename, lineCount)
+	log.Printf("Creating import job: ID=%s, ListID=%s, FileName=%s, TotalLines=%d", jobID, job.ListID, file.Filename, lineCount)
 
 	importJobsMu.Lock()
 	importJobs[jobID] = job
+	// Verify immediately after adding to map
+	verifyJob := importJobs[jobID]
+	log.Printf("Verify job in map: ID=%s, ListID=%s", verifyJob.ID, verifyJob.ListID)
 	importJobsMu.Unlock()
 
 	// Update list status
-	s.db.Exec(`UPDATE email_lists SET status = 'importing' WHERE id = $1`, listID)
+	s.db.Exec(`UPDATE email_lists SET status = 'importing' WHERE id = $1`, listIDCopy)
 
-	// Start background processing
-	go s.processImportJob(jobID, savedPath, listID, hasHeader, delimiter)
+	// Start background processing - pass the copy
+	go s.processImportJob(jobID, savedPath, listIDCopy, hasHeader, delimiter)
 
 	return c.JSON(fiber.Map{
 		"message":     "Upload iniciado",
