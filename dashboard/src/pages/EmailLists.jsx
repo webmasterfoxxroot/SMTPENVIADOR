@@ -312,7 +312,7 @@ function EmailLists() {
   const pollIntervals = useRef({})
 
   useEffect(() => {
-    fetchLists()
+    fetchListsAndCheckJobs()
     return () => {
       // Cleanup all poll intervals
       Object.values(pollIntervals.current).forEach(clearInterval)
@@ -323,10 +323,49 @@ function EmailLists() {
     try {
       const response = await api.get('/lists')
       setLists(response.data.data || [])
+      return response.data.data || []
     } catch (error) {
       toast.error('Erro ao carregar listas')
+      return []
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Check for active import jobs on page load
+  const fetchListsAndCheckJobs = async () => {
+    const listsData = await fetchLists()
+
+    // Check each list for active import jobs
+    for (const list of listsData) {
+      try {
+        const response = await api.get(`/lists/${list.id}/import-jobs`)
+        const jobs = response.data?.jobs || []
+
+        // Find active job (pending or processing)
+        const activeJob = jobs.find(j => j.status === 'pending' || j.status === 'processing')
+
+        if (activeJob) {
+          console.log(`Found active job for list ${list.id}:`, activeJob)
+          // Restore job state and start polling
+          setImportJobs(prev => ({
+            ...prev,
+            [list.id]: {
+              status: activeJob.status,
+              progress: activeJob.progress || 0,
+              processed: activeJob.processed || 0,
+              total_lines: activeJob.total_lines || 0,
+              valid: activeJob.valid || 0,
+              invalid: activeJob.invalid || 0,
+              duplicates: activeJob.duplicates || 0
+            }
+          }))
+          startJobPolling(list.id, activeJob.id)
+        }
+      } catch (error) {
+        // Ignore errors for individual list job checks
+        console.log(`No active jobs for list ${list.id}:`, error.message)
+      }
     }
   }
 

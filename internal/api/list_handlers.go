@@ -600,6 +600,8 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 		return
 	}
 
+	log.Printf("Import job %s: starting processing, total lines: %d", jobID, job.TotalLines)
+
 	for scanner.Scan() {
 		lineNum++
 
@@ -610,6 +612,12 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
+			// Update progress even for empty lines
+			if lineNum%1000 == 0 {
+				importJobsMu.Lock()
+				job.Processed = lineNum
+				importJobsMu.Unlock()
+			}
 			continue
 		}
 
@@ -630,6 +638,15 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 		email = strings.ToLower(email)
 		if !emailRegex.MatchString(email) {
 			invalidCount++
+			// Update progress frequently
+			if lineNum%1000 == 0 {
+				importJobsMu.Lock()
+				job.Processed = lineNum
+				job.Valid = validCount
+				job.Invalid = invalidCount
+				job.Duplicates = duplicateCount
+				importJobsMu.Unlock()
+			}
 			continue
 		}
 
@@ -654,18 +671,22 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 			existingEmails[email] = true
 			batchCount++
 
-			// Commit every batchSize
-			if batchCount >= batchSize {
-				stmt.Close()
-				tx.Commit()
-
-				// Update job progress
+			// Update progress every 1000 lines
+			if lineNum%1000 == 0 {
 				importJobsMu.Lock()
 				job.Processed = lineNum
 				job.Valid = validCount
 				job.Invalid = invalidCount
 				job.Duplicates = duplicateCount
 				importJobsMu.Unlock()
+			}
+
+			// Commit every batchSize
+			if batchCount >= batchSize {
+				stmt.Close()
+				tx.Commit()
+
+				log.Printf("Import job %s: committed batch, processed %d, valid %d", jobID, lineNum, validCount)
 
 				// Start new transaction
 				tx, err = s.db.Begin()
@@ -680,10 +701,6 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 					break
 				}
 				batchCount = 0
-
-				if validCount%50000 == 0 {
-					log.Printf("Import job %s: processed %d, valid %d", jobID, lineNum, validCount)
-				}
 			}
 		} else {
 			invalidCount++
@@ -757,11 +774,29 @@ func (s *Server) getListImportJobs(c *fiber.Ctx) error {
 	importJobsMu.RLock()
 	defer importJobsMu.RUnlock()
 
-	var jobs []*ImportJob
+	var jobs []fiber.Map
 	for _, job := range importJobs {
 		if job.ListID == listID && (job.Status == "pending" || job.Status == "processing") {
-			jobs = append(jobs, job)
+			progress := 0
+			if job.TotalLines > 0 {
+				progress = (job.Processed * 100) / job.TotalLines
+			}
+			jobs = append(jobs, fiber.Map{
+				"id":          job.ID,
+				"status":      job.Status,
+				"file_name":   job.FileName,
+				"total_lines": job.TotalLines,
+				"processed":   job.Processed,
+				"progress":    progress,
+				"valid":       job.Valid,
+				"invalid":     job.Invalid,
+				"duplicates":  job.Duplicates,
+			})
 		}
+	}
+
+	if jobs == nil {
+		jobs = []fiber.Map{}
 	}
 
 	return c.JSON(fiber.Map{"jobs": jobs})
