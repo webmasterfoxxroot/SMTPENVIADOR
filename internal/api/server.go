@@ -31,7 +31,7 @@ func NewServer(cfg *config.Config, db *sql.DB, q *queue.Manager, eng *engine.Eng
 		AppName:      "SMTPENVIADOR API",
 		ReadTimeout:  10 * time.Minute, // 10 min for large file uploads
 		WriteTimeout: 10 * time.Minute, // 10 min for large file uploads
-		BodyLimit:    100 * 1024 * 1024, // 100MB for list uploads
+		BodyLimit:    500 * 1024 * 1024, // 500MB for list uploads
 	})
 
 	server := &Server{
