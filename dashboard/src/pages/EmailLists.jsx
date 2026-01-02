@@ -193,7 +193,7 @@ function ListModal({ list, onClose, onSave }) {
 }
 
 // List Card with import progress
-function ListCard({ list, importJob, onEdit, onDelete, onUpload }) {
+function ListCard({ list, importJob, onEdit, onDelete, onUpload, onCancelImport }) {
   const isImporting = importJob && (importJob.status === 'pending' || importJob.status === 'processing')
   const importCompleted = importJob && importJob.status === 'completed'
 
@@ -229,7 +229,16 @@ function ListCard({ list, importJob, onEdit, onDelete, onUpload }) {
         <div className="mb-4 p-3 bg-blue-50 rounded-lg">
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm font-medium text-blue-800">Importando...</span>
-            <span className="text-sm text-blue-600">{importJob.progress || 0}%</span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-blue-600">{importJob.progress || 0}%</span>
+              <button
+                onClick={() => onCancelImport(importJob.id)}
+                className="p-1 text-red-500 hover:bg-red-100 rounded"
+                title="Cancelar importação"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
           <div className="w-full h-2 bg-blue-200 rounded-full overflow-hidden">
             <div
@@ -392,6 +401,32 @@ function EmailLists() {
     }
   }
 
+  const cancelImport = async (listId, jobId) => {
+    if (!confirm('Tem certeza que deseja cancelar a importacao?')) return
+
+    try {
+      await api.post(`/import-cancel/${jobId}`)
+      toast.success('Importacao cancelada')
+
+      // Stop polling
+      if (pollIntervals.current[listId]) {
+        clearInterval(pollIntervals.current[listId])
+        delete pollIntervals.current[listId]
+      }
+
+      // Remove from importJobs
+      setImportJobs(prev => {
+        const newJobs = { ...prev }
+        delete newJobs[listId]
+        return newJobs
+      })
+
+      fetchLists()
+    } catch (error) {
+      toast.error('Erro ao cancelar importacao')
+    }
+  }
+
   const startJobPolling = (listId, jobId) => {
     // Clear any existing poll for this list
     if (pollIntervals.current[listId]) {
@@ -479,6 +514,7 @@ function EmailLists() {
               onEdit={() => setModal({ open: true, list })}
               onDelete={() => deleteList(list.id)}
               onUpload={() => setUploadModal({ open: true, listId: list.id })}
+              onCancelImport={(jobId) => cancelImport(list.id, jobId)}
             />
           ))
         )}

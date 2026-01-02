@@ -671,6 +671,13 @@ func (s *Server) processImportJobDB(jobID string) {
 			processed, valid, invalid, duplicates, jobID)
 	}
 
+	// Helper to check if job was cancelled
+	isJobCancelled := func() bool {
+		var status string
+		err := s.db.QueryRow(`SELECT status FROM import_jobs WHERE id = $1`, jobID).Scan(&status)
+		return err != nil || status == "cancelled"
+	}
+
 	// Recover from panics
 	defer func() {
 		if r := recover(); r != nil {
@@ -886,6 +893,16 @@ func (s *Server) processImportJobDB(jobID string) {
 			updateJobProgress(lineNum, validCount, invalidCount, duplicateCount)
 			lastProgressUpdate = time.Now()
 
+			// Check if job was cancelled by user
+			if isJobCancelled() {
+				log.Printf("Import job %s: CANCELLED by user at line %d", jobID, lineNum)
+				stmt.Close()
+				tx.Rollback()
+				// Reset list status
+				s.db.Exec(`UPDATE email_lists SET status = 'ready' WHERE id = $1`, listID)
+				return
+			}
+
 			// Log progress every 10 seconds
 			if time.Since(lastProgressLog) > 10*time.Second {
 				log.Printf("Import job %s: progress %d/%d (%.1f%%), valid: %d, invalid: %d, dups: %d",
@@ -1043,6 +1060,45 @@ func (s *Server) getListImportJobs(c *fiber.Ctx) error {
 
 	log.Printf("getListImportJobs: returning %d active jobs for list %s", len(jobs), listID)
 	return c.JSON(fiber.Map{"jobs": jobs})
+}
+
+// cancelImportJob cancels an import job in progress
+func (s *Server) cancelImportJob(c *fiber.Ctx) error {
+	jobID := c.Params("jobId")
+
+	// Get job info
+	var status, listID, filePath string
+	err := s.db.QueryRow(`SELECT status, list_id, file_path FROM import_jobs WHERE id = $1`, jobID).Scan(&status, &listID, &filePath)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Job nao encontrado"})
+	}
+
+	// Can only cancel pending or processing jobs
+	if status != "pending" && status != "processing" {
+		return c.Status(400).JSON(fiber.Map{"error": "Job ja foi finalizado"})
+	}
+
+	log.Printf("Cancelling import job %s (status: %s)", jobID, status)
+
+	// Mark as cancelled in database - the processing goroutine will check this
+	_, err = s.db.Exec(`
+		UPDATE import_jobs SET status = 'cancelled', error_message = 'Cancelado pelo usuario', updated_at = NOW()
+		WHERE id = $1
+	`, jobID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao cancelar job"})
+	}
+
+	// Reset list status
+	s.db.Exec(`UPDATE email_lists SET status = 'ready' WHERE id = $1`, listID)
+
+	// Try to delete the uploaded file
+	if filePath != "" {
+		os.Remove(filePath)
+	}
+
+	log.Printf("Import job %s cancelled successfully", jobID)
+	return c.JSON(fiber.Map{"message": "Importacao cancelada"})
 }
 
 // getListEmails returns emails from a list
