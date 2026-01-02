@@ -984,11 +984,16 @@ func (s *Server) processImportJobDB(jobID string) {
 
 			// Flush batch when full
 			if len(batch) >= batchSize {
+				batchLen := len(batch)
 				dups, err := flushBatch()
 				if err != nil {
 					log.Printf("Import job %s: error flushing batch: %v", jobID, err)
 				}
 				duplicateCount += dups
+				inserted := batchLen - dups
+
+				// Update list email count incrementally (faster than COUNT)
+				s.db.Exec(`UPDATE email_lists SET total_emails = total_emails + $1 WHERE id = $2`, inserted, listID)
 			}
 		}
 
@@ -1016,11 +1021,14 @@ func (s *Server) processImportJobDB(jobID string) {
 	}
 
 	// Flush remaining batch
+	finalBatchLen := len(batch)
 	dups, err := flushBatch()
 	if err != nil {
 		log.Printf("Import job %s: error flushing final batch: %v", jobID, err)
 	}
 	duplicateCount += dups
+	finalInserted := finalBatchLen - dups
+	s.db.Exec(`UPDATE email_lists SET total_emails = total_emails + $1 WHERE id = $2`, finalInserted, listID)
 
 	// Check for scanner errors
 	if err := scanner.Err(); err != nil {
@@ -1031,15 +1039,14 @@ func (s *Server) processImportJobDB(jobID string) {
 
 	log.Printf("Import job %s: file processing complete, updating database...", jobID)
 
-	// Update list stats
+	// Update list stats (total_emails already updated incrementally, just set valid/invalid and status)
 	_, err = s.db.Exec(`
 		UPDATE email_lists SET
-			total_emails = total_emails + $1,
-			valid_emails = valid_emails + $2,
-			invalid_emails = invalid_emails + $3,
+			valid_emails = (SELECT COUNT(*) FROM emails WHERE list_id = $1 AND valid = true),
+			invalid_emails = $2,
 			status = 'ready'
-		WHERE id = $4
-	`, validCount+invalidCount, validCount, invalidCount, listID)
+		WHERE id = $1
+	`, listID, invalidCount)
 	if err != nil {
 		log.Printf("Import job %s: error updating list stats: %v", jobID, err)
 	}
