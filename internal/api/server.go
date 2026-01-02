@@ -226,6 +226,7 @@ func (s *Server) setupRoutes() {
 	lists.Get("/:id", s.getEmailList)
 	lists.Put("/:id", s.updateEmailList)
 	lists.Delete("/:id", s.deleteEmailList)
+	lists.Delete("/:id/force", s.forceDeleteEmailList)
 	lists.Post("/:id/upload", s.uploadEmails)
 	lists.Post("/:id/upload-async", s.uploadEmailsAsync)
 	lists.Get("/:id/import-jobs", s.getListImportJobs)
