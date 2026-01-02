@@ -732,11 +732,29 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 					batchCount = 0
 				}
 			} else {
-				// Log insert errors (might be duplicate key)
-				if lineNum < 100 || lineNum%10000 == 0 {
-					log.Printf("Import job %s: insert error at line %d: %v", jobID, lineNum, err)
-				}
+				// Transaction error - need to rollback and start fresh
 				invalidCount++
+
+				// Check if this is a transaction abort error
+				errStr := err.Error()
+				if strings.Contains(errStr, "current transaction is aborted") {
+					// Rollback and start fresh transaction
+					stmt.Close()
+					tx.Rollback()
+
+					tx, err = s.db.Begin()
+					if err != nil {
+						log.Printf("Import job %s: failed to recover transaction: %v", jobID, err)
+						break
+					}
+					stmt, err = tx.Prepare(`INSERT INTO emails (id, list_id, email, name, valid) VALUES ($1, $2, $3, $4, true) ON CONFLICT (list_id, email) DO NOTHING`)
+					if err != nil {
+						tx.Rollback()
+						log.Printf("Import job %s: failed to prepare after recovery: %v", jobID, err)
+						break
+					}
+					batchCount = 0
+				}
 			}
 		}
 
