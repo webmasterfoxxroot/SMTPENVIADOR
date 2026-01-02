@@ -914,9 +914,9 @@ func (s *Server) processImportJobDB(jobID string) {
 		}
 		stmt.Close()
 
-		// Move from temp to real table with ON CONFLICT
+		// Move from temp to real table with ON CONFLICT (cast to uuid)
 		_, err = tx.Exec(`INSERT INTO emails (id, list_id, email, name, valid)
-			SELECT id, list_id, email, name, valid FROM temp_import
+			SELECT id::uuid, list_id::uuid, email, name, valid FROM temp_import
 			ON CONFLICT (list_id, email) DO NOTHING`)
 		if err != nil {
 			tx.Rollback()
