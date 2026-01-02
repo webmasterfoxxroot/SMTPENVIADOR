@@ -210,6 +210,30 @@ CREATE TABLE settings (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Import Jobs table (persistent job tracking)
+CREATE TABLE import_jobs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    list_id UUID REFERENCES email_lists(id) ON DELETE CASCADE,
+    file_name VARCHAR(500) NOT NULL,
+    file_path VARCHAR(500),
+    status VARCHAR(50) DEFAULT 'pending', -- pending, validating, importing, completed, failed
+    total_lines INTEGER DEFAULT 0,
+    processed INTEGER DEFAULT 0,
+    valid INTEGER DEFAULT 0,
+    invalid INTEGER DEFAULT 0,
+    duplicates INTEGER DEFAULT 0,
+    error_message TEXT,
+    has_header BOOLEAN DEFAULT false,
+    delimiter VARCHAR(10) DEFAULT ',',
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_import_jobs_list_id ON import_jobs(list_id);
+CREATE INDEX idx_import_jobs_status ON import_jobs(status);
+
 -- Insert default settings
 INSERT INTO settings (key, value, description) VALUES
 ('tracking_domain', 'http://localhost', 'Domain for tracking opens and clicks'),

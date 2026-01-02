@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"database/sql"
 	"fmt"
 	"io"
 	"log"
@@ -9,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -20,28 +20,6 @@ type EmailListRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
-
-// ImportJob tracks the status of a background import
-type ImportJob struct {
-	ID           string    `json:"id"`
-	ListID       string    `json:"list_id"`
-	FileName     string    `json:"file_name"`
-	Status       string    `json:"status"` // pending, processing, completed, failed
-	TotalLines   int       `json:"total_lines"`
-	Processed    int       `json:"processed"`
-	Valid        int       `json:"valid"`
-	Invalid      int       `json:"invalid"`
-	Duplicates   int       `json:"duplicates"`
-	Error        string    `json:"error,omitempty"`
-	StartedAt    time.Time `json:"started_at"`
-	CompletedAt  time.Time `json:"completed_at,omitempty"`
-}
-
-// Import job storage (in-memory, could be moved to Redis/DB for persistence)
-var (
-	importJobs   = make(map[string]*ImportJob)
-	importJobsMu sync.RWMutex
-)
 
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
 
@@ -422,13 +400,9 @@ func (s *Server) uploadEmails(c *fiber.Ctx) error {
 }
 
 // uploadEmailsAsync handles large file uploads asynchronously
-// The file is saved to disk first, then processed in the background
+// Jobs are stored in database for persistence across page changes and restarts
 func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
-	// IMPORTANT: Create completely new string to avoid Fiber buffer reuse issues
-	// Using fmt.Sprintf forces Go to allocate a new string
-	listID := fmt.Sprintf("%s", c.Params("id"))
-
-	log.Printf("uploadEmailsAsync START: listID='%s' (len=%d)", listID, len(listID))
+	listID := c.Params("id")
 
 	// Check if list exists
 	var exists bool
@@ -453,7 +427,7 @@ func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
 	}
 
 	// Get options
-	hasHeader := c.FormValue("has_header", "true") == "true"
+	hasHeader := c.FormValue("has_header", "false") == "true"
 	delimiter := c.FormValue("delimiter", ",")
 
 	// Create uploads directory if not exists
@@ -478,10 +452,10 @@ func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Falha ao salvar arquivo"})
 	}
-	defer dst.Close()
 
 	// Copy file to disk
 	written, err := io.Copy(dst, src)
+	dst.Close()
 	if err != nil {
 		os.Remove(savedPath)
 		return c.Status(500).JSON(fiber.Map{"error": "Falha ao copiar arquivo"})
@@ -490,46 +464,37 @@ func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
 	log.Printf("File saved: %s (%d bytes)", savedPath, written)
 
 	// Count lines in file for progress tracking
-	dst.Seek(0, 0)
+	countFile, _ := os.Open(savedPath)
 	lineCount := 0
-	scanner := bufio.NewScanner(dst)
+	scanner := bufio.NewScanner(countFile)
+	buf := make([]byte, 1024*1024)
+	scanner.Buffer(buf, 1024*1024)
 	for scanner.Scan() {
 		lineCount++
 	}
+	countFile.Close()
 	if hasHeader && lineCount > 0 {
 		lineCount--
 	}
 
-	// Create ANOTHER copy of listID for the job to ensure complete isolation
-	jobListID := fmt.Sprintf("%s", listID)
-
-	// Create import job
-	job := &ImportJob{
-		ID:         jobID,
-		ListID:     jobListID,
-		FileName:   file.Filename,
-		Status:     "pending",
-		TotalLines: lineCount,
-		StartedAt:  time.Now(),
+	// Create import job in DATABASE (not in-memory!)
+	_, err = s.db.Exec(`
+		INSERT INTO import_jobs (id, list_id, file_name, file_path, status, total_lines, has_header, delimiter, started_at)
+		VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, NOW())
+	`, jobID, listID, file.Filename, savedPath, lineCount, hasHeader, delimiter)
+	if err != nil {
+		os.Remove(savedPath)
+		log.Printf("Failed to create import job: %v", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao criar job de importacao"})
 	}
 
-	log.Printf("Creating import job: ID=%s, ListID=%s (len=%d), FileName=%s, TotalLines=%d", jobID, job.ListID, len(job.ListID), file.Filename, lineCount)
-
-	importJobsMu.Lock()
-	importJobs[jobID] = job
-	// Verify immediately after adding to map
-	verifyJob := importJobs[jobID]
-	log.Printf("Verify job in map: ID=%s, ListID=%s (len=%d)", verifyJob.ID, verifyJob.ListID, len(verifyJob.ListID))
-	importJobsMu.Unlock()
+	log.Printf("Import job created in DB: ID=%s, ListID=%s, TotalLines=%d", jobID, listID, lineCount)
 
 	// Update list status
-	s.db.Exec(`UPDATE email_lists SET status = 'importing' WHERE id = $1`, jobListID)
+	s.db.Exec(`UPDATE email_lists SET status = 'importing' WHERE id = $1`, listID)
 
-	// Create ANOTHER copy for the goroutine
-	goroutineListID := fmt.Sprintf("%s", jobListID)
-
-	// Start background processing with isolated copy
-	go s.processImportJob(jobID, savedPath, goroutineListID, hasHeader, delimiter)
+	// Start background processing
+	go s.processImportJobDB(jobID)
 
 	return c.JSON(fiber.Map{
 		"message":     "Upload iniciado",
@@ -539,33 +504,52 @@ func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
 	})
 }
 
-// processImportJob processes the import file in background
-func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool, delimiter string) {
-	log.Printf("processImportJob STARTED: jobID=%s, listID=%s, filePath=%s", jobID, listID, filePath)
+// processImportJobDB processes the import file in background using database for state
+func (s *Server) processImportJobDB(jobID string) {
+	log.Printf("processImportJobDB STARTED: jobID=%s", jobID)
+
+	// Helper to update job status in database
+	updateJobStatus := func(status string, errorMsg string) {
+		if errorMsg != "" {
+			s.db.Exec(`UPDATE import_jobs SET status = $1, error_message = $2, updated_at = NOW() WHERE id = $3`,
+				status, errorMsg, jobID)
+		} else {
+			s.db.Exec(`UPDATE import_jobs SET status = $1, updated_at = NOW() WHERE id = $2`, status, jobID)
+		}
+	}
+
+	// Helper to update job progress in database
+	updateJobProgress := func(processed, valid, invalid, duplicates int) {
+		s.db.Exec(`UPDATE import_jobs SET processed = $1, valid = $2, invalid = $3, duplicates = $4, updated_at = NOW() WHERE id = $5`,
+			processed, valid, invalid, duplicates, jobID)
+	}
 
 	// Recover from panics
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("Import job %s: PANIC recovered: %v", jobID, r)
-			importJobsMu.Lock()
-			if job, ok := importJobs[jobID]; ok {
-				job.Status = "failed"
-				job.Error = fmt.Sprintf("Panic: %v", r)
-			}
-			importJobsMu.Unlock()
+			updateJobStatus("failed", fmt.Sprintf("Panic: %v", r))
 		}
 	}()
 
-	importJobsMu.Lock()
-	job := importJobs[jobID]
-	// Verify ListID in job matches what we received
-	log.Printf("processImportJob: job.ListID from map = %s, received listID = %s", job.ListID, listID)
-	if job.ListID != listID {
-		log.Printf("WARNING: ListID mismatch! job.ListID=%s != listID=%s. Correcting...", job.ListID, listID)
-		job.ListID = listID
+	// Read job details from database
+	var listID, filePath, delimiter string
+	var hasHeader bool
+	var totalLines int
+	err := s.db.QueryRow(`
+		SELECT list_id, file_path, has_header, delimiter, total_lines
+		FROM import_jobs WHERE id = $1
+	`, jobID).Scan(&listID, &filePath, &hasHeader, &delimiter, &totalLines)
+	if err != nil {
+		log.Printf("Import job %s: failed to read job from database: %v", jobID, err)
+		updateJobStatus("failed", "Job nao encontrado no banco")
+		return
 	}
-	job.Status = "processing"
-	importJobsMu.Unlock()
+
+	log.Printf("processImportJobDB: jobID=%s, listID=%s, filePath=%s, totalLines=%d", jobID, listID, filePath, totalLines)
+
+	// Update status to processing
+	updateJobStatus("processing", "")
 
 	defer func() {
 		// Clean up file after processing
@@ -576,17 +560,14 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 	// Open file
 	f, err := os.Open(filePath)
 	if err != nil {
-		importJobsMu.Lock()
-		job.Status = "failed"
-		job.Error = "Falha ao abrir arquivo: " + err.Error()
-		importJobsMu.Unlock()
+		updateJobStatus("failed", "Falha ao abrir arquivo: "+err.Error())
 		return
 	}
 	defer f.Close()
 
 	log.Printf("Import job %s: loading existing emails for list %s", jobID, listID)
 
-	// Get existing emails for duplicate check - use a simpler query that's faster
+	// Get existing emails for duplicate check
 	existingEmails := make(map[string]bool)
 	rows, err := s.db.Query(`SELECT email FROM emails WHERE list_id = $1`, listID)
 	if err != nil {
@@ -640,26 +621,21 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 
 	tx, err := s.db.Begin()
 	if err != nil {
-		importJobsMu.Lock()
-		job.Status = "failed"
-		job.Error = "Falha ao iniciar transacao"
-		importJobsMu.Unlock()
+		updateJobStatus("failed", "Falha ao iniciar transacao")
 		return
 	}
 
 	stmt, err := tx.Prepare(`INSERT INTO emails (id, list_id, email, name, valid) VALUES ($1, $2, $3, $4, true) ON CONFLICT (list_id, email) DO NOTHING`)
 	if err != nil {
 		tx.Rollback()
-		importJobsMu.Lock()
-		job.Status = "failed"
-		job.Error = "Falha ao preparar statement"
-		importJobsMu.Unlock()
+		updateJobStatus("failed", "Falha ao preparar statement")
 		return
 	}
 
-	log.Printf("Import job %s: starting processing, total lines: %d", jobID, job.TotalLines)
+	log.Printf("Import job %s: starting processing, total lines: %d", jobID, totalLines)
 
 	lastProgressLog := time.Now()
+	lastProgressUpdate := time.Now()
 
 	for scanner.Scan() {
 		lineNum++
@@ -715,7 +691,7 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 					}
 
 					log.Printf("Import job %s: committed batch, processed %d/%d, valid %d, invalid %d, dups %d",
-						jobID, lineNum, job.TotalLines, validCount, invalidCount, duplicateCount)
+						jobID, lineNum, totalLines, validCount, invalidCount, duplicateCount)
 
 					// Start new transaction
 					tx, err = s.db.Begin()
@@ -758,19 +734,15 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 			}
 		}
 
-		// Update progress every 5000 lines (regardless of valid/invalid)
-		if lineNum%5000 == 0 {
-			importJobsMu.Lock()
-			job.Processed = lineNum
-			job.Valid = validCount
-			job.Invalid = invalidCount
-			job.Duplicates = duplicateCount
-			importJobsMu.Unlock()
+		// Update progress in database every second or every 5000 lines
+		if lineNum%5000 == 0 || time.Since(lastProgressUpdate) > time.Second {
+			updateJobProgress(lineNum, validCount, invalidCount, duplicateCount)
+			lastProgressUpdate = time.Now()
 
 			// Log progress every 10 seconds
 			if time.Since(lastProgressLog) > 10*time.Second {
 				log.Printf("Import job %s: progress %d/%d (%.1f%%), valid: %d, invalid: %d, dups: %d",
-					jobID, lineNum, job.TotalLines, float64(lineNum)*100/float64(job.TotalLines),
+					jobID, lineNum, totalLines, float64(lineNum)*100/float64(totalLines),
 					validCount, invalidCount, duplicateCount)
 				lastProgressLog = time.Now()
 			}
@@ -780,10 +752,7 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 	// Check for scanner errors
 	if err := scanner.Err(); err != nil {
 		log.Printf("Import job %s: scanner error: %v", jobID, err)
-		importJobsMu.Lock()
-		job.Status = "failed"
-		job.Error = "Erro ao ler arquivo: " + err.Error()
-		importJobsMu.Unlock()
+		updateJobStatus("failed", "Erro ao ler arquivo: "+err.Error())
 		stmt.Close()
 		tx.Rollback()
 		return
@@ -810,82 +779,115 @@ func (s *Server) processImportJob(jobID, filePath, listID string, hasHeader bool
 		log.Printf("Import job %s: error updating list stats: %v", jobID, err)
 	}
 
-	// Mark job as completed
-	importJobsMu.Lock()
-	job.Status = "completed"
-	job.Processed = lineNum
-	job.Valid = validCount
-	job.Invalid = invalidCount
-	job.Duplicates = duplicateCount
-	job.CompletedAt = time.Now()
-	importJobsMu.Unlock()
+	// Mark job as completed in database
+	s.db.Exec(`
+		UPDATE import_jobs SET
+			status = 'completed',
+			processed = $1,
+			valid = $2,
+			invalid = $3,
+			duplicates = $4,
+			completed_at = NOW(),
+			updated_at = NOW()
+		WHERE id = $5
+	`, lineNum, validCount, invalidCount, duplicateCount, jobID)
 
 	log.Printf("Import job %s COMPLETED: %d lines processed, %d valid, %d invalid, %d duplicates", jobID, lineNum, validCount, invalidCount, duplicateCount)
 }
 
-// getImportStatus returns the status of an import job
+// getImportStatus returns the status of an import job from database
 func (s *Server) getImportStatus(c *fiber.Ctx) error {
 	jobID := c.Params("jobId")
 
-	importJobsMu.RLock()
-	job, exists := importJobs[jobID]
-	importJobsMu.RUnlock()
+	var status, fileName string
+	var errorMsg sql.NullString
+	var totalLines, processed, valid, invalid, duplicates int
+	var startedAt sql.NullTime
+	var completedAt sql.NullTime
 
-	if !exists {
+	err := s.db.QueryRow(`
+		SELECT status, file_name, total_lines, processed, valid, invalid, duplicates,
+		       error_message, started_at, completed_at
+		FROM import_jobs WHERE id = $1
+	`, jobID).Scan(&status, &fileName, &totalLines, &processed, &valid, &invalid, &duplicates,
+		&errorMsg, &startedAt, &completedAt)
+
+	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Job nao encontrado"})
 	}
 
 	progress := 0
-	if job.TotalLines > 0 {
-		progress = (job.Processed * 100) / job.TotalLines
+	if totalLines > 0 {
+		progress = (processed * 100) / totalLines
 	}
 
-	return c.JSON(fiber.Map{
-		"id":          job.ID,
-		"status":      job.Status,
-		"file_name":   job.FileName,
-		"total_lines": job.TotalLines,
-		"processed":   job.Processed,
+	result := fiber.Map{
+		"id":          jobID,
+		"status":      status,
+		"file_name":   fileName,
+		"total_lines": totalLines,
+		"processed":   processed,
 		"progress":    progress,
-		"valid":       job.Valid,
-		"invalid":     job.Invalid,
-		"duplicates":  job.Duplicates,
-		"error":       job.Error,
-		"started_at":  job.StartedAt,
-		"completed_at": job.CompletedAt,
-	})
+		"valid":       valid,
+		"invalid":     invalid,
+		"duplicates":  duplicates,
+	}
+
+	if errorMsg.Valid {
+		result["error"] = errorMsg.String
+	}
+	if startedAt.Valid {
+		result["started_at"] = startedAt.Time
+	}
+	if completedAt.Valid {
+		result["completed_at"] = completedAt.Time
+	}
+
+	return c.JSON(result)
 }
 
-// getListImportJobs returns active import jobs for a list
+// getListImportJobs returns active import jobs for a list from database
 func (s *Server) getListImportJobs(c *fiber.Ctx) error {
-	// Copy listID to avoid Fiber buffer issues
-	listID := fmt.Sprintf("%s", c.Params("id"))
+	listID := c.Params("id")
 
-	importJobsMu.RLock()
-	defer importJobsMu.RUnlock()
+	rows, err := s.db.Query(`
+		SELECT id, status, file_name, total_lines, processed, valid, invalid, duplicates
+		FROM import_jobs
+		WHERE list_id = $1 AND status IN ('pending', 'processing')
+		ORDER BY created_at DESC
+	`, listID)
+	if err != nil {
+		log.Printf("getListImportJobs: error querying: %v", err)
+		return c.JSON(fiber.Map{"jobs": []fiber.Map{}})
+	}
+	defer rows.Close()
 
 	var jobs []fiber.Map
-	for _, job := range importJobs {
-		// Also copy job.ListID for safe comparison
-		jobListID := fmt.Sprintf("%s", job.ListID)
-		log.Printf("getListImportJobs: checking job %s for list %s, job.ListID=%s (len=%d), job.Status=%s", job.ID, listID, jobListID, len(jobListID), job.Status)
-		if jobListID == listID && (job.Status == "pending" || job.Status == "processing") {
-			progress := 0
-			if job.TotalLines > 0 {
-				progress = (job.Processed * 100) / job.TotalLines
-			}
-			jobs = append(jobs, fiber.Map{
-				"id":          job.ID,
-				"status":      job.Status,
-				"file_name":   job.FileName,
-				"total_lines": job.TotalLines,
-				"processed":   job.Processed,
-				"progress":    progress,
-				"valid":       job.Valid,
-				"invalid":     job.Invalid,
-				"duplicates":  job.Duplicates,
-			})
+	for rows.Next() {
+		var jobID, status, fileName string
+		var totalLines, processed, valid, invalid, duplicates int
+
+		err := rows.Scan(&jobID, &status, &fileName, &totalLines, &processed, &valid, &invalid, &duplicates)
+		if err != nil {
+			continue
 		}
+
+		progress := 0
+		if totalLines > 0 {
+			progress = (processed * 100) / totalLines
+		}
+
+		jobs = append(jobs, fiber.Map{
+			"id":          jobID,
+			"status":      status,
+			"file_name":   fileName,
+			"total_lines": totalLines,
+			"processed":   processed,
+			"progress":    progress,
+			"valid":       valid,
+			"invalid":     invalid,
+			"duplicates":  duplicates,
+		})
 	}
 
 	if jobs == nil {
