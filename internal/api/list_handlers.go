@@ -66,42 +66,78 @@ func (s *Server) resumeOrphanedImportJobs() {
 
 	if len(jobsToResume) == 0 {
 		log.Println("[ImportRecovery] No orphaned jobs found")
+	} else {
+		log.Printf("[ImportRecovery] Found %d orphaned jobs to check", len(jobsToResume))
+
+		for _, job := range jobsToResume {
+			// Check if file still exists
+			if _, err := os.Stat(job.FilePath); os.IsNotExist(err) {
+				// File was deleted, mark job as failed
+				log.Printf("[ImportRecovery] Job %s: file not found, marking as failed", job.ID)
+				s.db.Exec(`
+					UPDATE import_jobs SET status = 'failed', error_message = 'Arquivo nao encontrado apos reinicio', updated_at = NOW()
+					WHERE id = $1
+				`, job.ID)
+				// Reset list status
+				s.db.Exec(`UPDATE email_lists SET status = 'ready' WHERE id = $1`, job.ListID)
+				continue
+			}
+
+			// File exists, resume the job
+			log.Printf("[ImportRecovery] Resuming job %s for list %s", job.ID, job.ListID)
+
+			// Reset job progress to start fresh (safer than trying to resume from middle)
+			s.db.Exec(`
+				UPDATE import_jobs SET status = 'pending', processed = 0, valid = 0, invalid = 0, duplicates = 0, updated_at = NOW()
+				WHERE id = $1
+			`, job.ID)
+
+			// Start processing in background
+			go s.processImportJobDB(job.ID)
+
+			// Small delay between resuming multiple jobs
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		log.Printf("[ImportRecovery] Resumed %d import jobs", len(jobsToResume))
+	}
+
+	// Also check for lists stuck in "deleting" status
+	s.resumeOrphanedDeletions()
+}
+
+// resumeOrphanedDeletions checks for lists stuck in "deleting" status and resumes deletion
+func (s *Server) resumeOrphanedDeletions() {
+	log.Println("[DeleteRecovery] Checking for lists stuck in deleting status...")
+
+	rows, err := s.db.Query(`SELECT id FROM email_lists WHERE status = 'deleting'`)
+	if err != nil {
+		log.Printf("[DeleteRecovery] Error querying: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	var listsToDelete []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		listsToDelete = append(listsToDelete, id)
+	}
+
+	if len(listsToDelete) == 0 {
+		log.Println("[DeleteRecovery] No stuck deletions found")
 		return
 	}
 
-	log.Printf("[ImportRecovery] Found %d orphaned jobs to check", len(jobsToResume))
+	log.Printf("[DeleteRecovery] Found %d lists stuck in deleting, resuming...", len(listsToDelete))
 
-	for _, job := range jobsToResume {
-		// Check if file still exists
-		if _, err := os.Stat(job.FilePath); os.IsNotExist(err) {
-			// File was deleted, mark job as failed
-			log.Printf("[ImportRecovery] Job %s: file not found, marking as failed", job.ID)
-			s.db.Exec(`
-				UPDATE import_jobs SET status = 'failed', error_message = 'Arquivo nao encontrado apos reinicio', updated_at = NOW()
-				WHERE id = $1
-			`, job.ID)
-			// Reset list status
-			s.db.Exec(`UPDATE email_lists SET status = 'ready' WHERE id = $1`, job.ListID)
-			continue
-		}
-
-		// File exists, resume the job
-		log.Printf("[ImportRecovery] Resuming job %s for list %s", job.ID, job.ListID)
-
-		// Reset job progress to start fresh (safer than trying to resume from middle)
-		s.db.Exec(`
-			UPDATE import_jobs SET status = 'pending', processed = 0, valid = 0, invalid = 0, duplicates = 0, updated_at = NOW()
-			WHERE id = $1
-		`, job.ID)
-
-		// Start processing in background
-		go s.processImportJobDB(job.ID)
-
-		// Small delay between resuming multiple jobs
+	for _, listID := range listsToDelete {
+		log.Printf("[DeleteRecovery] Resuming deletion for list %s", listID)
+		go s.deleteListInBatches(listID)
 		time.Sleep(500 * time.Millisecond)
 	}
-
-	log.Printf("[ImportRecovery] Resumed %d import jobs", len(jobsToResume))
 }
 
 // listEmailLists returns all email lists
