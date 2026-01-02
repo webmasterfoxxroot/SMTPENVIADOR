@@ -748,6 +748,17 @@ func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
 	})
 }
 
+// processImportJobsSequentially processes import jobs one after another
+func (s *Server) processImportJobsSequentially(jobIDs []string) {
+	log.Printf("processImportJobsSequentially: starting %d jobs", len(jobIDs))
+	for i, jobID := range jobIDs {
+		log.Printf("processImportJobsSequentially: processing job %d/%d: %s", i+1, len(jobIDs), jobID)
+		s.processImportJobDB(jobID)
+		log.Printf("processImportJobsSequentially: finished job %d/%d: %s", i+1, len(jobIDs), jobID)
+	}
+	log.Printf("processImportJobsSequentially: all %d jobs completed", len(jobIDs))
+}
+
 // processImportJobDB processes the import file in background using database for state
 // OPTIMIZED: Uses batch INSERT for much faster import (10-50x faster)
 func (s *Server) processImportJobDB(jobID string) {
@@ -1305,8 +1316,10 @@ func (s *Server) uploadEmailsSplit(c *fiber.Ctx) error {
 
 	// Create lists and split file
 	type jobInfo struct {
-		ListID string `json:"list_id"`
-		JobID  string `json:"job_id"`
+		ListID   string `json:"list_id"`
+		JobID    string `json:"job_id"`
+		FilePath string `json:"-"`
+		Lines    int    `json:"-"`
 	}
 	jobs := make([]jobInfo, 0, numParts)
 
@@ -1342,20 +1355,16 @@ func (s *Server) uploadEmailsSplit(c *fiber.Ctx) error {
 
 		// Start new part if needed
 		if currentFile == nil || currentPartLines >= linesPerPart {
-			// Close previous file
+			// Close previous file and save info for later job creation
 			if currentFile != nil {
 				currentFile.Close()
-
-				// Create import job for previous part
-				jobID := uuid.New().String()
-				_, err = s.db.Exec(`
-					INSERT INTO import_jobs (id, list_id, status, file_path, has_header, delimiter, total_lines, processed, valid, invalid, duplicates)
-					VALUES ($1, $2, 'pending', $3, $4, $5, $6, 0, 0, 0, 0)
-				`, jobID, currentListID, currentPath, false, delimiter, currentPartLines)
-				if err == nil {
-					jobs = append(jobs, jobInfo{ListID: currentListID, JobID: jobID})
-					go s.processImportJobDB(jobID)
-				}
+				// Save job info for later
+				jobs = append(jobs, jobInfo{
+					ListID:   currentListID,
+					FilePath: currentPath,
+					Lines:    currentPartLines,
+				})
+				log.Printf("Split upload: finished part %d with %d lines", currentPart, currentPartLines)
 			}
 
 			currentPart++
@@ -1368,7 +1377,7 @@ func (s *Server) uploadEmailsSplit(c *fiber.Ctx) error {
 			currentListID = uuid.New().String()
 			_, err = s.db.Exec(`
 				INSERT INTO email_lists (id, name, description, total_emails, valid_emails, invalid_emails, status)
-				VALUES ($1, $2, $3, 0, 0, 0, 'importing')
+				VALUES ($1, $2, $3, 0, 0, 0, 'pending')
 			`, currentListID, listName, fmt.Sprintf("Parte %d de %d", currentPart, numParts))
 			if err != nil {
 				log.Printf("Failed to create list %s: %v", listName, err)
@@ -1399,27 +1408,51 @@ func (s *Server) uploadEmailsSplit(c *fiber.Ctx) error {
 		}
 	}
 
-	// Close and process last part
+	// Close last part
 	if currentFile != nil {
 		currentFile.Close()
-
-		jobID := uuid.New().String()
-		_, err = s.db.Exec(`
-			INSERT INTO import_jobs (id, list_id, status, file_path, has_header, delimiter, total_lines, processed, valid, invalid, duplicates)
-			VALUES ($1, $2, 'pending', $3, $4, $5, $6, 0, 0, 0, 0)
-		`, jobID, currentListID, currentPath, false, delimiter, currentPartLines)
-		if err == nil {
-			jobs = append(jobs, jobInfo{ListID: currentListID, JobID: jobID})
-			go s.processImportJobDB(jobID)
-		}
+		jobs = append(jobs, jobInfo{
+			ListID:   currentListID,
+			FilePath: currentPath,
+			Lines:    currentPartLines,
+		})
+		log.Printf("Split upload: finished part %d with %d lines", currentPart, currentPartLines)
 	}
 
 	// Delete main file
 	os.Remove(savedPath)
 
-	log.Printf("Split upload complete: created %d lists/jobs", len(jobs))
+	log.Printf("Split upload: creating %d import jobs...", len(jobs))
+
+	// Create all import jobs and collect job IDs
+	var jobIDs []string
+	for i, job := range jobs {
+		jobID := uuid.New().String()
+		_, err = s.db.Exec(`
+			INSERT INTO import_jobs (id, list_id, status, file_path, has_header, delimiter, total_lines, processed, valid, invalid, duplicates)
+			VALUES ($1, $2, 'pending', $3, $4, $5, $6, 0, 0, 0, 0)
+		`, jobID, job.ListID, job.FilePath, false, delimiter, job.Lines)
+		if err != nil {
+			log.Printf("Failed to create import job for part %d: %v", i+1, err)
+			// Mark list as failed
+			s.db.Exec(`UPDATE email_lists SET status = 'failed' WHERE id = $1`, job.ListID)
+			continue
+		}
+		job.JobID = jobID
+		jobs[i] = job
+		jobIDs = append(jobIDs, jobID)
+		log.Printf("Split upload: created job %s for list %s", jobID, job.ListID)
+	}
+
+	log.Printf("Split upload complete: created %d import jobs", len(jobIDs))
+
+	// Start processing jobs sequentially in background
+	if len(jobIDs) > 0 {
+		go s.processImportJobsSequentially(jobIDs)
+	}
+
 	return c.JSON(fiber.Map{
-		"message": fmt.Sprintf("%d listas criadas", len(jobs)),
+		"message": fmt.Sprintf("%d listas criadas", len(jobIDs)),
 		"jobs":    jobs,
 	})
 }
