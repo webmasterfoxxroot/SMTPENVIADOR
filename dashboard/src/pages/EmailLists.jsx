@@ -237,9 +237,17 @@ function ListCard({ list, importJob, onEdit, onDelete, onUpload }) {
               style={{ width: `${importJob.progress || 0}%` }}
             />
           </div>
-          <div className="flex justify-between mt-2 text-xs text-blue-600">
-            <span>{(importJob.processed || 0).toLocaleString()} / {(importJob.total_lines || 0).toLocaleString()}</span>
-            <span className="text-green-600">+{(importJob.valid || 0).toLocaleString()} validos</span>
+          <div className="flex justify-between mt-2 text-xs">
+            <span className="text-blue-600">{(importJob.processed || 0).toLocaleString()} / {(importJob.total_lines || 0).toLocaleString()}</span>
+            <div className="flex gap-3">
+              <span className="text-green-600">+{(importJob.valid || 0).toLocaleString()} válidos</span>
+              {importJob.invalid > 0 && (
+                <span className="text-red-500">{(importJob.invalid || 0).toLocaleString()} inválidos</span>
+              )}
+              {importJob.duplicates > 0 && (
+                <span className="text-yellow-600">{(importJob.duplicates || 0).toLocaleString()} duplicados</span>
+              )}
+            </div>
           </div>
         </div>
       )}
