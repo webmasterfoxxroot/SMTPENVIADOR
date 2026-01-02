@@ -23,6 +23,87 @@ type EmailListRequest struct {
 
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
 
+// resumeOrphanedImportJobs checks for import jobs that were interrupted by server restart
+// and resumes them automatically
+func (s *Server) resumeOrphanedImportJobs() {
+	// Wait a bit for server to fully start
+	time.Sleep(3 * time.Second)
+
+	log.Println("[ImportRecovery] Checking for orphaned import jobs...")
+
+	// Find jobs that were processing or pending when server stopped
+	rows, err := s.db.Query(`
+		SELECT id, list_id, file_path, status
+		FROM import_jobs
+		WHERE status IN ('pending', 'processing')
+		ORDER BY created_at ASC
+	`)
+	if err != nil {
+		log.Printf("[ImportRecovery] Error querying jobs: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	var jobsToResume []struct {
+		ID       string
+		ListID   string
+		FilePath string
+		Status   string
+	}
+
+	for rows.Next() {
+		var job struct {
+			ID       string
+			ListID   string
+			FilePath string
+			Status   string
+		}
+		if err := rows.Scan(&job.ID, &job.ListID, &job.FilePath, &job.Status); err != nil {
+			continue
+		}
+		jobsToResume = append(jobsToResume, job)
+	}
+
+	if len(jobsToResume) == 0 {
+		log.Println("[ImportRecovery] No orphaned jobs found")
+		return
+	}
+
+	log.Printf("[ImportRecovery] Found %d orphaned jobs to check", len(jobsToResume))
+
+	for _, job := range jobsToResume {
+		// Check if file still exists
+		if _, err := os.Stat(job.FilePath); os.IsNotExist(err) {
+			// File was deleted, mark job as failed
+			log.Printf("[ImportRecovery] Job %s: file not found, marking as failed", job.ID)
+			s.db.Exec(`
+				UPDATE import_jobs SET status = 'failed', error_message = 'Arquivo nao encontrado apos reinicio', updated_at = NOW()
+				WHERE id = $1
+			`, job.ID)
+			// Reset list status
+			s.db.Exec(`UPDATE email_lists SET status = 'ready' WHERE id = $1`, job.ListID)
+			continue
+		}
+
+		// File exists, resume the job
+		log.Printf("[ImportRecovery] Resuming job %s for list %s", job.ID, job.ListID)
+
+		// Reset job progress to start fresh (safer than trying to resume from middle)
+		s.db.Exec(`
+			UPDATE import_jobs SET status = 'pending', processed = 0, valid = 0, invalid = 0, duplicates = 0, updated_at = NOW()
+			WHERE id = $1
+		`, job.ID)
+
+		// Start processing in background
+		go s.processImportJobDB(job.ID)
+
+		// Small delay between resuming multiple jobs
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	log.Printf("[ImportRecovery] Resumed %d import jobs", len(jobsToResume))
+}
+
 // listEmailLists returns all email lists
 func (s *Server) listEmailLists(c *fiber.Ctx) error {
 	rows, err := s.db.Query(`

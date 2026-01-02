@@ -48,6 +48,9 @@ func NewServer(cfg *config.Config, db *sql.DB, q *queue.Manager, eng *engine.Eng
 	// Start background scheduler for auto-starting campaigns
 	go server.runAutoStartScheduler()
 
+	// Resume any pending/orphaned import jobs from before restart
+	go server.resumeOrphanedImportJobs()
+
 	return server
 }
 
