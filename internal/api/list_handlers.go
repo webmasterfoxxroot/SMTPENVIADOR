@@ -810,42 +810,24 @@ func (s *Server) processImportJobDB(jobID string) {
 	}
 	defer f.Close()
 
-	log.Printf("Import job %s: loading existing emails for list %s", jobID, listID)
+	// OPTIMIZED: Don't preload existing emails - let database handle duplicates with ON CONFLICT
+	// Only track duplicates within this import file using a Set
+	seenInFile := make(map[string]bool)
+	log.Printf("Import job %s: skipping preload - using database ON CONFLICT for duplicates", jobID)
 
-	// Get existing emails for duplicate check
-	existingEmails := make(map[string]bool)
-	rows, err := s.db.Query(`SELECT email FROM emails WHERE list_id = $1`, listID)
-	if err != nil {
-		log.Printf("Import job %s: error querying existing emails: %v", jobID, err)
-	} else {
-		count := 0
-		for rows.Next() {
-			var email string
-			rows.Scan(&email)
-			existingEmails[strings.ToLower(email)] = true
-			count++
-		}
-		rows.Close()
-		log.Printf("Import job %s: loaded %d existing emails", jobID, count)
-	}
-
-	log.Printf("Import job %s: loading blacklist", jobID)
-
-	// Get blacklist
+	// Load blacklist (usually small, ~thousands not millions)
 	blacklisted := make(map[string]bool)
 	blRows, err := s.db.Query(`SELECT email FROM blacklist`)
 	if err != nil {
 		log.Printf("Import job %s: error querying blacklist: %v", jobID, err)
 	} else {
-		count := 0
 		for blRows.Next() {
 			var email string
 			blRows.Scan(&email)
 			blacklisted[strings.ToLower(email)] = true
-			count++
 		}
 		blRows.Close()
-		log.Printf("Import job %s: loaded %d blacklisted emails", jobID, count)
+		log.Printf("Import job %s: loaded %d blacklisted emails", jobID, len(blacklisted))
 	}
 
 	log.Printf("Import job %s: starting OPTIMIZED file processing", jobID)
@@ -941,16 +923,19 @@ func (s *Server) processImportJobDB(jobID string) {
 			invalidCount++
 		} else if blacklisted[email] {
 			invalidCount++
-		} else if existingEmails[email] {
+		} else if seenInFile[email] {
+			// Duplicate within this file
 			duplicateCount++
 		} else {
+			// Mark as seen in this file
+			seenInFile[email] = true
+
 			// Add to batch
 			batch = append(batch, emailRecord{
 				id:    uuid.New().String(),
 				email: email,
 				name:  name,
 			})
-			existingEmails[email] = true
 			validCount++
 
 			// Flush batch when full
