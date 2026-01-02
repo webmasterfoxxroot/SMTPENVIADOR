@@ -242,7 +242,8 @@ INSERT INTO settings (key, value, description) VALUES
 ('default_send_rate', '0', 'Default send rate (emails/min, 0=unlimited)'),
 ('retry_attempts', '3', 'Number of retry attempts for failed emails'),
 ('retry_delay', '60', 'Delay between retries (seconds)'),
-('max_upload_size_mb', '500', 'Maximum file upload size in MB');
+('max_upload_size_mb', '500', 'Maximum file upload size in MB'),
+('import_batch_size', '1000', 'Quantidade de emails processados por vez durante importação');
 
 -- Insert default admin user (password: admin123)
 INSERT INTO users (email, password_hash, name, role) VALUES

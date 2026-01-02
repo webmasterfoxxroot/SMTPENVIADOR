@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -860,8 +861,13 @@ func (s *Server) processImportJobDB(jobID string) {
 	invalidCount := 0
 	duplicateCount := 0
 
-	// OPTIMIZED: Batch INSERT settings
-	const batchSize = 1000 // Insert 1000 emails at once
+	// OPTIMIZED: Batch INSERT settings - read from database config
+	batchSize := 1000 // Default value
+	batchSizeStr := s.getSettingValue("import_batch_size", "1000")
+	if bs, err := strconv.Atoi(batchSizeStr); err == nil && bs > 0 && bs <= 10000 {
+		batchSize = bs
+	}
+	log.Printf("Import job %s: using batch size of %d emails per INSERT", jobID, batchSize)
 	type emailRecord struct {
 		id    string
 		email string

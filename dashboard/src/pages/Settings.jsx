@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings as SettingsIcon, Save, RefreshCw, Globe, RotateCcw, AlertCircle, Server, Power, Upload } from 'lucide-react'
+import { Settings as SettingsIcon, Save, RefreshCw, Globe, RotateCcw, AlertCircle, Server, Power, Upload, Database } from 'lucide-react'
 import api from '../services/api'
 import toast from 'react-hot-toast'
 
@@ -232,6 +232,50 @@ function Settings() {
               </p>
               <p className="text-gray-500 text-xs mt-1">
                 Estimativa baseada em ~30 bytes por email
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Import Settings */}
+      <div className="card">
+        <div className="flex items-center gap-2 mb-4">
+          <Database className="w-5 h-5 text-orange-500" />
+          <h2 className="text-lg font-semibold">Processamento de Importacao</h2>
+        </div>
+        <p className="text-gray-400 text-sm mb-4">
+          Configure quantos emails sao processados por vez durante a importacao de listas.
+          Valores maiores sao mais rapidos, mas usam mais memoria.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              Emails por Lote (Batch Size)
+            </label>
+            <input
+              type="number"
+              value={settings.import_batch_size || '1000'}
+              onChange={(e) => handleChange('import_batch_size', e.target.value)}
+              min="100"
+              max="10000"
+              step="100"
+              className="input w-full"
+            />
+            <p className="text-gray-500 text-xs mt-1">
+              Quantidade de emails inseridos por query (100-10000)
+            </p>
+          </div>
+          <div className="flex items-center">
+            <div className="bg-gray-700 rounded-lg p-4 w-full">
+              <p className="text-gray-300 text-sm">
+                <span className="font-semibold text-orange-400">{settings.import_batch_size || '1000'}</span> emails por INSERT
+              </p>
+              <p className="text-gray-500 text-xs mt-1">
+                Recomendado: 1000-5000 para melhor performance
+              </p>
+              <p className="text-gray-500 text-xs mt-1">
+                5 milhoes de emails = ~{Math.ceil(5000000 / (settings.import_batch_size || 1000)).toLocaleString()} queries
               </p>
             </div>
           </div>
