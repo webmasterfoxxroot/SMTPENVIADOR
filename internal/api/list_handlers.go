@@ -15,6 +15,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 type EmailListRequest struct {
@@ -849,13 +850,13 @@ func (s *Server) processImportJobDB(jobID string) {
 	invalidCount := 0
 	duplicateCount := 0
 
-	// OPTIMIZED: Batch INSERT settings - read from database config
-	batchSize := 1000 // Default value
-	batchSizeStr := s.getSettingValue("import_batch_size", "1000")
-	if bs, err := strconv.Atoi(batchSizeStr); err == nil && bs > 0 && bs <= 10000 {
+	// OPTIMIZED: Batch COPY settings - read from database config
+	batchSize := 50000 // Default value - COPY can handle much more
+	batchSizeStr := s.getSettingValue("import_batch_size", "50000")
+	if bs, err := strconv.Atoi(batchSizeStr); err == nil && bs > 0 && bs <= 100000 {
 		batchSize = bs
 	}
-	log.Printf("Import job %s: using batch size of %d emails per INSERT", jobID, batchSize)
+	log.Printf("Import job %s: using COPY with batch size of %d emails", jobID, batchSize)
 	type emailRecord struct {
 		id    string
 		email string
@@ -863,29 +864,68 @@ func (s *Server) processImportJobDB(jobID string) {
 	}
 	batch := make([]emailRecord, 0, batchSize)
 
-	// Function to flush batch to database
+	// Function to flush batch using PostgreSQL COPY (much faster than INSERT)
 	flushBatch := func() error {
 		if len(batch) == 0 {
 			return nil
 		}
 
-		// Build multi-value INSERT query
-		valueStrings := make([]string, 0, len(batch))
-		valueArgs := make([]interface{}, 0, len(batch)*4)
-		for i, record := range batch {
-			valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d, $%d, true)", i*4+1, i*4+2, i*4+3, i*4+4))
-			valueArgs = append(valueArgs, record.id, listID, record.email, record.name)
+		// Start transaction
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
 		}
 
-		query := fmt.Sprintf(
-			"INSERT INTO emails (id, list_id, email, name, valid) VALUES %s ON CONFLICT (list_id, email) DO NOTHING",
-			strings.Join(valueStrings, ","),
-		)
-
-		_, err := s.db.Exec(query, valueArgs...)
+		// Create temp table (unlogged for speed)
+		_, err = tx.Exec(`CREATE TEMP TABLE temp_import (
+			id VARCHAR(36),
+			list_id VARCHAR(36),
+			email VARCHAR(255),
+			name VARCHAR(255),
+			valid BOOLEAN
+		) ON COMMIT DROP`)
 		if err != nil {
-			log.Printf("Import job %s: batch insert error: %v", jobID, err)
-			return err
+			tx.Rollback()
+			return fmt.Errorf("create temp table: %w", err)
+		}
+
+		// Use pq.CopyIn for fast bulk insert
+		stmt, err := tx.Prepare(pq.CopyIn("temp_import", "id", "list_id", "email", "name", "valid"))
+		if err != nil {
+			tx.Rollback()
+			return fmt.Errorf("prepare copy: %w", err)
+		}
+
+		for _, record := range batch {
+			_, err = stmt.Exec(record.id, listID, record.email, record.name, true)
+			if err != nil {
+				stmt.Close()
+				tx.Rollback()
+				return fmt.Errorf("copy exec: %w", err)
+			}
+		}
+
+		// Flush COPY data
+		_, err = stmt.Exec()
+		if err != nil {
+			stmt.Close()
+			tx.Rollback()
+			return fmt.Errorf("copy flush: %w", err)
+		}
+		stmt.Close()
+
+		// Move from temp to real table with ON CONFLICT
+		_, err = tx.Exec(`INSERT INTO emails (id, list_id, email, name, valid)
+			SELECT id, list_id, email, name, valid FROM temp_import
+			ON CONFLICT (list_id, email) DO NOTHING`)
+		if err != nil {
+			tx.Rollback()
+			return fmt.Errorf("insert from temp: %w", err)
+		}
+
+		err = tx.Commit()
+		if err != nil {
+			return fmt.Errorf("commit: %w", err)
 		}
 
 		batch = batch[:0] // Clear batch

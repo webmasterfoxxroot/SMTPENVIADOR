@@ -255,27 +255,27 @@ function Settings() {
             </label>
             <input
               type="number"
-              value={settings.import_batch_size || '1000'}
+              value={settings.import_batch_size || '50000'}
               onChange={(e) => handleChange('import_batch_size', e.target.value)}
-              min="100"
-              max="10000"
-              step="100"
+              min="1000"
+              max="100000"
+              step="1000"
               className="input w-full"
             />
             <p className="text-gray-500 text-xs mt-1">
-              Quantidade de emails inseridos por query (100-10000)
+              Quantidade de emails por COPY (1000-100000)
             </p>
           </div>
           <div className="flex items-center">
             <div className="bg-gray-700 rounded-lg p-4 w-full">
               <p className="text-gray-300 text-sm">
-                <span className="font-semibold text-orange-400">{settings.import_batch_size || '1000'}</span> emails por INSERT
+                <span className="font-semibold text-orange-400">{settings.import_batch_size || '50000'}</span> emails por COPY
               </p>
               <p className="text-gray-500 text-xs mt-1">
-                Recomendado: 1000-5000 para melhor performance
+                Recomendado: 50000 para melhor performance
               </p>
               <p className="text-gray-500 text-xs mt-1">
-                5 milhoes de emails = ~{Math.ceil(5000000 / (settings.import_batch_size || 1000)).toLocaleString()} queries
+                5 milhoes de emails = ~{Math.ceil(5000000 / (settings.import_batch_size || 50000)).toLocaleString()} operacoes
               </p>
             </div>
           </div>
