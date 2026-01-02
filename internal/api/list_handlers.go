@@ -858,15 +858,18 @@ func (s *Server) getImportStatus(c *fiber.Ctx) error {
 
 // getListImportJobs returns active import jobs for a list
 func (s *Server) getListImportJobs(c *fiber.Ctx) error {
-	listID := c.Params("id")
+	// Copy listID to avoid Fiber buffer issues
+	listID := fmt.Sprintf("%s", c.Params("id"))
 
 	importJobsMu.RLock()
 	defer importJobsMu.RUnlock()
 
 	var jobs []fiber.Map
 	for _, job := range importJobs {
-		log.Printf("getListImportJobs: checking job %s for list %s, job.ListID=%s, job.Status=%s", job.ID, listID, job.ListID, job.Status)
-		if job.ListID == listID && (job.Status == "pending" || job.Status == "processing") {
+		// Also copy job.ListID for safe comparison
+		jobListID := fmt.Sprintf("%s", job.ListID)
+		log.Printf("getListImportJobs: checking job %s for list %s, job.ListID=%s (len=%d), job.Status=%s", job.ID, listID, jobListID, len(jobListID), job.Status)
+		if jobListID == listID && (job.Status == "pending" || job.Status == "processing") {
 			progress := 0
 			if job.TotalLines > 0 {
 				progress = (job.Processed * 100) / job.TotalLines
