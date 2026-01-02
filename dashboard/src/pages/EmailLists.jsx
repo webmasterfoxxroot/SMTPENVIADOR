@@ -1,7 +1,164 @@
 import { useState, useEffect, useRef } from 'react'
-import { Plus, Edit, Trash2, Upload, Users, Loader2, Mail, CheckCircle, XCircle, AlertTriangle, X } from 'lucide-react'
+import { Plus, Edit, Trash2, Upload, Users, Loader2, Mail, CheckCircle, XCircle, AlertTriangle, X, Split } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
+
+// Modal para upload com divisão em múltiplas listas
+function SplitUploadModal({ onClose, onUploadStarted }) {
+  const [file, setFile] = useState(null)
+  const [uploading, setUploading] = useState(false)
+  const [hasHeader, setHasHeader] = useState(false)
+  const [delimiter, setDelimiter] = useState(',')
+  const [baseName, setBaseName] = useState('')
+  const [numParts, setNumParts] = useState(5)
+
+  const handleUpload = async (e) => {
+    e.preventDefault()
+    if (!file || !baseName) return
+
+    setUploading(true)
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('has_header', hasHeader)
+    formData.append('delimiter', delimiter)
+    formData.append('base_name', baseName)
+    formData.append('num_parts', numParts)
+
+    try {
+      const response = await api.post('/lists/upload-split', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 300000
+      })
+
+      toast.success(`${numParts} listas criadas! Importação iniciada...`)
+      onUploadStarted(response.data.jobs || [])
+      onClose()
+    } catch (error) {
+      console.error('Upload error:', error)
+      const errorMsg = error.response?.data?.error || error.message || 'Erro no upload'
+      toast.error(errorMsg)
+      setUploading(false)
+    }
+  }
+
+  const estimatedPerPart = file ? Math.ceil(file.size / numParts / 30) : 0
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl p-6 w-full max-w-md">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-bold flex items-center gap-2">
+            <Split className="w-5 h-5 text-blue-500" />
+            Upload com Divisão
+          </h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <form onSubmit={handleUpload} className="space-y-4">
+          <div>
+            <label className="label">Arquivo (CSV/TXT)</label>
+            <input
+              type="file"
+              accept=".csv,.txt"
+              onChange={(e) => setFile(e.target.files[0])}
+              className="input"
+              required
+            />
+            {file && (
+              <p className="text-xs text-gray-500 mt-1">
+                {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="label">Nome Base das Listas</label>
+            <input
+              type="text"
+              value={baseName}
+              onChange={(e) => setBaseName(e.target.value)}
+              className="input"
+              placeholder="Ex: MINHA LISTA"
+              required
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Será criado: {baseName || 'LISTA'} 01, {baseName || 'LISTA'} 02, ...
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Dividir em</label>
+              <input
+                type="number"
+                value={numParts}
+                onChange={(e) => setNumParts(Math.max(2, Math.min(50, parseInt(e.target.value) || 2)))}
+                className="input"
+                min="2"
+                max="50"
+              />
+              <p className="text-xs text-gray-500 mt-1">partes (2-50)</p>
+            </div>
+            <div>
+              <label className="label">Delimitador</label>
+              <select
+                value={delimiter}
+                onChange={(e) => setDelimiter(e.target.value)}
+                className="input"
+              >
+                <option value=",">Vírgula (,)</option>
+                <option value=";">Ponto e vírgula (;)</option>
+                <option value="\t">Tab</option>
+                <option value=" ">Espaço</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="hasHeader"
+              checked={hasHeader}
+              onChange={(e) => setHasHeader(e.target.checked)}
+              className="w-4 h-4"
+            />
+            <label htmlFor="hasHeader" className="text-sm cursor-pointer">
+              Arquivo tem cabeçalho
+            </label>
+          </div>
+
+          {file && (
+            <div className="p-3 bg-blue-50 rounded-lg text-sm">
+              <p className="font-medium text-blue-800 mb-2">Estimativa:</p>
+              <ul className="text-blue-700 space-y-1">
+                <li>~{estimatedPerPart.toLocaleString()} emails por lista</li>
+                <li>{numParts} listas serão criadas</li>
+              </ul>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3 pt-4">
+            <button type="button" onClick={onClose} className="btn btn-secondary">
+              Cancelar
+            </button>
+            <button type="submit" disabled={uploading || !file || !baseName} className="btn btn-primary">
+              {uploading ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                  Dividindo...
+                </>
+              ) : (
+                'Dividir e Importar'
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
 
 function UploadModal({ listId, onClose, onUploadStarted }) {
   const [file, setFile] = useState(null)
@@ -328,6 +485,7 @@ function EmailLists() {
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState({ open: false, list: null })
   const [uploadModal, setUploadModal] = useState({ open: false, listId: null })
+  const [splitModal, setSplitModal] = useState(false)
   const [importJobs, setImportJobs] = useState({}) // { listId: jobStatus }
   const pollIntervals = useRef({})
 
@@ -482,17 +640,38 @@ function EmailLists() {
     startJobPolling(listId, jobId)
   }
 
+  const handleSplitUploadStarted = (jobs) => {
+    // Start polling for each job
+    jobs.forEach(job => {
+      setImportJobs(prev => ({
+        ...prev,
+        [job.list_id]: { status: 'pending', progress: 0, valid: 0, invalid: 0, duplicates: 0, id: job.job_id }
+      }))
+      startJobPolling(job.list_id, job.job_id)
+    })
+    fetchLists()
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">Listas de Emails</h1>
-        <button
-          onClick={() => setModal({ open: true, list: null })}
-          className="btn btn-primary flex items-center gap-2"
-        >
-          <Plus className="w-4 h-4" />
-          Nova Lista
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setSplitModal(true)}
+            className="btn btn-secondary flex items-center gap-2"
+          >
+            <Split className="w-4 h-4" />
+            Upload com Divisão
+          </button>
+          <button
+            onClick={() => setModal({ open: true, list: null })}
+            className="btn btn-primary flex items-center gap-2"
+          >
+            <Plus className="w-4 h-4" />
+            Nova Lista
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -536,6 +715,13 @@ function EmailLists() {
           listId={uploadModal.listId}
           onClose={() => setUploadModal({ open: false, listId: null })}
           onUploadStarted={handleUploadStarted}
+        />
+      )}
+
+      {splitModal && (
+        <SplitUploadModal
+          onClose={() => setSplitModal(false)}
+          onUploadStarted={handleSplitUploadStarted}
         />
       )}
     </div>

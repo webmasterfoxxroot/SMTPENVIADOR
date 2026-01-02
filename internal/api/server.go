@@ -229,6 +229,7 @@ func (s *Server) setupRoutes() {
 	lists.Delete("/:id/force", s.forceDeleteEmailList)
 	lists.Post("/:id/upload", s.uploadEmails)
 	lists.Post("/:id/upload-async", s.uploadEmailsAsync)
+	lists.Post("/upload-split", s.uploadEmailsSplit)
 	lists.Get("/:id/import-jobs", s.getListImportJobs)
 	lists.Get("/:id/emails", s.getListEmails)
 	lists.Delete("/:id/emails/:emailId", s.deleteEmail)

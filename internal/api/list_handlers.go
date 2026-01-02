@@ -1209,6 +1209,221 @@ func (s *Server) cancelImportJob(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Importacao cancelada"})
 }
 
+// uploadEmailsSplit handles large file uploads with automatic splitting into multiple lists
+func (s *Server) uploadEmailsSplit(c *fiber.Ctx) error {
+	// Get file
+	file, err := c.FormFile("file")
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Nenhum arquivo enviado"})
+	}
+
+	// Check file size against configured limit
+	maxSizeMB := s.getMaxUploadSizeMB()
+	maxSizeBytes := maxSizeMB * 1024 * 1024
+	if file.Size > maxSizeBytes {
+		return c.Status(413).JSON(fiber.Map{
+			"error": fmt.Sprintf("Arquivo muito grande. Maximo permitido: %d MB", maxSizeMB),
+		})
+	}
+
+	// Get options
+	baseName := c.FormValue("base_name", "Lista")
+	numPartsStr := c.FormValue("num_parts", "5")
+	numParts, _ := strconv.Atoi(numPartsStr)
+	if numParts < 2 {
+		numParts = 2
+	}
+	if numParts > 50 {
+		numParts = 50
+	}
+	hasHeader := c.FormValue("has_header", "false") == "true"
+	delimiter := c.FormValue("delimiter", ",")
+
+	log.Printf("Split upload: baseName=%s, numParts=%d, hasHeader=%v", baseName, numParts, hasHeader)
+
+	// Create uploads directory
+	uploadDir := "/tmp/smtpenviador/uploads"
+	os.MkdirAll(uploadDir, 0755)
+
+	// Save file to disk first
+	mainFileID := uuid.New().String()
+	ext := filepath.Ext(file.Filename)
+	savedPath := filepath.Join(uploadDir, fmt.Sprintf("%s%s", mainFileID, ext))
+
+	src, err := file.Open()
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao abrir arquivo"})
+	}
+
+	dst, err := os.Create(savedPath)
+	if err != nil {
+		src.Close()
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao salvar arquivo"})
+	}
+
+	_, err = io.Copy(dst, src)
+	src.Close()
+	dst.Close()
+	if err != nil {
+		os.Remove(savedPath)
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao copiar arquivo"})
+	}
+
+	log.Printf("Split upload: file saved to %s", savedPath)
+
+	// Count total lines
+	f, err := os.Open(savedPath)
+	if err != nil {
+		os.Remove(savedPath)
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao ler arquivo"})
+	}
+
+	scanner := bufio.NewScanner(f)
+	const maxCapacity = 1024 * 1024
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+
+	totalLines := 0
+	for scanner.Scan() {
+		totalLines++
+	}
+	f.Close()
+
+	if totalLines == 0 {
+		os.Remove(savedPath)
+		return c.Status(400).JSON(fiber.Map{"error": "Arquivo vazio"})
+	}
+
+	// Subtract header if present
+	dataLines := totalLines
+	if hasHeader {
+		dataLines--
+	}
+
+	linesPerPart := (dataLines + numParts - 1) / numParts // Round up
+	log.Printf("Split upload: totalLines=%d, dataLines=%d, linesPerPart=%d", totalLines, dataLines, linesPerPart)
+
+	// Create lists and split file
+	type jobInfo struct {
+		ListID string `json:"list_id"`
+		JobID  string `json:"job_id"`
+	}
+	jobs := make([]jobInfo, 0, numParts)
+
+	// Re-open file for splitting
+	f, err = os.Open(savedPath)
+	if err != nil {
+		os.Remove(savedPath)
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao reabrir arquivo"})
+	}
+	defer f.Close()
+
+	scanner = bufio.NewScanner(f)
+	scanner.Buffer(buf, maxCapacity)
+
+	lineNum := 0
+	var header string
+
+	// Read header if present
+	if hasHeader && scanner.Scan() {
+		header = scanner.Text()
+		lineNum++
+	}
+
+	currentPart := 0
+	currentPartLines := 0
+	var currentFile *os.File
+	var currentPath string
+	var currentListID string
+
+	for scanner.Scan() {
+		lineNum++
+		line := scanner.Text()
+
+		// Start new part if needed
+		if currentFile == nil || currentPartLines >= linesPerPart {
+			// Close previous file
+			if currentFile != nil {
+				currentFile.Close()
+
+				// Create import job for previous part
+				jobID := uuid.New().String()
+				_, err = s.db.Exec(`
+					INSERT INTO import_jobs (id, list_id, status, file_path, has_header, delimiter, total_lines, processed, valid, invalid, duplicates)
+					VALUES ($1, $2, 'pending', $3, $4, $5, $6, 0, 0, 0, 0)
+				`, jobID, currentListID, currentPath, false, delimiter, currentPartLines)
+				if err == nil {
+					jobs = append(jobs, jobInfo{ListID: currentListID, JobID: jobID})
+					go s.processImportJobDB(jobID)
+				}
+			}
+
+			currentPart++
+			if currentPart > numParts {
+				break
+			}
+
+			// Create new list
+			listName := fmt.Sprintf("%s %02d", baseName, currentPart)
+			currentListID = uuid.New().String()
+			_, err = s.db.Exec(`
+				INSERT INTO email_lists (id, name, description, total_emails, valid_emails, invalid_emails, status)
+				VALUES ($1, $2, $3, 0, 0, 0, 'importing')
+			`, currentListID, listName, fmt.Sprintf("Parte %d de %d", currentPart, numParts))
+			if err != nil {
+				log.Printf("Failed to create list %s: %v", listName, err)
+				continue
+			}
+
+			// Create file for this part
+			currentPath = filepath.Join(uploadDir, fmt.Sprintf("%s_part%d%s", mainFileID, currentPart, ext))
+			currentFile, err = os.Create(currentPath)
+			if err != nil {
+				log.Printf("Failed to create part file: %v", err)
+				continue
+			}
+
+			// Write header if present
+			if header != "" {
+				currentFile.WriteString(header + "\n")
+			}
+
+			currentPartLines = 0
+			log.Printf("Split upload: created list %s, file %s", listName, currentPath)
+		}
+
+		// Write line to current file
+		if currentFile != nil {
+			currentFile.WriteString(line + "\n")
+			currentPartLines++
+		}
+	}
+
+	// Close and process last part
+	if currentFile != nil {
+		currentFile.Close()
+
+		jobID := uuid.New().String()
+		_, err = s.db.Exec(`
+			INSERT INTO import_jobs (id, list_id, status, file_path, has_header, delimiter, total_lines, processed, valid, invalid, duplicates)
+			VALUES ($1, $2, 'pending', $3, $4, $5, $6, 0, 0, 0, 0)
+		`, jobID, currentListID, currentPath, false, delimiter, currentPartLines)
+		if err == nil {
+			jobs = append(jobs, jobInfo{ListID: currentListID, JobID: jobID})
+			go s.processImportJobDB(jobID)
+		}
+	}
+
+	// Delete main file
+	os.Remove(savedPath)
+
+	log.Printf("Split upload complete: created %d lists/jobs", len(jobs))
+	return c.JSON(fiber.Map{
+		"message": fmt.Sprintf("%d listas criadas", len(jobs)),
+		"jobs":    jobs,
+	})
+}
+
 // getListEmails returns emails from a list
 func (s *Server) getListEmails(c *fiber.Ctx) error {
 	id := c.Params("id")
