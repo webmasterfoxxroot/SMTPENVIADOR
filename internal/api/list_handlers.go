@@ -246,6 +246,15 @@ func (s *Server) deleteEmailList(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Email list not found"})
 	}
 
+	// Check if any campaigns are using this list
+	var campaignCount int
+	s.db.QueryRow(`SELECT COUNT(*) FROM campaigns WHERE list_id = $1`, id).Scan(&campaignCount)
+	if campaignCount > 0 {
+		return c.Status(400).JSON(fiber.Map{
+			"error": fmt.Sprintf("Nao pode excluir: %d campanha(s) usando esta lista. Exclua as campanhas primeiro.", campaignCount),
+		})
+	}
+
 	// Check how many emails in this list
 	var emailCount int
 	s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE list_id = $1`, id).Scan(&emailCount)
