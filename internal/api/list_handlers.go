@@ -817,10 +817,8 @@ func (s *Server) processImportJobDB(jobID string) {
 	}
 	defer f.Close()
 
-	// OPTIMIZED: Don't preload existing emails - let database handle duplicates with ON CONFLICT
-	// Only track duplicates within this import file using a Set
-	seenInFile := make(map[string]bool)
-	log.Printf("Import job %s: skipping preload - using database ON CONFLICT for duplicates", jobID)
+	// OPTIMIZED: No memory tracking - let database handle ALL duplicates
+	log.Printf("Import job %s: no memory tracking - database handles duplicates", jobID)
 
 	// Load blacklist (usually small, ~thousands not millions)
 	blacklisted := make(map[string]bool)
@@ -969,14 +967,8 @@ func (s *Server) processImportJobDB(jobID string) {
 			invalidCount++
 		} else if blacklisted[email] {
 			invalidCount++
-		} else if seenInFile[email] {
-			// Duplicate within this file
-			duplicateCount++
 		} else {
-			// Mark as seen in this file
-			seenInFile[email] = true
-
-			// Add to batch
+			// Add to batch - database handles duplicates with ON CONFLICT
 			batch = append(batch, emailRecord{
 				id:    uuid.New().String(),
 				email: email,
