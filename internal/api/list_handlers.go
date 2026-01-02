@@ -154,44 +154,110 @@ func (s *Server) updateEmailList(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Email list updated"})
 }
 
-// deleteEmailList deletes an email list and all its emails
+// deleteEmailList deletes an email list and all its emails (in batches for large lists)
 func (s *Server) deleteEmailList(c *fiber.Ctx) error {
 	id := c.Params("id")
 
-	// Start transaction
-	tx, err := s.db.Begin()
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to start transaction"})
+	// Check if list exists
+	var exists bool
+	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_lists WHERE id = $1)`, id).Scan(&exists)
+	if err != nil || !exists {
+		return c.Status(404).JSON(fiber.Map{"error": "Email list not found"})
 	}
 
-	// First delete all emails in this list
-	_, err = tx.Exec(`DELETE FROM emails WHERE list_id = $1`, id)
+	// Check how many emails in this list
+	var emailCount int
+	s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE list_id = $1`, id).Scan(&emailCount)
+
+	log.Printf("Deleting list %s with %d emails", id, emailCount)
+
+	// For large lists, delete in batches to avoid timeout
+	if emailCount > 10000 {
+		// Mark list as deleting
+		s.db.Exec(`UPDATE email_lists SET status = 'deleting' WHERE id = $1`, id)
+
+		// Delete in background
+		go s.deleteListInBatches(id)
+
+		return c.JSON(fiber.Map{
+			"message": "Exclusao iniciada em background",
+			"emails":  emailCount,
+		})
+	}
+
+	// For smaller lists, delete directly
+	// First delete import jobs
+	s.db.Exec(`DELETE FROM import_jobs WHERE list_id = $1`, id)
+
+	// Delete all emails
+	_, err = s.db.Exec(`DELETE FROM emails WHERE list_id = $1`, id)
 	if err != nil {
-		tx.Rollback()
 		log.Printf("Failed to delete emails for list %s: %v", id, err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete emails"})
 	}
 
-	// Then delete the list
-	result, err := tx.Exec(`DELETE FROM email_lists WHERE id = $1`, id)
+	// Delete the list
+	result, err := s.db.Exec(`DELETE FROM email_lists WHERE id = $1`, id)
 	if err != nil {
-		tx.Rollback()
 		log.Printf("Failed to delete list %s: %v", id, err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete email list"})
 	}
 
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		tx.Rollback()
 		return c.Status(404).JSON(fiber.Map{"error": "Email list not found"})
 	}
 
-	if err := tx.Commit(); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to commit deletion"})
+	log.Printf("Deleted email list %s with %d emails", id, emailCount)
+	return c.JSON(fiber.Map{"message": "Email list deleted"})
+}
+
+// deleteListInBatches deletes emails in batches to avoid timeout
+func (s *Server) deleteListInBatches(listID string) {
+	log.Printf("Starting batch deletion for list %s", listID)
+
+	const batchSize = 10000
+	totalDeleted := 0
+
+	for {
+		// Delete a batch of emails
+		result, err := s.db.Exec(`
+			DELETE FROM emails
+			WHERE id IN (
+				SELECT id FROM emails WHERE list_id = $1 LIMIT $2
+			)
+		`, listID, batchSize)
+
+		if err != nil {
+			log.Printf("Batch delete error for list %s: %v", listID, err)
+			break
+		}
+
+		deleted, _ := result.RowsAffected()
+		totalDeleted += int(deleted)
+
+		log.Printf("List %s: deleted batch of %d emails (total: %d)", listID, deleted, totalDeleted)
+
+		if deleted < batchSize {
+			// No more emails to delete
+			break
+		}
+
+		// Small pause between batches
+		time.Sleep(100 * time.Millisecond)
 	}
 
-	log.Printf("Deleted email list %s with all its emails", id)
-	return c.JSON(fiber.Map{"message": "Email list deleted"})
+	// Delete import jobs
+	s.db.Exec(`DELETE FROM import_jobs WHERE list_id = $1`, listID)
+
+	// Finally delete the list
+	_, err := s.db.Exec(`DELETE FROM email_lists WHERE id = $1`, listID)
+	if err != nil {
+		log.Printf("Failed to delete list %s after batch deletion: %v", listID, err)
+		return
+	}
+
+	log.Printf("Successfully deleted list %s with %d emails", listID, totalDeleted)
 }
 
 // uploadEmails handles CSV/TXT file upload

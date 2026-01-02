@@ -217,7 +217,7 @@ function ListCard({ list, importJob, onEdit, onDelete, onUpload }) {
           <button
             onClick={onDelete}
             className="p-2 text-red-600 hover:bg-red-50 rounded"
-            disabled={isImporting}
+            disabled={isImporting || list.status === 'deleting'}
           >
             <Trash2 className="w-4 h-4" />
           </button>
@@ -284,9 +284,12 @@ function ListCard({ list, importJob, onEdit, onDelete, onUpload }) {
         </div>
         <span className={`badge ${
           isImporting ? 'badge-warning' :
+          list.status === 'deleting' ? 'badge-error' :
           list.status === 'ready' ? 'badge-success' : 'badge-warning'
         }`}>
-          {isImporting ? 'Importando' : list.status === 'ready' ? 'Pronta' : 'Processando'}
+          {isImporting ? 'Importando' :
+           list.status === 'deleting' ? 'Excluindo...' :
+           list.status === 'ready' ? 'Pronta' : 'Processando'}
         </span>
       </div>
 
