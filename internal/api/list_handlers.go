@@ -863,15 +863,16 @@ func (s *Server) processImportJobDB(jobID string) {
 	batch := make([]emailRecord, 0, batchSize)
 
 	// Function to flush batch using PostgreSQL COPY (much faster than INSERT)
-	flushBatch := func() error {
+	// Returns: (duplicates found in this batch, error)
+	flushBatch := func() (int, error) {
 		if len(batch) == 0 {
-			return nil
+			return 0, nil
 		}
 
 		// Start transaction
 		tx, err := s.db.Begin()
 		if err != nil {
-			return err
+			return 0, err
 		}
 
 		// Create temp table (unlogged for speed)
@@ -884,14 +885,14 @@ func (s *Server) processImportJobDB(jobID string) {
 		) ON COMMIT DROP`)
 		if err != nil {
 			tx.Rollback()
-			return fmt.Errorf("create temp table: %w", err)
+			return 0, fmt.Errorf("create temp table: %w", err)
 		}
 
 		// Use pq.CopyIn for fast bulk insert
 		stmt, err := tx.Prepare(pq.CopyIn("temp_import", "id", "list_id", "email", "name", "valid"))
 		if err != nil {
 			tx.Rollback()
-			return fmt.Errorf("prepare copy: %w", err)
+			return 0, fmt.Errorf("prepare copy: %w", err)
 		}
 
 		for _, record := range batch {
@@ -899,7 +900,7 @@ func (s *Server) processImportJobDB(jobID string) {
 			if err != nil {
 				stmt.Close()
 				tx.Rollback()
-				return fmt.Errorf("copy exec: %w", err)
+				return 0, fmt.Errorf("copy exec: %w", err)
 			}
 		}
 
@@ -908,26 +909,31 @@ func (s *Server) processImportJobDB(jobID string) {
 		if err != nil {
 			stmt.Close()
 			tx.Rollback()
-			return fmt.Errorf("copy flush: %w", err)
+			return 0, fmt.Errorf("copy flush: %w", err)
 		}
 		stmt.Close()
 
+		batchCount := len(batch)
+
 		// Move from temp to real table with ON CONFLICT (cast to uuid)
-		_, err = tx.Exec(`INSERT INTO emails (id, list_id, email, name, valid)
+		result, err := tx.Exec(`INSERT INTO emails (id, list_id, email, name, valid)
 			SELECT id::uuid, list_id::uuid, email, name, valid FROM temp_import
 			ON CONFLICT (list_id, email) DO NOTHING`)
 		if err != nil {
 			tx.Rollback()
-			return fmt.Errorf("insert from temp: %w", err)
+			return 0, fmt.Errorf("insert from temp: %w", err)
 		}
+
+		inserted, _ := result.RowsAffected()
+		dupsInBatch := batchCount - int(inserted)
 
 		err = tx.Commit()
 		if err != nil {
-			return fmt.Errorf("commit: %w", err)
+			return 0, fmt.Errorf("commit: %w", err)
 		}
 
 		batch = batch[:0] // Clear batch
-		return nil
+		return dupsInBatch, nil
 	}
 
 	log.Printf("Import job %s: starting processing, total lines: %d", jobID, totalLines)
@@ -978,9 +984,11 @@ func (s *Server) processImportJobDB(jobID string) {
 
 			// Flush batch when full
 			if len(batch) >= batchSize {
-				if err := flushBatch(); err != nil {
+				dups, err := flushBatch()
+				if err != nil {
 					log.Printf("Import job %s: error flushing batch: %v", jobID, err)
 				}
+				duplicateCount += dups
 			}
 		}
 
@@ -1008,9 +1016,11 @@ func (s *Server) processImportJobDB(jobID string) {
 	}
 
 	// Flush remaining batch
-	if err := flushBatch(); err != nil {
+	dups, err := flushBatch()
+	if err != nil {
 		log.Printf("Import job %s: error flushing final batch: %v", jobID, err)
 	}
+	duplicateCount += dups
 
 	// Check for scanner errors
 	if err := scanner.Err(); err != nil {
