@@ -128,7 +128,7 @@ func (s *Server) updateSetting(c *fiber.Ctx) error {
 	})
 }
 
-// updateSettings updates multiple settings at once
+// updateSettings updates multiple settings at once (uses UPSERT)
 func (s *Server) updateSettings(c *fiber.Ctx) error {
 	var req map[string]string
 
@@ -146,11 +146,12 @@ func (s *Server) updateSettings(c *fiber.Ctx) error {
 	}
 
 	for key, value := range req {
+		// Use UPSERT: insert if not exists, update if exists
 		_, err := tx.Exec(`
-			UPDATE settings
-			SET value = $1, updated_at = CURRENT_TIMESTAMP
-			WHERE key = $2
-		`, value, key)
+			INSERT INTO settings (key, value, description, updated_at)
+			VALUES ($1, $2, '', CURRENT_TIMESTAMP)
+			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP
+		`, key, value)
 
 		if err != nil {
 			tx.Rollback()
