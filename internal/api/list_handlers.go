@@ -343,20 +343,29 @@ func (s *Server) deleteEmailList(c *fiber.Ctx) error {
 func (s *Server) deleteListInBatches(listID string) {
 	log.Printf("Starting batch deletion for list %s", listID)
 
-	const batchSize = 10000
+	// OPTIMIZED: Use direct DELETE with CTID for fast batch deletion
+	const batchSize = 50000
 	totalDeleted := 0
 
 	for {
-		// Delete a batch of emails
+		// Delete a batch of emails using ctid (much faster than subquery)
 		result, err := s.db.Exec(`
 			DELETE FROM emails
-			WHERE id IN (
-				SELECT id FROM emails WHERE list_id = $1 LIMIT $2
+			WHERE ctid IN (
+				SELECT ctid FROM emails WHERE list_id = $1 LIMIT $2
 			)
 		`, listID, batchSize)
 
 		if err != nil {
-			log.Printf("Batch delete error for list %s: %v", listID, err)
+			// Fallback to simple delete if ctid doesn't work
+			log.Printf("Batch delete with ctid failed, trying direct delete: %v", err)
+			result, err = s.db.Exec(`DELETE FROM emails WHERE list_id = $1`, listID)
+			if err != nil {
+				log.Printf("Direct delete also failed for list %s: %v", listID, err)
+				break
+			}
+			deleted, _ := result.RowsAffected()
+			totalDeleted += int(deleted)
 			break
 		}
 
@@ -365,13 +374,10 @@ func (s *Server) deleteListInBatches(listID string) {
 
 		log.Printf("List %s: deleted batch of %d emails (total: %d)", listID, deleted, totalDeleted)
 
-		if deleted < batchSize {
+		if deleted < int64(batchSize) {
 			// No more emails to delete
 			break
 		}
-
-		// Small pause between batches
-		time.Sleep(100 * time.Millisecond)
 	}
 
 	// Delete import jobs
