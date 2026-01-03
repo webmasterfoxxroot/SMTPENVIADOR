@@ -1,7 +1,140 @@
 import { useState, useEffect, useRef } from 'react'
-import { Plus, Edit, Trash2, Upload, Users, Loader2, Mail, CheckCircle, XCircle, AlertTriangle, X, Split } from 'lucide-react'
+import { Plus, Edit, Trash2, Upload, Users, Loader2, Mail, CheckCircle, XCircle, AlertTriangle, X, Split, Download, FolderOpen, ChevronDown, ChevronRight, Folder, FolderPlus } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
+
+// Modal para criar/editar grupo
+function GroupModal({ group, onClose, onSave }) {
+  const [form, setForm] = useState({
+    name: group?.name || '',
+    description: group?.description || '',
+    color: group?.color || '#3B82F6'
+  })
+  const [loading, setLoading] = useState(false)
+
+  const colors = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16']
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    try {
+      if (group?.id) {
+        await api.put(`/groups/${group.id}`, form)
+        toast.success('Grupo atualizado!')
+      } else {
+        await api.post('/groups', form)
+        toast.success('Grupo criado!')
+      }
+      onSave()
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Erro ao salvar')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl p-6 w-full max-w-md">
+        <h2 className="text-xl font-bold mb-4">
+          {group?.id ? 'Editar Grupo' : 'Novo Grupo'}
+        </h2>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="label">Nome</label>
+            <input
+              type="text"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              className="input"
+              placeholder="Ex: Listas Boas"
+              required
+            />
+          </div>
+          <div>
+            <label className="label">Descricao</label>
+            <input
+              type="text"
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              className="input"
+              placeholder="Opcional..."
+            />
+          </div>
+          <div>
+            <label className="label">Cor</label>
+            <div className="flex gap-2 flex-wrap">
+              {colors.map(c => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setForm({ ...form, color: c })}
+                  className={`w-8 h-8 rounded-full border-2 ${form.color === c ? 'border-gray-800 scale-110' : 'border-transparent'}`}
+                  style={{ backgroundColor: c }}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="flex justify-end gap-3 pt-4">
+            <button type="button" onClick={onClose} className="btn btn-secondary">Cancelar</button>
+            <button type="submit" disabled={loading} className="btn btn-primary">
+              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Salvar'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// Modal para mover lista para grupo
+function MoveToGroupModal({ list, groups, onClose, onSave }) {
+  const [selectedGroup, setSelectedGroup] = useState(list.group_id || '')
+  const [loading, setLoading] = useState(false)
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    try {
+      await api.put(`/lists/${list.id}/group`, { group_id: selectedGroup || null })
+      toast.success('Lista movida!')
+      onSave()
+    } catch (error) {
+      toast.error('Erro ao mover lista')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl p-6 w-full max-w-md">
+        <h2 className="text-xl font-bold mb-4">Mover "{list.name}"</h2>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="label">Selecione o grupo</label>
+            <select
+              value={selectedGroup}
+              onChange={(e) => setSelectedGroup(e.target.value)}
+              className="input"
+            >
+              <option value="">Sem grupo</option>
+              {groups.map(g => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex justify-end gap-3 pt-4">
+            <button type="button" onClick={onClose} className="btn btn-secondary">Cancelar</button>
+            <button type="submit" disabled={loading} className="btn btn-primary">
+              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Mover'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
 
 // Modal para upload com divisão em múltiplas listas
 function SplitUploadModal({ onClose, onUploadStarted }) {
@@ -350,7 +483,7 @@ function ListModal({ list, onClose, onSave }) {
 }
 
 // List Row - Horizontal compact layout
-function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport }) {
+function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, onDownload, onMoveToGroup }) {
   const isImporting = importJob && (importJob.status === 'pending' || importJob.status === 'processing')
   const isDeleting = list.status === 'deleting'
 
@@ -468,14 +601,32 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport }
               <X className="w-4 h-4" />
             </button>
           ) : (
-            <button
-              onClick={onUpload}
-              className="p-2 text-gray-500 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-              disabled={isDeleting}
-              title="Upload de emails"
-            >
-              <Upload className="w-4 h-4" />
-            </button>
+            <>
+              <button
+                onClick={onUpload}
+                className="p-2 text-gray-500 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                disabled={isDeleting}
+                title="Upload de emails"
+              >
+                <Upload className="w-4 h-4" />
+              </button>
+              <button
+                onClick={onDownload}
+                className="p-2 text-gray-500 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                disabled={isDeleting || totalEmails === 0}
+                title="Download da lista"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+              <button
+                onClick={onMoveToGroup}
+                className="p-2 text-gray-500 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-colors"
+                disabled={isDeleting}
+                title="Mover para grupo"
+              >
+                <FolderOpen className="w-4 h-4" />
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -504,15 +655,20 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport }
 
 function EmailLists() {
   const [lists, setLists] = useState([])
+  const [groups, setGroups] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState({ open: false, list: null })
   const [uploadModal, setUploadModal] = useState({ open: false, listId: null })
   const [splitModal, setSplitModal] = useState(false)
+  const [groupModal, setGroupModal] = useState({ open: false, group: null })
+  const [moveModal, setMoveModal] = useState({ open: false, list: null })
+  const [expandedGroups, setExpandedGroups] = useState({}) // { groupId: true/false }
   const [importJobs, setImportJobs] = useState({}) // { listId: jobStatus }
   const pollIntervals = useRef({})
 
   useEffect(() => {
     fetchListsAndCheckJobs()
+    fetchGroups()
     return () => {
       // Cleanup all poll intervals
       Object.values(pollIntervals.current).forEach(clearInterval)
@@ -530,6 +686,70 @@ function EmailLists() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const fetchGroups = async () => {
+    try {
+      const response = await api.get('/groups')
+      setGroups(response.data.data || [])
+      // Expand all groups by default
+      const expanded = {}
+      ;(response.data.data || []).forEach(g => { expanded[g.id] = true })
+      expanded['ungrouped'] = true
+      setExpandedGroups(expanded)
+    } catch (error) {
+      console.log('Error fetching groups:', error)
+    }
+  }
+
+  const deleteGroup = async (id) => {
+    if (!confirm('Excluir este grupo? As listas serao movidas para "Sem grupo".')) return
+    try {
+      await api.delete(`/groups/${id}`)
+      toast.success('Grupo excluido')
+      fetchGroups()
+      fetchLists()
+    } catch (error) {
+      toast.error('Erro ao excluir grupo')
+    }
+  }
+
+  const downloadList = async (listId, listName) => {
+    try {
+      const response = await api.get(`/lists/${listId}/download?format=csv`, { responseType: 'blob' })
+      const url = window.URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', `${listName}.csv`)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+      toast.success('Download iniciado!')
+    } catch (error) {
+      toast.error('Erro ao baixar lista')
+    }
+  }
+
+  const toggleGroup = (groupId) => {
+    setExpandedGroups(prev => ({ ...prev, [groupId]: !prev[groupId] }))
+  }
+
+  // Organize lists by group
+  const getListsByGroup = () => {
+    const grouped = {}
+    const ungrouped = []
+
+    lists.forEach(list => {
+      if (list.group_id) {
+        if (!grouped[list.group_id]) grouped[list.group_id] = []
+        grouped[list.group_id].push(list)
+      } else {
+        ungrouped.push(list)
+      }
+    })
+
+    return { grouped, ungrouped }
   }
 
   // Check for active import jobs on page load
@@ -674,17 +894,40 @@ function EmailLists() {
     fetchLists()
   }
 
+  const { grouped, ungrouped } = getListsByGroup()
+
+  const renderListRow = (list) => (
+    <ListRow
+      key={list.id}
+      list={list}
+      importJob={importJobs[list.id]}
+      onEdit={() => setModal({ open: true, list })}
+      onDelete={() => deleteList(list.id)}
+      onUpload={() => setUploadModal({ open: true, listId: list.id })}
+      onCancelImport={(jobId) => cancelImport(list.id, jobId)}
+      onDownload={() => downloadList(list.id, list.name)}
+      onMoveToGroup={() => setMoveModal({ open: true, list })}
+    />
+  )
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">Listas de Emails</h1>
         <div className="flex gap-2">
           <button
+            onClick={() => setGroupModal({ open: true, group: null })}
+            className="btn btn-secondary flex items-center gap-2"
+          >
+            <FolderPlus className="w-4 h-4" />
+            Novo Grupo
+          </button>
+          <button
             onClick={() => setSplitModal(true)}
             className="btn btn-secondary flex items-center gap-2"
           >
             <Split className="w-4 h-4" />
-            Upload com Divisão
+            Upload com Divisao
           </button>
           <button
             onClick={() => setModal({ open: true, list: null })}
@@ -696,30 +939,98 @@ function EmailLists() {
         </div>
       </div>
 
-      <div className="flex flex-col gap-2">
-        {loading ? (
-          <div className="flex justify-center py-12">
-            <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
-          </div>
-        ) : lists.length === 0 ? (
-          <div className="text-center py-12 text-gray-500">
-            <Mail className="w-12 h-12 mx-auto mb-4 opacity-50" />
-            <p>Nenhuma lista criada</p>
-          </div>
-        ) : (
-          lists.map((list) => (
-            <ListRow
-              key={list.id}
-              list={list}
-              importJob={importJobs[list.id]}
-              onEdit={() => setModal({ open: true, list })}
-              onDelete={() => deleteList(list.id)}
-              onUpload={() => setUploadModal({ open: true, listId: list.id })}
-              onCancelImport={(jobId) => cancelImport(list.id, jobId)}
-            />
-          ))
-        )}
-      </div>
+      {loading ? (
+        <div className="flex justify-center py-12">
+          <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+        </div>
+      ) : lists.length === 0 ? (
+        <div className="text-center py-12 text-gray-500">
+          <Mail className="w-12 h-12 mx-auto mb-4 opacity-50" />
+          <p>Nenhuma lista criada</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {/* Groups */}
+          {groups.map(group => {
+            const groupLists = grouped[group.id] || []
+            const isExpanded = expandedGroups[group.id]
+
+            return (
+              <div key={group.id} className="border border-gray-200 rounded-lg overflow-hidden">
+                {/* Group Header */}
+                <div
+                  className="flex items-center justify-between px-4 py-3 bg-gray-50 cursor-pointer hover:bg-gray-100"
+                  onClick={() => toggleGroup(group.id)}
+                >
+                  <div className="flex items-center gap-3">
+                    {isExpanded ? <ChevronDown className="w-5 h-5 text-gray-500" /> : <ChevronRight className="w-5 h-5 text-gray-500" />}
+                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: group.color }} />
+                    <span className="font-semibold">{group.name}</span>
+                    <span className="text-sm text-gray-500">({groupLists.length} listas)</span>
+                  </div>
+                  <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                    <button
+                      onClick={() => setGroupModal({ open: true, group })}
+                      className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg"
+                      title="Editar grupo"
+                    >
+                      <Edit className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => deleteGroup(group.id)}
+                      className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                      title="Excluir grupo"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Group Lists */}
+                {isExpanded && groupLists.length > 0 && (
+                  <div className="p-2 space-y-2 bg-white">
+                    {groupLists.map(renderListRow)}
+                  </div>
+                )}
+                {isExpanded && groupLists.length === 0 && (
+                  <div className="p-4 text-center text-gray-400 text-sm">
+                    Nenhuma lista neste grupo
+                  </div>
+                )}
+              </div>
+            )
+          })}
+
+          {/* Ungrouped Lists */}
+          {ungrouped.length > 0 && (
+            <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <div
+                className="flex items-center justify-between px-4 py-3 bg-gray-50 cursor-pointer hover:bg-gray-100"
+                onClick={() => toggleGroup('ungrouped')}
+              >
+                <div className="flex items-center gap-3">
+                  {expandedGroups['ungrouped'] ? <ChevronDown className="w-5 h-5 text-gray-500" /> : <ChevronRight className="w-5 h-5 text-gray-500" />}
+                  <Folder className="w-5 h-5 text-gray-400" />
+                  <span className="font-semibold text-gray-600">Sem Grupo</span>
+                  <span className="text-sm text-gray-500">({ungrouped.length} listas)</span>
+                </div>
+              </div>
+              {expandedGroups['ungrouped'] && (
+                <div className="p-2 space-y-2 bg-white">
+                  {ungrouped.map(renderListRow)}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* No groups - show all lists flat */}
+          {groups.length === 0 && ungrouped.length === 0 && lists.length > 0 && (
+            <div className="space-y-2">
+              {lists.map(renderListRow)}
+            </div>
+          )}
+        </div>
+      )}
 
       {modal.open && (
         <ListModal
@@ -744,6 +1055,29 @@ function EmailLists() {
         <SplitUploadModal
           onClose={() => setSplitModal(false)}
           onUploadStarted={handleSplitUploadStarted}
+        />
+      )}
+
+      {groupModal.open && (
+        <GroupModal
+          group={groupModal.group}
+          onClose={() => setGroupModal({ open: false, group: null })}
+          onSave={() => {
+            setGroupModal({ open: false, group: null })
+            fetchGroups()
+          }}
+        />
+      )}
+
+      {moveModal.open && (
+        <MoveToGroupModal
+          list={moveModal.list}
+          groups={groups}
+          onClose={() => setMoveModal({ open: false, list: null })}
+          onSave={() => {
+            setMoveModal({ open: false, list: null })
+            fetchLists()
+          }}
         />
       )}
     </div>

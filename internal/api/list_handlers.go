@@ -146,7 +146,7 @@ func (s *Server) resumeOrphanedDeletions() {
 func (s *Server) listEmailLists(c *fiber.Ctx) error {
 	rows, err := s.db.Query(`
 		SELECT id, name, description, total_emails, valid_emails,
-		       invalid_emails, status, created_at, updated_at
+		       invalid_emails, status, group_id, created_at, updated_at
 		FROM email_lists
 		ORDER BY created_at DESC
 	`)
@@ -158,12 +158,12 @@ func (s *Server) listEmailLists(c *fiber.Ctx) error {
 	var lists []fiber.Map
 	for rows.Next() {
 		var id, name, status string
-		var description *string
+		var description, groupID *string
 		var totalEmails, validEmails, invalidEmails int
 		var createdAt, updatedAt time.Time
 
 		err := rows.Scan(&id, &name, &description, &totalEmails, &validEmails,
-			&invalidEmails, &status, &createdAt, &updatedAt)
+			&invalidEmails, &status, &groupID, &createdAt, &updatedAt)
 		if err != nil {
 			continue
 		}
@@ -176,6 +176,7 @@ func (s *Server) listEmailLists(c *fiber.Ctx) error {
 			"valid_emails":   validEmails,
 			"invalid_emails": invalidEmails,
 			"status":         status,
+			"group_id":       groupID,
 			"created_at":     createdAt,
 			"updated_at":     updatedAt,
 		})

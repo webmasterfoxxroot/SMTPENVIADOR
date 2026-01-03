@@ -233,6 +233,15 @@ func (s *Server) setupRoutes() {
 	lists.Get("/:id/import-jobs", s.getListImportJobs)
 	lists.Get("/:id/emails", s.getListEmails)
 	lists.Delete("/:id/emails/:emailId", s.deleteEmail)
+	lists.Get("/:id/download", s.downloadList)
+	lists.Put("/:id/group", s.moveListToGroup)
+
+	// Email List Groups
+	groups := protected.Group("/groups")
+	groups.Get("/", s.listGroups)
+	groups.Post("/", s.createGroup)
+	groups.Put("/:id", s.updateGroup)
+	groups.Delete("/:id", s.deleteGroup)
 
 	// Import job status and control (outside of lists group for simpler access)
 	protected.Get("/import-status/:jobId", s.getImportStatus)
