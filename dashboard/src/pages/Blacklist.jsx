@@ -140,12 +140,12 @@ function ImportModal({ onClose, onSuccess }) {
 }
 
 function DatabaseMigrationModal({ onClose, onSuccess }) {
-  const [step, setStep] = useState(1) // 1: upload, 2: preview, 3: importing
+  const [step, setStep] = useState(1) // 1: upload, 2: importing/progress, 3: completed
   const [loading, setLoading] = useState(false)
   const [file, setFile] = useState(null)
   const [dbType, setDbType] = useState('mailwizz')
-  const [previewResult, setPreviewResult] = useState(null)
-  const [importResult, setImportResult] = useState(null)
+  const [jobId, setJobId] = useState(null)
+  const [jobStatus, setJobStatus] = useState(null)
 
   const databaseTypes = [
     { value: 'mailwizz', name: 'MailWizz', table: 'mw_email_blacklist' },
@@ -153,7 +153,33 @@ function DatabaseMigrationModal({ onClose, onSuccess }) {
     { value: 'mumara', name: 'Mumara', table: 'suppression_list' }
   ]
 
-  const handlePreview = async () => {
+  // Poll job status
+  useEffect(() => {
+    if (!jobId || step !== 2) return
+
+    const pollStatus = async () => {
+      try {
+        const response = await api.get(`/blacklist/migration/status/${jobId}`)
+        setJobStatus(response.data)
+
+        if (response.data.status === 'completed') {
+          setStep(3)
+          toast.success(`Importacao concluida! ${response.data.imported} emails importados`)
+        } else if (response.data.status === 'failed') {
+          setStep(3)
+          toast.error(response.data.error_message || 'Erro na importacao')
+        }
+      } catch (error) {
+        console.error('Error polling status:', error)
+      }
+    }
+
+    pollStatus()
+    const interval = setInterval(pollStatus, 1000)
+    return () => clearInterval(interval)
+  }, [jobId, step])
+
+  const handleStartImport = async () => {
     if (!file) {
       toast.error('Selecione um arquivo .sql')
       return
@@ -165,56 +191,25 @@ function DatabaseMigrationModal({ onClose, onSuccess }) {
     formData.append('type', dbType)
 
     try {
-      const response = await api.post('/blacklist/migration/preview', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      })
-      setPreviewResult(response.data)
-      setStep(2)
-      toast.success('Arquivo analisado!')
-    } catch (error) {
-      toast.error(error.response?.data?.error || 'Erro ao analisar arquivo')
-      setPreviewResult({ error: error.response?.data?.error || 'Erro desconhecido' })
-      setStep(2)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleImport = async () => {
-    setLoading(true)
-    setStep(3)
-
-    const formData = new FormData()
-    formData.append('file', file)
-    formData.append('type', dbType)
-
-    try {
       const response = await api.post('/blacklist/migration/import', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       })
-      setImportResult(response.data)
-      toast.success(`Importacao concluida! ${response.data.imported} emails importados`)
+      setJobId(response.data.job_id)
+      setStep(2)
+      toast.success('Importacao iniciada!')
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Erro na importacao')
-      setImportResult({ error: error.response?.data?.error || 'Erro desconhecido' })
+      toast.error(error.response?.data?.error || 'Erro ao iniciar importacao')
     } finally {
       setLoading(false)
     }
   }
 
   const handleClose = () => {
-    if (importResult && !importResult.error) {
+    if (jobStatus?.status === 'completed') {
       onSuccess()
     } else {
       onClose()
     }
-  }
-
-  const resetForm = () => {
-    setStep(1)
-    setFile(null)
-    setPreviewResult(null)
-    setImportResult(null)
   }
 
   return (
@@ -262,16 +257,16 @@ function DatabaseMigrationModal({ onClose, onSuccess }) {
             </div>
 
             <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
-              <p className="font-medium mb-1">Como exportar o arquivo SQL:</p>
-              <p>Use phpMyAdmin ou mysqldump para exportar a tabela de blacklist do seu sistema antigo.</p>
+              <p className="font-medium mb-1">A importacao roda em segundo plano</p>
+              <p>Voce pode fechar este modal e continuar usando o sistema. A importacao continuara.</p>
             </div>
 
             <div className="flex justify-end gap-3 pt-4">
               <button type="button" onClick={onClose} className="btn btn-secondary">
                 Cancelar
               </button>
-              <button onClick={handlePreview} disabled={loading || !file} className="btn btn-primary">
-                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Analisar Arquivo'}
+              <button onClick={handleStartImport} disabled={loading || !file} className="btn btn-primary">
+                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Iniciar Importacao'}
               </button>
             </div>
           </div>
@@ -279,68 +274,62 @@ function DatabaseMigrationModal({ onClose, onSuccess }) {
 
         {step === 2 && (
           <div className="space-y-4">
-            {previewResult?.error ? (
-              <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
-                <div className="flex items-center gap-2 text-red-700 font-medium mb-2">
-                  <AlertCircle className="w-5 h-5" />
-                  Erro ao Analisar
-                </div>
-                <p className="text-red-600 text-sm">{previewResult.error}</p>
-              </div>
-            ) : (
-              <>
-                <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-                  <div className="flex items-center gap-2 text-green-700 font-medium mb-2">
-                    <CheckCircle2 className="w-5 h-5" />
-                    Arquivo Analisado!
-                  </div>
-                  <div className="text-sm text-green-700 space-y-1">
-                    <p><strong>Tabela encontrada:</strong> {previewResult.table}</p>
-                    <p><strong>Total de Emails:</strong> {previewResult.total_emails?.toLocaleString()}</p>
-                  </div>
-                </div>
+            <div className="text-center py-4">
+              <Loader2 className="w-12 h-12 animate-spin mx-auto text-blue-500 mb-4" />
+              <p className="text-gray-600 font-medium">Importando emails...</p>
+              <p className="text-sm text-gray-500 mb-4">Voce pode fechar este modal - a importacao continuara em segundo plano</p>
+            </div>
 
-                {previewResult.samples && previewResult.samples.length > 0 && (
-                  <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
-                    <p className="text-sm font-medium text-gray-700 mb-2">Amostra de Emails:</p>
-                    <ul className="text-sm text-gray-600 font-mono space-y-1">
-                      {previewResult.samples.map((email, i) => (
-                        <li key={i}>{email}</li>
-                      ))}
-                    </ul>
+            {jobStatus && (
+              <div className="space-y-3">
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-600">Progresso:</span>
+                  <span className="font-medium">{jobStatus.progress}%</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-3">
+                  <div
+                    className="bg-blue-500 h-3 rounded-full transition-all duration-300"
+                    style={{ width: `${jobStatus.progress}%` }}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div className="p-2 bg-gray-50 rounded">
+                    <span className="text-gray-500">Processados:</span>
+                    <span className="font-medium ml-1">{jobStatus.processed?.toLocaleString()}/{jobStatus.total_emails?.toLocaleString()}</span>
                   </div>
-                )}
-              </>
+                  <div className="p-2 bg-green-50 rounded">
+                    <span className="text-gray-500">Importados:</span>
+                    <span className="font-medium ml-1 text-green-600">{jobStatus.imported?.toLocaleString()}</span>
+                  </div>
+                  <div className="p-2 bg-yellow-50 rounded">
+                    <span className="text-gray-500">Duplicados:</span>
+                    <span className="font-medium ml-1 text-yellow-600">{jobStatus.duplicates?.toLocaleString()}</span>
+                  </div>
+                  <div className="p-2 bg-red-50 rounded">
+                    <span className="text-gray-500">Erros:</span>
+                    <span className="font-medium ml-1 text-red-600">{jobStatus.errors?.toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
             )}
 
             <div className="flex justify-end gap-3 pt-4">
-              <button onClick={resetForm} className="btn btn-secondary">
-                Voltar
+              <button onClick={onClose} className="btn btn-secondary">
+                Fechar (continua em segundo plano)
               </button>
-              {!previewResult?.error && (
-                <button onClick={handleImport} disabled={loading} className="btn btn-primary">
-                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : `Importar ${previewResult?.total_emails?.toLocaleString()} Emails`}
-                </button>
-              )}
             </div>
           </div>
         )}
 
         {step === 3 && (
           <div className="space-y-4">
-            {loading ? (
-              <div className="text-center py-8">
-                <Loader2 className="w-12 h-12 animate-spin mx-auto text-blue-500 mb-4" />
-                <p className="text-gray-600">Importando emails...</p>
-                <p className="text-sm text-gray-500">Isso pode levar alguns minutos</p>
-              </div>
-            ) : importResult?.error ? (
+            {jobStatus?.status === 'failed' ? (
               <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
                 <div className="flex items-center gap-2 text-red-700 font-medium mb-2">
                   <AlertCircle className="w-5 h-5" />
                   Erro na Importacao
                 </div>
-                <p className="text-red-600 text-sm">{importResult.error}</p>
+                <p className="text-red-600 text-sm">{jobStatus.error_message}</p>
               </div>
             ) : (
               <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
@@ -349,20 +338,20 @@ function DatabaseMigrationModal({ onClose, onSuccess }) {
                   Importacao Concluida!
                 </div>
                 <div className="text-sm text-green-700 space-y-1">
-                  <p><strong>Fonte:</strong> {importResult.source}</p>
-                  <p><strong>Tabela:</strong> {importResult.table}</p>
-                  <p><strong>Importados:</strong> {importResult.imported?.toLocaleString()}</p>
-                  <p><strong>Duplicados (ja existiam):</strong> {importResult.duplicates?.toLocaleString()}</p>
-                  <p className="pt-2 border-t border-green-200 mt-2">
-                    <strong>Total processado:</strong> {importResult.total?.toLocaleString()}
-                  </p>
+                  <p><strong>Fonte:</strong> {jobStatus?.db_type}</p>
+                  <p><strong>Total processado:</strong> {jobStatus?.total_emails?.toLocaleString()}</p>
+                  <p><strong>Importados:</strong> {jobStatus?.imported?.toLocaleString()}</p>
+                  <p><strong>Duplicados:</strong> {jobStatus?.duplicates?.toLocaleString()}</p>
+                  {jobStatus?.errors > 0 && (
+                    <p><strong>Erros:</strong> {jobStatus?.errors?.toLocaleString()}</p>
+                  )}
                 </div>
               </div>
             )}
 
             <div className="flex justify-end gap-3 pt-4">
               <button onClick={handleClose} className="btn btn-primary">
-                {importResult?.error ? 'Voltar' : 'Fechar'}
+                Fechar
               </button>
             </div>
           </div>
