@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Save, Loader2 } from 'lucide-react'
+import { ArrowLeft, Save, Loader2, ChevronDown, ChevronRight, Folder, Users, CheckCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
 
@@ -10,6 +10,8 @@ function CampaignEdit() {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [lists, setLists] = useState([])
+  const [groups, setGroups] = useState([])
+  const [expandedGroups, setExpandedGroups] = useState({})
 
   const [form, setForm] = useState({
     name: '',
@@ -17,7 +19,7 @@ function CampaignEdit() {
     subject: '',
     html_content: '',
     text_content: '',
-    list_id: '',
+    list_ids: [],
     send_rate: 0,
     track_opens: true,
     track_clicks: true
@@ -25,6 +27,7 @@ function CampaignEdit() {
 
   useEffect(() => {
     fetchLists()
+    fetchGroups()
     if (id) {
       fetchCampaign()
     }
@@ -39,11 +42,28 @@ function CampaignEdit() {
     }
   }
 
+  const fetchGroups = async () => {
+    try {
+      const response = await api.get('/groups')
+      setGroups(response.data.data || [])
+      // Expand all groups by default
+      const expanded = {}
+      ;(response.data.data || []).forEach(g => { expanded[g.id] = true })
+      expanded['ungrouped'] = true
+      setExpandedGroups(expanded)
+    } catch (error) {
+      console.log('No groups:', error)
+    }
+  }
+
   const fetchCampaign = async () => {
     setLoading(true)
     try {
       const response = await api.get(`/campaigns/${id}`)
-      setForm(response.data)
+      const data = response.data
+      // Handle both list_ids array and legacy list_id
+      const listIds = data.list_ids || (data.list_id ? [data.list_id] : [])
+      setForm({ ...data, list_ids: listIds })
     } catch (error) {
       toast.error('Erro ao carregar campanha')
       navigate('/campaigns')
@@ -54,6 +74,12 @@ function CampaignEdit() {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+
+    if (form.list_ids.length === 0) {
+      toast.error('Selecione pelo menos uma lista')
+      return
+    }
+
     setSaving(true)
 
     try {
@@ -64,9 +90,6 @@ function CampaignEdit() {
       } else {
         const response = await api.post('/campaigns', form)
         toast.success('Campanha criada! Countdown iniciado.')
-
-        // Navigate to campaigns page with the new campaign ID to start countdown
-        // The campaigns page will handle showing the countdown in the status column
         navigate('/campaigns', {
           state: {
             newCampaignId: response.data.id,
@@ -80,6 +103,63 @@ function CampaignEdit() {
       setSaving(false)
     }
   }
+
+  const toggleList = (listId) => {
+    setForm(prev => {
+      const isSelected = prev.list_ids.includes(listId)
+      if (isSelected) {
+        return { ...prev, list_ids: prev.list_ids.filter(id => id !== listId) }
+      } else {
+        return { ...prev, list_ids: [...prev.list_ids, listId] }
+      }
+    })
+  }
+
+  const toggleGroup = (groupId) => {
+    setExpandedGroups(prev => ({ ...prev, [groupId]: !prev[groupId] }))
+  }
+
+  const selectAllInGroup = (groupLists) => {
+    const allIds = groupLists.map(l => l.id)
+    const allSelected = allIds.every(id => form.list_ids.includes(id))
+
+    if (allSelected) {
+      // Deselect all
+      setForm(prev => ({
+        ...prev,
+        list_ids: prev.list_ids.filter(id => !allIds.includes(id))
+      }))
+    } else {
+      // Select all
+      setForm(prev => ({
+        ...prev,
+        list_ids: [...new Set([...prev.list_ids, ...allIds])]
+      }))
+    }
+  }
+
+  // Organize lists by group
+  const getListsByGroup = () => {
+    const grouped = {}
+    const ungrouped = []
+
+    lists.forEach(list => {
+      if (list.group_id) {
+        if (!grouped[list.group_id]) grouped[list.group_id] = []
+        grouped[list.group_id].push(list)
+      } else {
+        ungrouped.push(list)
+      }
+    })
+
+    return { grouped, ungrouped }
+  }
+
+  // Calculate totals
+  const selectedLists = lists.filter(l => form.list_ids.includes(l.id))
+  const totalEmails = selectedLists.reduce((sum, l) => sum + (l.valid_emails || 0), 0)
+
+  const { grouped, ungrouped } = getListsByGroup()
 
   if (loading) {
     return (
@@ -105,7 +185,7 @@ function CampaignEdit() {
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="card">
-          <h2 className="text-lg font-semibold mb-4">Informações Básicas</h2>
+          <h2 className="text-lg font-semibold mb-4">Informacoes Basicas</h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -120,22 +200,6 @@ function CampaignEdit() {
               />
             </div>
             <div>
-              <label className="label">Lista de Emails</label>
-              <select
-                value={form.list_id}
-                onChange={(e) => setForm({ ...form, list_id: e.target.value })}
-                className="input"
-                required
-              >
-                <option value="">Selecione uma lista</option>
-                {lists.map((list) => (
-                  <option key={list.id} value={list.id}>
-                    {list.name} ({list.valid_emails?.toLocaleString()} emails)
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
               <label className="label">Taxa de Envio (emails/min, 0 = ilimitado)</label>
               <input
                 type="number"
@@ -145,37 +209,170 @@ function CampaignEdit() {
                 min="0"
               />
             </div>
-            <div className="flex flex-col gap-3 pt-6">
-              <div className="flex items-center gap-3">
-                <input
-                  type="checkbox"
-                  id="track_opens"
-                  checked={form.track_opens}
-                  onChange={(e) => setForm({ ...form, track_opens: e.target.checked })}
-                  className="w-5 h-5 rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500"
-                />
-                <label htmlFor="track_opens" className="text-sm">
-                  Rastrear aberturas
-                </label>
-              </div>
-              <div className="flex items-center gap-3">
-                <input
-                  type="checkbox"
-                  id="track_clicks"
-                  checked={form.track_clicks}
-                  onChange={(e) => setForm({ ...form, track_clicks: e.target.checked })}
-                  className="w-5 h-5 rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500"
-                />
-                <label htmlFor="track_clicks" className="text-sm">
-                  Rastrear cliques
-                </label>
-              </div>
+          </div>
+
+          {/* List Selection */}
+          <div className="mt-6">
+            <div className="flex items-center justify-between mb-3">
+              <label className="label mb-0">Listas de Emails</label>
+              {form.list_ids.length > 0 && (
+                <span className="text-sm text-blue-600 font-medium">
+                  {form.list_ids.length} lista(s) selecionada(s) - {totalEmails.toLocaleString()} emails
+                </span>
+              )}
+            </div>
+
+            <div className="border border-gray-200 rounded-lg max-h-80 overflow-y-auto">
+              {/* Groups */}
+              {groups.map(group => {
+                const groupLists = grouped[group.id] || []
+                if (groupLists.length === 0) return null
+
+                const isExpanded = expandedGroups[group.id]
+                const selectedCount = groupLists.filter(l => form.list_ids.includes(l.id)).length
+                const allSelected = selectedCount === groupLists.length && groupLists.length > 0
+
+                return (
+                  <div key={group.id} className="border-b border-gray-100 last:border-b-0">
+                    <div
+                      className="flex items-center justify-between px-4 py-2 bg-gray-50 cursor-pointer hover:bg-gray-100"
+                      onClick={() => toggleGroup(group.id)}
+                    >
+                      <div className="flex items-center gap-3">
+                        {isExpanded ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
+                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: group.color }} />
+                        <span className="font-medium text-sm">{group.name}</span>
+                        <span className="text-xs text-gray-500">({groupLists.length} listas)</span>
+                        {selectedCount > 0 && (
+                          <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
+                            {selectedCount} selecionadas
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); selectAllInGroup(groupLists) }}
+                        className={`text-xs px-2 py-1 rounded ${allSelected ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
+                      >
+                        {allSelected ? 'Desmarcar todas' : 'Selecionar todas'}
+                      </button>
+                    </div>
+                    {isExpanded && (
+                      <div className="bg-white">
+                        {groupLists.map(list => (
+                          <label
+                            key={list.id}
+                            className="flex items-center gap-3 px-4 py-2 pl-10 hover:bg-gray-50 cursor-pointer"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={form.list_ids.includes(list.id)}
+                              onChange={() => toggleList(list.id)}
+                              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <span className="flex-1 text-sm">{list.name}</span>
+                            <span className="text-xs text-gray-500 flex items-center gap-1">
+                              <Users className="w-3 h-3" />
+                              {(list.valid_emails || 0).toLocaleString()}
+                            </span>
+                            {list.status === 'ready' && (
+                              <CheckCircle className="w-4 h-4 text-green-500" />
+                            )}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+
+              {/* Ungrouped Lists */}
+              {ungrouped.length > 0 && (
+                <div className="border-b border-gray-100 last:border-b-0">
+                  <div
+                    className="flex items-center justify-between px-4 py-2 bg-gray-50 cursor-pointer hover:bg-gray-100"
+                    onClick={() => toggleGroup('ungrouped')}
+                  >
+                    <div className="flex items-center gap-3">
+                      {expandedGroups['ungrouped'] ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
+                      <Folder className="w-4 h-4 text-gray-400" />
+                      <span className="font-medium text-sm text-gray-600">Sem Grupo</span>
+                      <span className="text-xs text-gray-500">({ungrouped.length} listas)</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); selectAllInGroup(ungrouped) }}
+                      className="text-xs px-2 py-1 rounded bg-gray-200 text-gray-700 hover:bg-gray-300"
+                    >
+                      Selecionar todas
+                    </button>
+                  </div>
+                  {expandedGroups['ungrouped'] && (
+                    <div className="bg-white">
+                      {ungrouped.map(list => (
+                        <label
+                          key={list.id}
+                          className="flex items-center gap-3 px-4 py-2 pl-10 hover:bg-gray-50 cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={form.list_ids.includes(list.id)}
+                            onChange={() => toggleList(list.id)}
+                            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="flex-1 text-sm">{list.name}</span>
+                          <span className="text-xs text-gray-500 flex items-center gap-1">
+                            <Users className="w-3 h-3" />
+                            {(list.valid_emails || 0).toLocaleString()}
+                          </span>
+                          {list.status === 'ready' && (
+                            <CheckCircle className="w-4 h-4 text-green-500" />
+                          )}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {lists.length === 0 && (
+                <div className="p-4 text-center text-gray-500 text-sm">
+                  Nenhuma lista disponivel
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex gap-6 mt-4">
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id="track_opens"
+                checked={form.track_opens}
+                onChange={(e) => setForm({ ...form, track_opens: e.target.checked })}
+                className="w-5 h-5 rounded border-gray-300 text-blue-500 focus:ring-blue-500"
+              />
+              <label htmlFor="track_opens" className="text-sm">
+                Rastrear aberturas
+              </label>
+            </div>
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id="track_clicks"
+                checked={form.track_clicks}
+                onChange={(e) => setForm({ ...form, track_clicks: e.target.checked })}
+                className="w-5 h-5 rounded border-gray-300 text-blue-500 focus:ring-blue-500"
+              />
+              <label htmlFor="track_clicks" className="text-sm">
+                Rastrear cliques
+              </label>
             </div>
           </div>
         </div>
 
         <div className="card">
-          <h2 className="text-lg font-semibold mb-4">Conteúdo do Email</h2>
+          <h2 className="text-lg font-semibold mb-4">Conteudo do Email</h2>
 
           <div className="space-y-4">
             <div>
@@ -189,7 +386,7 @@ function CampaignEdit() {
                 required
               />
               <p className="text-xs text-gray-500 mt-1">
-                Nome que aparece no campo "De:" do email. O email será do SMTP.
+                Nome que aparece no campo "De:" do email. O email sera do SMTP.
               </p>
             </div>
 
@@ -200,34 +397,34 @@ function CampaignEdit() {
                 value={form.subject}
                 onChange={(e) => setForm({ ...form, subject: e.target.value })}
                 className="input"
-                placeholder="Olá {{nome}}, confira nossa oferta!"
+                placeholder="Ola {{nome}}, confira nossa oferta!"
                 required
               />
               <p className="text-xs text-gray-500 mt-1">
-                Use variáveis: {'{{nome}}'}, {'{{email}}'}, {'{{custom1}}'}, etc.
+                Use variaveis: {'{{nome}}'}, {'{{email}}'}, {'{{custom1}}'}, etc.
               </p>
             </div>
 
             <div>
-              <label className="label">Conteúdo HTML</label>
+              <label className="label">Conteudo HTML</label>
               <textarea
                 value={form.html_content}
                 onChange={(e) => setForm({ ...form, html_content: e.target.value })}
                 className="input font-mono text-sm"
                 rows={15}
-                placeholder="<html><body>Olá {{nome}}!</body></html>"
+                placeholder="<html><body>Ola {{nome}}!</body></html>"
                 required
               />
             </div>
 
             <div>
-              <label className="label">Conteúdo Texto (opcional)</label>
+              <label className="label">Conteudo Texto (opcional)</label>
               <textarea
                 value={form.text_content}
                 onChange={(e) => setForm({ ...form, text_content: e.target.value })}
                 className="input"
                 rows={5}
-                placeholder="Versão texto do email..."
+                placeholder="Versao texto do email..."
               />
             </div>
           </div>

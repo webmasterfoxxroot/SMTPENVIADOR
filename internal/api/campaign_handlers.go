@@ -30,7 +30,8 @@ type CampaignRequest struct {
 	ReplyTo     string     `json:"reply_to"`
 	HTMLContent string     `json:"html_content"`
 	TextContent string     `json:"text_content"`
-	ListID      string     `json:"list_id"`
+	ListID      string     `json:"list_id"`       // For backwards compatibility
+	ListIDs     []string   `json:"list_ids"`      // Multiple lists support
 	SendRate    int        `json:"send_rate"`
 	ScheduledAt *time.Time `json:"scheduled_at"`
 	TrackOpens  bool       `json:"track_opens"`
@@ -125,8 +126,14 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Missing required fields"})
 	}
 
-	if req.ListID == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "List ID is required"})
+	// Support both list_id (single) and list_ids (multiple)
+	listIDs := req.ListIDs
+	if len(listIDs) == 0 && req.ListID != "" {
+		listIDs = []string{req.ListID}
+	}
+
+	if len(listIDs) == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "At least one list is required"})
 	}
 
 	// Check if there are active SMTPs available
@@ -137,24 +144,34 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Nenhum SMTP ativo disponível. Adicione um SMTP antes de criar campanhas."})
 	}
 
-	// Get email count from list
+	// Get email count from all selected lists
 	var totalEmails int
-	s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false`, req.ListID).Scan(&totalEmails)
+	listIDsStr := strings.Join(listIDs, ",")
+	placeholders := make([]string, len(listIDs))
+	args := make([]interface{}, len(listIDs))
+	for i, id := range listIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+	query := fmt.Sprintf(`SELECT COUNT(*) FROM emails WHERE list_id IN (%s) AND valid = true AND bounced = false AND unsubscribed = false`, strings.Join(placeholders, ","))
+	s.db.QueryRow(query, args...).Scan(&totalEmails)
 
 	id := uuid.New().String()
 
 	// Insert campaign as draft with auto_start_at = NOW() + 60 seconds (in UTC)
+	// Use first list_id for backwards compatibility, store all in list_ids
 	autoStartAt := time.Now().UTC().Add(60 * time.Second)
 	_, err := s.db.Exec(`
 		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to,
-		                       html_content, text_content, list_id, send_rate,
+		                       html_content, text_content, list_id, list_ids, send_rate,
 		                       scheduled_at, track_opens, track_clicks, total_emails, status, auto_start_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'draft', $15)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'draft', $16)
 	`, id, req.Name, req.Subject, req.FromName, req.FromEmail, req.ReplyTo,
-		req.HTMLContent, req.TextContent, req.ListID, req.SendRate,
+		req.HTMLContent, req.TextContent, listIDs[0], listIDsStr, req.SendRate,
 		req.ScheduledAt, req.TrackOpens, req.TrackClicks, totalEmails, autoStartAt)
 
 	if err != nil {
+		log.Printf("Failed to create campaign: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to create campaign"})
 	}
 
@@ -172,23 +189,32 @@ func (s *Server) getCampaign(c *fiber.Ctx) error {
 	id := c.Params("id")
 
 	var name, subject, fromName, fromEmail, replyTo, htmlContent, textContent, status, listID string
+	var listIDsStr sql.NullString
 	var totalEmails, sentCount, failedCount, openCount, clickCount, bounceCount, sendRate int
 	var scheduledAt, startedAt, completedAt *time.Time
 	var createdAt, updatedAt time.Time
 
 	err := s.db.QueryRow(`
 		SELECT name, subject, from_name, from_email, reply_to, html_content, text_content,
-		       list_id, status, total_emails, sent_count, failed_count, open_count,
+		       list_id, COALESCE(list_ids, ''), status, total_emails, sent_count, failed_count, open_count,
 		       click_count, bounce_count, send_rate, scheduled_at, started_at,
 		       completed_at, created_at, updated_at
 		FROM campaigns WHERE id = $1
 	`, id).Scan(&name, &subject, &fromName, &fromEmail, &replyTo, &htmlContent, &textContent,
-		&listID, &status, &totalEmails, &sentCount, &failedCount, &openCount,
+		&listID, &listIDsStr, &status, &totalEmails, &sentCount, &failedCount, &openCount,
 		&clickCount, &bounceCount, &sendRate, &scheduledAt, &startedAt,
 		&completedAt, &createdAt, &updatedAt)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
+	}
+
+	// Parse list_ids
+	var listIDs []string
+	if listIDsStr.Valid && listIDsStr.String != "" {
+		listIDs = strings.Split(listIDsStr.String, ",")
+	} else if listID != "" {
+		listIDs = []string{listID}
 	}
 
 	return c.JSON(fiber.Map{
@@ -201,6 +227,7 @@ func (s *Server) getCampaign(c *fiber.Ctx) error {
 		"html_content":  htmlContent,
 		"text_content":  textContent,
 		"list_id":       listID,
+		"list_ids":      listIDs,
 		"status":        status,
 		"total_emails":  totalEmails,
 		"sent_count":    sentCount,
@@ -278,12 +305,13 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 
 	// Get campaign details
 	var listID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	var listIDsStr sql.NullString
 	var status string
 	var trackOpens, trackClicks bool
 	err := s.db.QueryRow(`
-		SELECT list_id, from_email, from_name, reply_to, subject, html_content, text_content, status, COALESCE(track_opens, true), COALESCE(track_clicks, true)
+		SELECT list_id, COALESCE(list_ids, ''), from_email, from_name, reply_to, subject, html_content, text_content, status, COALESCE(track_opens, true), COALESCE(track_clicks, true)
 		FROM campaigns WHERE id = $1
-	`, id).Scan(&listID, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &status, &trackOpens, &trackClicks)
+	`, id).Scan(&listID, &listIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &status, &trackOpens, &trackClicks)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
@@ -296,12 +324,29 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 	// Get tracking domain from settings
 	trackingDomain := s.getTrackingDomain()
 
-	// Get emails from list
-	rows, err := s.db.Query(`
+	// Parse list IDs - use list_ids if available, otherwise use list_id
+	var listIDs []string
+	if listIDsStr.Valid && listIDsStr.String != "" {
+		listIDs = strings.Split(listIDsStr.String, ",")
+	} else {
+		listIDs = []string{listID}
+	}
+
+	// Build query for multiple lists
+	placeholders := make([]string, len(listIDs))
+	args := make([]interface{}, len(listIDs))
+	for i, lid := range listIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = strings.TrimSpace(lid)
+	}
+
+	// Get emails from all lists
+	query := fmt.Sprintf(`
 		SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
 		FROM emails
-		WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
-	`, listID)
+		WHERE list_id IN (%s) AND valid = true AND bounced = false AND unsubscribed = false
+	`, strings.Join(placeholders, ","))
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch emails"})
 	}
