@@ -401,6 +401,18 @@ function Blacklist() {
     }
   }
 
+  const clearAllBlacklist = async () => {
+    if (!confirm(`Tem certeza que deseja APAGAR TODOS os ${total.toLocaleString()} emails da blacklist?\n\nEssa ação não pode ser desfeita!`)) return
+
+    try {
+      const response = await api.delete('/blacklist')
+      toast.success(`${response.data.deleted.toLocaleString()} emails removidos da blacklist`)
+      fetchBlacklist()
+    } catch (error) {
+      toast.error('Erro ao limpar blacklist')
+    }
+  }
+
   const getReasonLabel = (reason) => {
     const labels = {
       manual: 'Manual',
@@ -417,6 +429,15 @@ function Blacklist() {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">Blacklist</h1>
         <div className="flex gap-3">
+          {total > 0 && (
+            <button
+              onClick={clearAllBlacklist}
+              className="btn btn-danger flex items-center gap-2"
+            >
+              <Trash2 className="w-4 h-4" />
+              Limpar Tudo
+            </button>
+          )}
           <button
             onClick={() => setMigrationModal(true)}
             className="btn btn-secondary flex items-center gap-2"

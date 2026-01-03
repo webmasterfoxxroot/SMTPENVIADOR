@@ -141,6 +141,30 @@ func (s *Server) removeFromBlacklist(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Email removed from blacklist"})
 }
 
+// clearBlacklist removes all entries from the blacklist
+func (s *Server) clearBlacklist(c *fiber.Ctx) error {
+	// Get count before deleting
+	var count int
+	s.db.QueryRow(`SELECT COUNT(*) FROM blacklist`).Scan(&count)
+
+	// Delete all entries
+	_, err := s.db.Exec(`DELETE FROM blacklist`)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao limpar blacklist"})
+	}
+
+	// Also clear import jobs
+	s.db.Exec(`DELETE FROM blacklist_import_jobs`)
+
+	// Mark all emails as valid (if not bounced/unsubscribed)
+	s.db.Exec(`UPDATE emails SET valid = true WHERE bounced = false AND unsubscribed = false`)
+
+	return c.JSON(fiber.Map{
+		"message": "Blacklist limpa com sucesso",
+		"deleted": count,
+	})
+}
+
 // importBlacklist imports emails from file
 func (s *Server) importBlacklist(c *fiber.Ctx) error {
 	file, err := c.FormFile("file")
