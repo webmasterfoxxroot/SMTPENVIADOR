@@ -349,133 +349,155 @@ function ListModal({ list, onClose, onSave }) {
   )
 }
 
-// List Card with import progress
-function ListCard({ list, importJob, onEdit, onDelete, onUpload, onCancelImport }) {
+// List Row - Horizontal compact layout
+function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport }) {
   const isImporting = importJob && (importJob.status === 'pending' || importJob.status === 'processing')
-  const importCompleted = importJob && importJob.status === 'completed'
+  const isDeleting = list.status === 'deleting'
+
+  // Calculate stats
+  const totalEmails = list.total_emails || 0
+  const validEmails = list.valid_emails || 0
+  const invalidEmails = list.invalid_emails || 0
+  const duplicates = importJob?.duplicates || 0
+  const validPercent = totalEmails > 0 ? ((validEmails / totalEmails) * 100).toFixed(1) : 0
 
   return (
-    <div className="card">
-      <div className="flex items-start justify-between mb-4">
-        <div>
-          <h3 className="font-semibold text-lg">{list.name}</h3>
-          {list.description && (
-            <p className="text-sm text-gray-500 mt-1">{list.description}</p>
-          )}
+    <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 hover:shadow-md transition-shadow">
+      {/* Main Row */}
+      <div className="flex items-center gap-4">
+        {/* Name & Description */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="font-semibold text-gray-900 truncate">{list.name}</h3>
+            {list.description && (
+              <span className="text-xs text-gray-400 truncate hidden sm:inline">({list.description})</span>
+            )}
+          </div>
         </div>
-        <div className="flex gap-1">
+
+        {/* Stats - hide when importing */}
+        {!isImporting && (
+          <div className="hidden md:flex items-center gap-4 text-sm">
+            <div className="flex items-center gap-1 text-gray-600">
+              <Users className="w-4 h-4" />
+              <span className="font-medium">{totalEmails.toLocaleString()}</span>
+            </div>
+            {totalEmails > 0 && (
+              <>
+                <div className="flex items-center gap-1 text-green-600" title="Válidos">
+                  <CheckCircle className="w-4 h-4" />
+                  <span>{validEmails.toLocaleString()}</span>
+                  <span className="text-xs text-gray-400">({validPercent}%)</span>
+                </div>
+                {invalidEmails > 0 && (
+                  <div className="flex items-center gap-1 text-red-500" title="Inválidos">
+                    <XCircle className="w-4 h-4" />
+                    <span>{invalidEmails.toLocaleString()}</span>
+                  </div>
+                )}
+                {duplicates > 0 && (
+                  <div className="flex items-center gap-1 text-yellow-600" title="Duplicados">
+                    <AlertTriangle className="w-4 h-4" />
+                    <span>{duplicates.toLocaleString()}</span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Import Progress */}
+        {isImporting && (
+          <div className="flex-1 max-w-md">
+            <div className="flex items-center gap-3">
+              <div className="flex-1">
+                <div className="w-full h-2 bg-blue-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                    style={{ width: `${importJob.progress || 0}%` }}
+                  />
+                </div>
+              </div>
+              <span className="text-sm font-medium text-blue-600 w-12">{importJob.progress || 0}%</span>
+              <div className="text-xs text-gray-500">
+                {(importJob.processed || 0).toLocaleString()}/{(importJob.total_lines || 0).toLocaleString()}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Status Badge */}
+        <span className={`px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap ${
+          isImporting ? 'bg-blue-100 text-blue-700' :
+          isDeleting ? 'bg-red-100 text-red-700' :
+          list.status === 'ready' ? 'bg-green-100 text-green-700' :
+          list.status === 'pending' ? 'bg-gray-100 text-gray-600' :
+          'bg-yellow-100 text-yellow-700'
+        }`}>
+          {isImporting ? 'Importando' :
+           isDeleting ? 'Excluindo' :
+           list.status === 'ready' ? 'Pronta' :
+           list.status === 'pending' ? 'Pendente' :
+           'Processando'}
+        </span>
+
+        {/* Actions */}
+        <div className="flex items-center gap-1">
           <button
             onClick={onEdit}
-            className="p-2 text-gray-600 hover:bg-gray-100 rounded"
-            disabled={isImporting}
+            className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+            disabled={isImporting || isDeleting}
+            title="Editar"
           >
             <Edit className="w-4 h-4" />
           </button>
           <button
             onClick={onDelete}
-            className="p-2 text-red-600 hover:bg-red-50 rounded"
-            disabled={isImporting || list.status === 'deleting'}
+            className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+            disabled={isImporting || isDeleting}
+            title="Excluir"
           >
             <Trash2 className="w-4 h-4" />
           </button>
+          {isImporting ? (
+            <button
+              onClick={() => onCancelImport(importJob.id)}
+              className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors"
+              title="Cancelar importação"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          ) : (
+            <button
+              onClick={onUpload}
+              className="p-2 text-gray-500 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+              disabled={isDeleting}
+              title="Upload de emails"
+            >
+              <Upload className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Import Progress */}
+      {/* Mobile Stats - show below on small screens */}
+      {!isImporting && totalEmails > 0 && (
+        <div className="flex md:hidden items-center gap-3 mt-2 pt-2 border-t border-gray-100 text-xs">
+          <span className="text-gray-600">{totalEmails.toLocaleString()} emails</span>
+          <span className="text-green-600">{validEmails.toLocaleString()} válidos</span>
+          {invalidEmails > 0 && <span className="text-red-500">{invalidEmails.toLocaleString()} inválidos</span>}
+          {duplicates > 0 && <span className="text-yellow-600">{duplicates.toLocaleString()} duplicados</span>}
+        </div>
+      )}
+
+      {/* Import details on small screens */}
       {isImporting && (
-        <div className="mb-4 p-3 bg-blue-50 rounded-lg">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-blue-800">Importando...</span>
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-blue-600">{importJob.progress || 0}%</span>
-              <button
-                onClick={() => onCancelImport(importJob.id)}
-                className="p-1 text-red-500 hover:bg-red-100 rounded"
-                title="Cancelar importação"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-          <div className="w-full h-2 bg-blue-200 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-blue-500 rounded-full transition-all duration-300"
-              style={{ width: `${importJob.progress || 0}%` }}
-            />
-          </div>
-          <div className="flex justify-between mt-2 text-xs">
-            <span className="text-blue-600">{(importJob.processed || 0).toLocaleString()} / {(importJob.total_lines || 0).toLocaleString()}</span>
-            <div className="flex gap-3">
-              <span className="text-green-600">+{(importJob.valid || 0).toLocaleString()} válidos</span>
-              {importJob.invalid > 0 && (
-                <span className="text-red-500">{(importJob.invalid || 0).toLocaleString()} inválidos</span>
-              )}
-              {importJob.duplicates > 0 && (
-                <span className="text-yellow-600">{(importJob.duplicates || 0).toLocaleString()} duplicados</span>
-              )}
-            </div>
-          </div>
+        <div className="flex md:hidden items-center gap-2 mt-2 pt-2 border-t border-gray-100 text-xs text-gray-500">
+          <span className="text-green-600">+{(importJob.valid || 0).toLocaleString()} válidos</span>
+          {importJob.invalid > 0 && <span className="text-red-500">{importJob.invalid} inválidos</span>}
+          {importJob.duplicates > 0 && <span className="text-yellow-600">{importJob.duplicates} duplicados</span>}
         </div>
       )}
-
-      {/* Import Completed Summary */}
-      {importCompleted && (
-        <div className="mb-4 p-3 bg-green-50 rounded-lg">
-          <div className="flex items-center gap-2 mb-2">
-            <CheckCircle className="w-4 h-4 text-green-600" />
-            <span className="text-sm font-medium text-green-800">Importacao concluida!</span>
-          </div>
-          <div className="grid grid-cols-3 gap-2 text-xs">
-            <div className="text-green-600">
-              <span className="font-bold">{(importJob.valid || 0).toLocaleString()}</span> validos
-            </div>
-            {importJob.invalid > 0 && (
-              <div className="text-red-600">
-                <span className="font-bold">{(importJob.invalid || 0).toLocaleString()}</span> invalidos
-              </div>
-            )}
-            {importJob.duplicates > 0 && (
-              <div className="text-yellow-600">
-                <span className="font-bold">{(importJob.duplicates || 0).toLocaleString()}</span> duplicados
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      <div className="flex items-center gap-6 text-sm text-gray-600 mb-4">
-        <div className="flex items-center gap-2">
-          <Users className="w-4 h-4" />
-          {(list.valid_emails || 0).toLocaleString()} emails
-        </div>
-        <span className={`badge ${
-          isImporting ? 'badge-warning' :
-          list.status === 'deleting' ? 'badge-error' :
-          list.status === 'ready' ? 'badge-success' : 'badge-warning'
-        }`}>
-          {isImporting ? 'Importando' :
-           list.status === 'deleting' ? 'Excluindo...' :
-           list.status === 'ready' ? 'Pronta' : 'Processando'}
-        </span>
-      </div>
-
-      <button
-        onClick={onUpload}
-        disabled={isImporting}
-        className="btn btn-secondary w-full flex items-center justify-center gap-2"
-      >
-        {isImporting ? (
-          <>
-            <Loader2 className="w-4 h-4 animate-spin" />
-            Importando...
-          </>
-        ) : (
-          <>
-            <Upload className="w-4 h-4" />
-            Upload de Emails
-          </>
-        )}
-      </button>
     </div>
   )
 }
@@ -674,19 +696,19 @@ function EmailLists() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="flex flex-col gap-2">
         {loading ? (
-          <div className="col-span-full flex justify-center py-12">
+          <div className="flex justify-center py-12">
             <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
           </div>
         ) : lists.length === 0 ? (
-          <div className="col-span-full text-center py-12 text-gray-500">
+          <div className="text-center py-12 text-gray-500">
             <Mail className="w-12 h-12 mx-auto mb-4 opacity-50" />
             <p>Nenhuma lista criada</p>
           </div>
         ) : (
           lists.map((list) => (
-            <ListCard
+            <ListRow
               key={list.id}
               list={list}
               importJob={importJobs[list.id]}
