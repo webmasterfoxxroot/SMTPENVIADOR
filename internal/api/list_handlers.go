@@ -1319,6 +1319,7 @@ func (s *Server) uploadEmailsSplit(c *fiber.Ctx) error {
 		ListID   string `json:"list_id"`
 		JobID    string `json:"job_id"`
 		FilePath string `json:"-"`
+		FileName string `json:"-"`
 		Lines    int    `json:"-"`
 	}
 	jobs := make([]jobInfo, 0, numParts)
@@ -1362,6 +1363,7 @@ func (s *Server) uploadEmailsSplit(c *fiber.Ctx) error {
 				jobs = append(jobs, jobInfo{
 					ListID:   currentListID,
 					FilePath: currentPath,
+					FileName: fmt.Sprintf("%s_%02d%s", baseName, currentPart, ext),
 					Lines:    currentPartLines,
 				})
 				log.Printf("Split upload: finished part %d with %d lines", currentPart, currentPartLines)
@@ -1414,6 +1416,7 @@ func (s *Server) uploadEmailsSplit(c *fiber.Ctx) error {
 		jobs = append(jobs, jobInfo{
 			ListID:   currentListID,
 			FilePath: currentPath,
+			FileName: fmt.Sprintf("%s_%02d%s", baseName, currentPart, ext),
 			Lines:    currentPartLines,
 		})
 		log.Printf("Split upload: finished part %d with %d lines", currentPart, currentPartLines)
@@ -1429,9 +1432,9 @@ func (s *Server) uploadEmailsSplit(c *fiber.Ctx) error {
 	for i, job := range jobs {
 		jobID := uuid.New().String()
 		_, err = s.db.Exec(`
-			INSERT INTO import_jobs (id, list_id, status, file_path, has_header, delimiter, total_lines, processed, valid, invalid, duplicates)
-			VALUES ($1, $2, 'pending', $3, $4, $5, $6, 0, 0, 0, 0)
-		`, jobID, job.ListID, job.FilePath, false, delimiter, job.Lines)
+			INSERT INTO import_jobs (id, list_id, file_name, file_path, status, has_header, delimiter, total_lines, processed, valid, invalid, duplicates)
+			VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, 0, 0, 0, 0)
+		`, jobID, job.ListID, job.FileName, job.FilePath, false, delimiter, job.Lines)
 		if err != nil {
 			log.Printf("Failed to create import job for part %d: %v", i+1, err)
 			// Mark list as failed
