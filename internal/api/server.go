@@ -284,10 +284,11 @@ func (s *Server) setupRoutes() {
 	blacklist.Post("/", s.addToBlacklist)
 	blacklist.Delete("/:id", s.removeFromBlacklist)
 	blacklist.Post("/import", s.importBlacklist)
-	// SQL file migration for blacklist
+	// SQL file migration for blacklist (async)
 	blacklist.Get("/migration/info", s.getMigrationStats)
-	blacklist.Post("/migration/preview", s.previewSQLFile)
-	blacklist.Post("/migration/import", s.importFromSQLFile)
+	blacklist.Get("/migration/jobs", s.listBlacklistImportJobs)
+	blacklist.Post("/migration/import", s.startBlacklistImport)
+	blacklist.Get("/migration/status/:jobId", s.getBlacklistImportStatus)
 
 	// Tracking endpoints (public)
 	s.app.Get("/track/open/:campaignId/:emailId", s.trackOpen)

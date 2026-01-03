@@ -1,16 +1,20 @@
 package api
 
 import (
-	"bufio"
+	"fmt"
 	"io"
+	"log"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
 
-// importFromSQLFile imports blacklist from SQL dump file
-func (s *Server) importFromSQLFile(c *fiber.Ctx) error {
+// startBlacklistImport starts an async import job for blacklist SQL file
+func (s *Server) startBlacklistImport(c *fiber.Ctx) error {
 	file, err := c.FormFile("file")
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Nenhum arquivo enviado"})
@@ -18,76 +22,270 @@ func (s *Server) importFromSQLFile(c *fiber.Ctx) error {
 
 	dbType := c.FormValue("type", "mailwizz")
 
-	// Validate database type and get email column index
+	// Validate database type
+	var tableName string
+	switch dbType {
+	case "mailwizz":
+		tableName = "mw_email_blacklist"
+	case "newapp":
+		tableName = "email_banned_emails"
+	case "mumara":
+		tableName = "suppression_list"
+	default:
+		return c.Status(400).JSON(fiber.Map{"error": "Tipo de banco invalido. Use: mailwizz, newapp, ou mumara"})
+	}
+
+	// Create uploads directory
+	uploadDir := "/tmp/smtpenviador/blacklist_uploads"
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao criar diretorio"})
+	}
+
+	// Generate job ID and save file
+	jobID := uuid.New().String()
+	ext := filepath.Ext(file.Filename)
+	if ext == "" {
+		ext = ".sql"
+	}
+	savedPath := filepath.Join(uploadDir, fmt.Sprintf("%s%s", jobID, ext))
+
+	// Save file to disk
+	src, err := file.Open()
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao abrir arquivo"})
+	}
+	defer src.Close()
+
+	dst, err := os.Create(savedPath)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao salvar arquivo"})
+	}
+
+	written, err := io.Copy(dst, src)
+	dst.Close()
+	if err != nil {
+		os.Remove(savedPath)
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao copiar arquivo"})
+	}
+
+	log.Printf("[BlacklistImport] File saved: %s (%d bytes)", savedPath, written)
+
+	// Create job in database
+	_, err = s.db.Exec(`
+		INSERT INTO blacklist_import_jobs (id, file_name, file_path, db_type, status, started_at)
+		VALUES ($1, $2, $3, $4, 'pending', NOW())
+	`, jobID, file.Filename, savedPath, dbType)
+	if err != nil {
+		os.Remove(savedPath)
+		log.Printf("[BlacklistImport] Failed to create job: %v", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao criar job de importacao"})
+	}
+
+	log.Printf("[BlacklistImport] Job created: ID=%s, Type=%s, Table=%s", jobID, dbType, tableName)
+
+	// Start background processing
+	go s.processBlacklistImportJob(jobID)
+
+	return c.JSON(fiber.Map{
+		"message":   "Importacao iniciada",
+		"job_id":    jobID,
+		"file_name": file.Filename,
+		"file_size": written,
+		"db_type":   dbType,
+		"table":     tableName,
+	})
+}
+
+// getBlacklistImportStatus returns the status of a blacklist import job
+func (s *Server) getBlacklistImportStatus(c *fiber.Ctx) error {
+	jobID := c.Params("jobId")
+
+	var status, dbType, fileName string
+	var totalEmails, processed, imported, duplicates, errors int
+	var errorMessage *string
+	var startedAt, completedAt *time.Time
+
+	err := s.db.QueryRow(`
+		SELECT status, db_type, file_name, total_emails, processed, imported, duplicates, errors, error_message, started_at, completed_at
+		FROM blacklist_import_jobs
+		WHERE id = $1
+	`, jobID).Scan(&status, &dbType, &fileName, &totalEmails, &processed, &imported, &duplicates, &errors, &errorMessage, &startedAt, &completedAt)
+
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Job nao encontrado"})
+	}
+
+	// Calculate progress percentage
+	progress := 0
+	if totalEmails > 0 {
+		progress = (processed * 100) / totalEmails
+	}
+
+	return c.JSON(fiber.Map{
+		"job_id":        jobID,
+		"status":        status,
+		"db_type":       dbType,
+		"file_name":     fileName,
+		"total_emails":  totalEmails,
+		"processed":     processed,
+		"imported":      imported,
+		"duplicates":    duplicates,
+		"errors":        errors,
+		"error_message": errorMessage,
+		"progress":      progress,
+		"started_at":    startedAt,
+		"completed_at":  completedAt,
+	})
+}
+
+// processBlacklistImportJob processes the SQL file in background
+func (s *Server) processBlacklistImportJob(jobID string) {
+	log.Printf("[BlacklistImport] Starting job: %s", jobID)
+
+	// Helper functions
+	updateStatus := func(status string, errorMsg string) {
+		if errorMsg != "" {
+			s.db.Exec(`UPDATE blacklist_import_jobs SET status = $1, error_message = $2, updated_at = NOW() WHERE id = $3`,
+				status, errorMsg, jobID)
+		} else {
+			s.db.Exec(`UPDATE blacklist_import_jobs SET status = $1, updated_at = NOW() WHERE id = $2`, status, jobID)
+		}
+	}
+
+	updateProgress := func(total, processed, imported, duplicates, errors int) {
+		s.db.Exec(`UPDATE blacklist_import_jobs SET total_emails = $1, processed = $2, imported = $3, duplicates = $4, errors = $5, updated_at = NOW() WHERE id = $6`,
+			total, processed, imported, duplicates, errors, jobID)
+	}
+
+	// Recover from panics
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[BlacklistImport] Job %s PANIC: %v", jobID, r)
+			updateStatus("failed", fmt.Sprintf("Erro interno: %v", r))
+		}
+	}()
+
+	// Read job details
+	var filePath, dbType string
+	err := s.db.QueryRow(`SELECT file_path, db_type FROM blacklist_import_jobs WHERE id = $1`, jobID).Scan(&filePath, &dbType)
+	if err != nil {
+		log.Printf("[BlacklistImport] Job %s: failed to read job: %v", jobID, err)
+		updateStatus("failed", "Job nao encontrado")
+		return
+	}
+
+	// Update status to processing
+	updateStatus("processing", "")
+
+	// Cleanup file after processing
+	defer func() {
+		os.Remove(filePath)
+		log.Printf("[BlacklistImport] Job %s: cleaned up file", jobID)
+	}()
+
+	// Read file
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		updateStatus("failed", "Falha ao ler arquivo: "+err.Error())
+		return
+	}
+
+	// Get email index based on db type
 	var tableName string
 	var emailIndex int
 	switch dbType {
 	case "mailwizz":
 		tableName = "mw_email_blacklist"
-		emailIndex = 2 // (email_id, subscriber_id, EMAIL, reason, date_added, last_updated)
+		emailIndex = 2
 	case "newapp":
 		tableName = "email_banned_emails"
-		emailIndex = 1 // (banid, EMAILADDRESS, list, bandate)
+		emailIndex = 1
 	case "mumara":
 		tableName = "suppression_list"
-		emailIndex = 1 // (suppression_list_id, EMAIL, account_id_fk, type, list_id_fk, create_time)
-	default:
-		return c.Status(400).JSON(fiber.Map{"error": "Tipo de banco invalido. Use: mailwizz, newapp, ou mumara"})
+		emailIndex = 1
 	}
 
-	f, err := file.Open()
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Erro ao abrir arquivo"})
-	}
-	defer f.Close()
-
-	// Read entire file content
-	content, err := io.ReadAll(f)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Erro ao ler arquivo"})
+	// Check if table exists in content
+	if !strings.Contains(strings.ToLower(string(content)), strings.ToLower(tableName)) {
+		updateStatus("failed", "Tabela "+tableName+" nao encontrada no arquivo")
+		return
 	}
 
-	// Extract emails from SQL content
-	emails := extractEmailsFromSQL(string(content), tableName, emailIndex)
+	// Extract all tuples
+	tuples := extractAllTuples(string(content))
+	totalEmails := len(tuples)
 
-	if len(emails) == 0 {
-		return c.Status(400).JSON(fiber.Map{
-			"error": "Nenhum email encontrado no arquivo. Verifique se o arquivo contem a tabela " + tableName,
-		})
+	if totalEmails == 0 {
+		updateStatus("failed", "Nenhum email encontrado no arquivo")
+		return
 	}
 
-	// Begin transaction
-	tx, err := s.db.Begin()
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Erro ao iniciar transacao"})
-	}
+	log.Printf("[BlacklistImport] Job %s: found %d tuples to process", jobID, totalEmails)
+	updateProgress(totalEmails, 0, 0, 0, 0)
 
+	// Process in batches
 	imported := 0
 	duplicates := 0
+	errors := 0
+	processed := 0
+	batchSize := 1000
 	reason := "import_" + dbType
 
-	for email := range emails {
-		id := uuid.New().String()
-		result, err := tx.Exec(`
-			INSERT INTO blacklist (id, email, reason)
-			VALUES ($1, $2, $3)
-			ON CONFLICT (email) DO NOTHING
-		`, id, email, reason)
+	// Begin transaction for batch
+	tx, err := s.db.Begin()
+	if err != nil {
+		updateStatus("failed", "Falha ao iniciar transacao")
+		return
+	}
 
-		if err != nil {
-			continue
+	for i, tuple := range tuples {
+		values := parseTupleValues(tuple)
+		if emailIndex < len(values) {
+			email := cleanEmailValue(values[emailIndex])
+			if email != "" && emailRegex.MatchString(email) {
+				id := uuid.New().String()
+				result, err := tx.Exec(`
+					INSERT INTO blacklist (id, email, reason)
+					VALUES ($1, $2, $3)
+					ON CONFLICT (email) DO NOTHING
+				`, id, email, reason)
+
+				if err != nil {
+					errors++
+				} else {
+					rows, _ := result.RowsAffected()
+					if rows > 0 {
+						imported++
+					} else {
+						duplicates++
+					}
+				}
+			} else {
+				errors++
+			}
+		} else {
+			errors++
 		}
 
-		rows, _ := result.RowsAffected()
-		if rows > 0 {
-			imported++
-		} else {
-			duplicates++
+		processed++
+
+		// Update progress every batch
+		if processed%batchSize == 0 || processed == totalEmails {
+			updateProgress(totalEmails, processed, imported, duplicates, errors)
+			log.Printf("[BlacklistImport] Job %s: progress %d/%d (%d%%)", jobID, processed, totalEmails, (processed*100)/totalEmails)
+		}
+
+		// Commit and start new transaction every 10000 records
+		if (i+1)%10000 == 0 && i < totalEmails-1 {
+			tx.Commit()
+			tx, _ = s.db.Begin()
 		}
 	}
 
+	// Final commit
 	if err := tx.Commit(); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Erro ao salvar dados"})
+		updateStatus("failed", "Falha ao salvar dados")
+		return
 	}
 
 	// Update emails table
@@ -96,42 +294,10 @@ func (s *Server) importFromSQLFile(c *fiber.Ctx) error {
 		WHERE LOWER(email) IN (SELECT email FROM blacklist)
 	`)
 
-	return c.JSON(fiber.Map{
-		"message":    "Importacao concluida",
-		"source":     dbType,
-		"table":      tableName,
-		"imported":   imported,
-		"duplicates": duplicates,
-		"total":      imported + duplicates,
-	})
-}
+	// Mark as completed
+	s.db.Exec(`UPDATE blacklist_import_jobs SET status = 'completed', completed_at = NOW(), updated_at = NOW() WHERE id = $1`, jobID)
 
-// extractEmailsFromSQL extracts emails from SQL content
-func extractEmailsFromSQL(content string, tableName string, emailIndex int) map[string]bool {
-	emails := make(map[string]bool)
-	tableNameLower := strings.ToLower(tableName)
-	contentLower := strings.ToLower(content)
-
-	// Check if table exists in content
-	if !strings.Contains(contentLower, tableNameLower) {
-		return emails
-	}
-
-	// Find all value tuples in the content
-	// Pattern: (value1, value2, value3, ...)
-	tuples := extractAllTuples(content)
-
-	for _, tuple := range tuples {
-		values := parseTupleValues(tuple)
-		if emailIndex < len(values) {
-			email := cleanEmailValue(values[emailIndex])
-			if email != "" && emailRegex.MatchString(email) {
-				emails[email] = true
-			}
-		}
-	}
-
-	return emails
+	log.Printf("[BlacklistImport] Job %s: COMPLETED - imported=%d, duplicates=%d, errors=%d", jobID, imported, duplicates, errors)
 }
 
 // extractAllTuples extracts all (value, value, ...) tuples from SQL content
@@ -269,72 +435,6 @@ func cleanEmailValue(val string) string {
 	return strings.ToLower(val)
 }
 
-// previewSQLFile previews the SQL file without importing
-func (s *Server) previewSQLFile(c *fiber.Ctx) error {
-	file, err := c.FormFile("file")
-	if err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "Nenhum arquivo enviado"})
-	}
-
-	dbType := c.FormValue("type", "mailwizz")
-
-	var tableName string
-	var emailIndex int
-	switch dbType {
-	case "mailwizz":
-		tableName = "mw_email_blacklist"
-		emailIndex = 2
-	case "newapp":
-		tableName = "email_banned_emails"
-		emailIndex = 1
-	case "mumara":
-		tableName = "suppression_list"
-		emailIndex = 1
-	default:
-		return c.Status(400).JSON(fiber.Map{"error": "Tipo de banco invalido"})
-	}
-
-	f, err := file.Open()
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Erro ao abrir arquivo"})
-	}
-	defer f.Close()
-
-	// For preview, read file in chunks to handle large files
-	// but limit to first 50MB for preview
-	content, err := io.ReadAll(io.LimitReader(f, 50*1024*1024))
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Erro ao ler arquivo"})
-	}
-
-	emails := extractEmailsFromSQL(string(content), tableName, emailIndex)
-
-	if len(emails) == 0 {
-		return c.Status(400).JSON(fiber.Map{
-			"error": "Nenhum email encontrado. Verifique se o arquivo contem a tabela " + tableName,
-		})
-	}
-
-	// Get samples
-	var samples []string
-	count := 0
-	for email := range emails {
-		if count < 10 {
-			samples = append(samples, email)
-			count++
-		} else {
-			break
-		}
-	}
-
-	return c.JSON(fiber.Map{
-		"message":      "Arquivo analisado",
-		"table":        tableName,
-		"total_emails": len(emails),
-		"samples":      samples,
-	})
-}
-
 // getMigrationStats returns info about supported database types
 func (s *Server) getMigrationStats(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
@@ -361,21 +461,47 @@ func (s *Server) getMigrationStats(c *fiber.Ctx) error {
 	})
 }
 
-// Legacy function for line-by-line parsing (kept for reference)
-func extractEmailsFromLine(line string, emailIndex int) []string {
-	var emails []string
-	scanner := bufio.NewScanner(strings.NewReader(line))
-	for scanner.Scan() {
-		tuples := extractAllTuples(scanner.Text())
-		for _, tuple := range tuples {
-			values := parseTupleValues(tuple)
-			if emailIndex < len(values) {
-				email := cleanEmailValue(values[emailIndex])
-				if email != "" {
-					emails = append(emails, email)
-				}
-			}
-		}
+// listBlacklistImportJobs returns all blacklist import jobs
+func (s *Server) listBlacklistImportJobs(c *fiber.Ctx) error {
+	rows, err := s.db.Query(`
+		SELECT id, file_name, db_type, status, total_emails, processed, imported, duplicates, errors, started_at, completed_at
+		FROM blacklist_import_jobs
+		ORDER BY created_at DESC
+		LIMIT 20
+	`)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao buscar jobs"})
 	}
-	return emails
+	defer rows.Close()
+
+	var jobs []fiber.Map
+	for rows.Next() {
+		var id, fileName, dbType, status string
+		var totalEmails, processed, imported, duplicates, errors int
+		var startedAt, completedAt *time.Time
+
+		rows.Scan(&id, &fileName, &dbType, &status, &totalEmails, &processed, &imported, &duplicates, &errors, &startedAt, &completedAt)
+
+		progress := 0
+		if totalEmails > 0 {
+			progress = (processed * 100) / totalEmails
+		}
+
+		jobs = append(jobs, fiber.Map{
+			"id":           id,
+			"file_name":    fileName,
+			"db_type":      dbType,
+			"status":       status,
+			"total_emails": totalEmails,
+			"processed":    processed,
+			"imported":     imported,
+			"duplicates":   duplicates,
+			"errors":       errors,
+			"progress":     progress,
+			"started_at":   startedAt,
+			"completed_at": completedAt,
+		})
+	}
+
+	return c.JSON(fiber.Map{"data": jobs})
 }
