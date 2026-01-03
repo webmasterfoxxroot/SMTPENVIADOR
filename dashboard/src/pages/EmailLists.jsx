@@ -716,17 +716,30 @@ function EmailLists() {
 
   const downloadList = async (listId, listName) => {
     try {
-      const response = await api.get(`/lists/${listId}/download?format=csv`, { responseType: 'blob' })
-      const url = window.URL.createObjectURL(new Blob([response.data]))
+      // Use fetch for better blob handling
+      const token = localStorage.getItem('token')
+      const response = await fetch(`/api/v1/lists/${listId}/download?format=csv`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      })
+
+      if (!response.ok) {
+        throw new Error('Download failed')
+      }
+
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.setAttribute('download', `${listName}.csv`)
+      link.download = `${listName}.csv`
       document.body.appendChild(link)
       link.click()
-      link.remove()
+      document.body.removeChild(link)
       window.URL.revokeObjectURL(url)
-      toast.success('Download iniciado!')
+      toast.success('Download concluído!')
     } catch (error) {
+      console.error('Download error:', error)
       toast.error('Erro ao baixar lista')
     }
   }
