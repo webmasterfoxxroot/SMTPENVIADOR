@@ -612,11 +612,10 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, 
               </button>
               <button
                 onClick={() => {
-                  console.log('Download clicked', { listId: list?.id, listName: list?.name })
-                  onDownload()
+                  const token = localStorage.getItem('smtpenviador_token')
+                  window.open(`/api/v1/lists/${list.id}/download?format=csv&token=${token}`, '_blank')
                 }}
                 className="p-2 text-gray-500 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
-                disabled={isDeleting}
                 title="Download da lista"
               >
                 <Download className="w-4 h-4" />

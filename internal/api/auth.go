@@ -84,18 +84,26 @@ func (s *Server) logout(c *fiber.Ctx) error {
 
 // authMiddleware validates JWT tokens
 func (s *Server) authMiddleware(c *fiber.Ctx) error {
+	var tokenString string
+
+	// Try Authorization header first
 	authHeader := c.Get("Authorization")
-	if authHeader == "" {
-		return c.Status(401).JSON(fiber.Map{"error": "Missing authorization header"})
+	if authHeader != "" {
+		// Extract token from "Bearer <token>"
+		parts := strings.Split(authHeader, " ")
+		if len(parts) == 2 && parts[0] == "Bearer" {
+			tokenString = parts[1]
+		}
 	}
 
-	// Extract token from "Bearer <token>"
-	parts := strings.Split(authHeader, " ")
-	if len(parts) != 2 || parts[0] != "Bearer" {
-		return c.Status(401).JSON(fiber.Map{"error": "Invalid authorization header"})
+	// Fallback to query param (for downloads)
+	if tokenString == "" {
+		tokenString = c.Query("token")
 	}
 
-	tokenString := parts[1]
+	if tokenString == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Missing authorization"})
+	}
 
 	// Parse and validate token
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
