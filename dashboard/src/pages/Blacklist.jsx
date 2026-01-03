@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Plus, Trash2, Upload, Search, Ban, Loader2, Database, CheckCircle2, AlertCircle } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Plus, Trash2, Upload, Search, Ban, Loader2, Database, CheckCircle2, AlertCircle, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
 
@@ -139,45 +139,16 @@ function ImportModal({ onClose, onSuccess }) {
   )
 }
 
-function DatabaseMigrationModal({ onClose, onSuccess }) {
-  const [step, setStep] = useState(1) // 1: upload, 2: importing/progress, 3: completed
+function DatabaseMigrationModal({ onClose, onStarted }) {
   const [loading, setLoading] = useState(false)
   const [file, setFile] = useState(null)
   const [dbType, setDbType] = useState('mailwizz')
-  const [jobId, setJobId] = useState(null)
-  const [jobStatus, setJobStatus] = useState(null)
 
   const databaseTypes = [
     { value: 'mailwizz', name: 'MailWizz', table: 'mw_email_blacklist' },
     { value: 'newapp', name: 'NewApp', table: 'email_banned_emails' },
     { value: 'mumara', name: 'Mumara', table: 'suppression_list' }
   ]
-
-  // Poll job status
-  useEffect(() => {
-    if (!jobId || step !== 2) return
-
-    const pollStatus = async () => {
-      try {
-        const response = await api.get(`/blacklist/migration/status/${jobId}`)
-        setJobStatus(response.data)
-
-        if (response.data.status === 'completed') {
-          setStep(3)
-          toast.success(`Importacao concluida! ${response.data.imported} emails importados`)
-        } else if (response.data.status === 'failed') {
-          setStep(3)
-          toast.error(response.data.error_message || 'Erro na importacao')
-        }
-      } catch (error) {
-        console.error('Error polling status:', error)
-      }
-    }
-
-    pollStatus()
-    const interval = setInterval(pollStatus, 1000)
-    return () => clearInterval(interval)
-  }, [jobId, step])
 
   const handleStartImport = async () => {
     if (!file) {
@@ -194,21 +165,11 @@ function DatabaseMigrationModal({ onClose, onSuccess }) {
       const response = await api.post('/blacklist/migration/import', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       })
-      setJobId(response.data.job_id)
-      setStep(2)
-      toast.success('Importacao iniciada!')
+      toast.success('Importacao iniciada em segundo plano!')
+      onStarted(response.data.job_id)
     } catch (error) {
       toast.error(error.response?.data?.error || 'Erro ao iniciar importacao')
-    } finally {
       setLoading(false)
-    }
-  }
-
-  const handleClose = () => {
-    if (jobStatus?.status === 'completed') {
-      onSuccess()
-    } else {
-      onClose()
     }
   }
 
@@ -220,143 +181,126 @@ function DatabaseMigrationModal({ onClose, onSuccess }) {
           Importar Blacklist de SQL
         </h2>
 
-        {step === 1 && (
-          <div className="space-y-4">
-            <p className="text-sm text-gray-600 mb-4">
-              Carregue o arquivo .sql exportado do banco de dados (MailWizz, NewApp, Mumara)
-            </p>
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600 mb-4">
+            Carregue o arquivo .sql exportado do banco de dados (MailWizz, NewApp, Mumara)
+          </p>
 
-            <div>
-              <label className="label">Tipo de Banco de Origem</label>
-              <select
-                value={dbType}
-                onChange={(e) => setDbType(e.target.value)}
-                className="input"
-              >
-                {databaseTypes.map((db) => (
-                  <option key={db.value} value={db.value}>
-                    {db.name} (tabela: {db.table})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="label">Arquivo SQL</label>
-              <input
-                type="file"
-                accept=".sql,.txt,*/*"
-                onChange={(e) => setFile(e.target.files[0])}
-                className="input"
-              />
-              {file && (
-                <p className="text-sm text-gray-500 mt-1">
-                  Arquivo: {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
-                </p>
-              )}
-            </div>
-
-            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
-              <p className="font-medium mb-1">A importacao roda em segundo plano</p>
-              <p>Voce pode fechar este modal e continuar usando o sistema. A importacao continuara.</p>
-            </div>
-
-            <div className="flex justify-end gap-3 pt-4">
-              <button type="button" onClick={onClose} className="btn btn-secondary">
-                Cancelar
-              </button>
-              <button onClick={handleStartImport} disabled={loading || !file} className="btn btn-primary">
-                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Iniciar Importacao'}
-              </button>
-            </div>
+          <div>
+            <label className="label">Tipo de Banco de Origem</label>
+            <select
+              value={dbType}
+              onChange={(e) => setDbType(e.target.value)}
+              className="input"
+            >
+              {databaseTypes.map((db) => (
+                <option key={db.value} value={db.value}>
+                  {db.name} (tabela: {db.table})
+                </option>
+              ))}
+            </select>
           </div>
-        )}
 
-        {step === 2 && (
-          <div className="space-y-4">
-            <div className="text-center py-4">
-              <Loader2 className="w-12 h-12 animate-spin mx-auto text-blue-500 mb-4" />
-              <p className="text-gray-600 font-medium">Importando emails...</p>
-              <p className="text-sm text-gray-500 mb-4">Voce pode fechar este modal - a importacao continuara em segundo plano</p>
-            </div>
-
-            {jobStatus && (
-              <div className="space-y-3">
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Progresso:</span>
-                  <span className="font-medium">{jobStatus.progress}%</span>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-3">
-                  <div
-                    className="bg-blue-500 h-3 rounded-full transition-all duration-300"
-                    style={{ width: `${jobStatus.progress}%` }}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div className="p-2 bg-gray-50 rounded">
-                    <span className="text-gray-500">Processados:</span>
-                    <span className="font-medium ml-1">{jobStatus.processed?.toLocaleString()}/{jobStatus.total_emails?.toLocaleString()}</span>
-                  </div>
-                  <div className="p-2 bg-green-50 rounded">
-                    <span className="text-gray-500">Importados:</span>
-                    <span className="font-medium ml-1 text-green-600">{jobStatus.imported?.toLocaleString()}</span>
-                  </div>
-                  <div className="p-2 bg-yellow-50 rounded">
-                    <span className="text-gray-500">Duplicados:</span>
-                    <span className="font-medium ml-1 text-yellow-600">{jobStatus.duplicates?.toLocaleString()}</span>
-                  </div>
-                  <div className="p-2 bg-red-50 rounded">
-                    <span className="text-gray-500">Erros:</span>
-                    <span className="font-medium ml-1 text-red-600">{jobStatus.errors?.toLocaleString()}</span>
-                  </div>
-                </div>
-              </div>
+          <div>
+            <label className="label">Arquivo SQL</label>
+            <input
+              type="file"
+              accept=".sql,.txt,*/*"
+              onChange={(e) => setFile(e.target.files[0])}
+              className="input"
+            />
+            {file && (
+              <p className="text-sm text-gray-500 mt-1">
+                Arquivo: {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
+              </p>
             )}
-
-            <div className="flex justify-end gap-3 pt-4">
-              <button onClick={onClose} className="btn btn-secondary">
-                Fechar (continua em segundo plano)
-              </button>
-            </div>
           </div>
-        )}
 
-        {step === 3 && (
-          <div className="space-y-4">
-            {jobStatus?.status === 'failed' ? (
-              <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
-                <div className="flex items-center gap-2 text-red-700 font-medium mb-2">
-                  <AlertCircle className="w-5 h-5" />
-                  Erro na Importacao
-                </div>
-                <p className="text-red-600 text-sm">{jobStatus.error_message}</p>
-              </div>
-            ) : (
-              <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-                <div className="flex items-center gap-2 text-green-700 font-medium mb-2">
-                  <CheckCircle2 className="w-5 h-5" />
-                  Importacao Concluida!
-                </div>
-                <div className="text-sm text-green-700 space-y-1">
-                  <p><strong>Fonte:</strong> {jobStatus?.db_type}</p>
-                  <p><strong>Total processado:</strong> {jobStatus?.total_emails?.toLocaleString()}</p>
-                  <p><strong>Importados:</strong> {jobStatus?.imported?.toLocaleString()}</p>
-                  <p><strong>Duplicados:</strong> {jobStatus?.duplicates?.toLocaleString()}</p>
-                  {jobStatus?.errors > 0 && (
-                    <p><strong>Erros:</strong> {jobStatus?.errors?.toLocaleString()}</p>
-                  )}
-                </div>
-              </div>
-            )}
-
-            <div className="flex justify-end gap-3 pt-4">
-              <button onClick={handleClose} className="btn btn-primary">
-                Fechar
-              </button>
-            </div>
+          <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
+            <p className="font-medium mb-1">A importacao roda em segundo plano</p>
+            <p>Voce pode fechar este modal e mudar de pagina. O progresso aparecera nesta pagina.</p>
           </div>
-        )}
+
+          <div className="flex justify-end gap-3 pt-4">
+            <button type="button" onClick={onClose} className="btn btn-secondary">
+              Cancelar
+            </button>
+            <button onClick={handleStartImport} disabled={loading || !file} className="btn btn-primary">
+              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Iniciar Importacao'}
+            </button>
+          </div>
+        </div>
       </div>
+    </div>
+  )
+}
+
+// Progress bar component shown on the main page
+function ImportProgressBar({ job, onCancel, onDismiss }) {
+  const progress = job.total_emails > 0 ? Math.round((job.processed / job.total_emails) * 100) : 0
+
+  const isCompleted = job.status === 'completed'
+  const isFailed = job.status === 'failed'
+  const isProcessing = job.status === 'processing' || job.status === 'pending'
+
+  return (
+    <div className={`mb-4 p-4 rounded-lg border ${
+      isCompleted ? 'bg-green-50 border-green-200' :
+      isFailed ? 'bg-red-50 border-red-200' :
+      'bg-blue-50 border-blue-200'
+    }`}>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          {isProcessing && <Loader2 className="w-5 h-5 animate-spin text-blue-500" />}
+          {isCompleted && <CheckCircle2 className="w-5 h-5 text-green-500" />}
+          {isFailed && <AlertCircle className="w-5 h-5 text-red-500" />}
+          <span className="font-medium">
+            {isProcessing && `Importando SQL (${job.db_type})...`}
+            {isCompleted && 'Importacao concluida!'}
+            {isFailed && 'Erro na importacao'}
+          </span>
+        </div>
+        <button
+          onClick={isProcessing ? onCancel : onDismiss}
+          className="text-gray-400 hover:text-gray-600"
+          title={isProcessing ? 'Cancelar' : 'Fechar'}
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+
+      {isProcessing && (
+        <>
+          <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
+            <div
+              className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-sm text-gray-600">
+            <span>{progress}% - {job.processed?.toLocaleString()}/{job.total_emails?.toLocaleString()} emails</span>
+            <span>
+              <span className="text-green-600">{job.imported?.toLocaleString()} importados</span>
+              {' | '}
+              <span className="text-yellow-600">{job.duplicates?.toLocaleString()} duplicados</span>
+            </span>
+          </div>
+        </>
+      )}
+
+      {isCompleted && (
+        <div className="text-sm text-green-700">
+          <strong>{job.imported?.toLocaleString()}</strong> emails importados,
+          <strong> {job.duplicates?.toLocaleString()}</strong> duplicados
+          {job.errors > 0 && <>, <strong className="text-red-600">{job.errors?.toLocaleString()}</strong> erros</>}
+        </div>
+      )}
+
+      {isFailed && (
+        <div className="text-sm text-red-600">
+          {job.error_message || 'Erro desconhecido'}
+        </div>
+      )}
     </div>
   )
 }
@@ -370,7 +314,22 @@ function Blacklist() {
   const [addModal, setAddModal] = useState(false)
   const [importModal, setImportModal] = useState(false)
   const [migrationModal, setMigrationModal] = useState(false)
+  const [activeJob, setActiveJob] = useState(null)
+  const pollInterval = useRef(null)
 
+  // Initial load - fetch blacklist and check for active jobs
+  useEffect(() => {
+    fetchBlacklist()
+    checkActiveJobs()
+
+    return () => {
+      if (pollInterval.current) {
+        clearInterval(pollInterval.current)
+      }
+    }
+  }, [])
+
+  // Fetch on page/search change
   useEffect(() => {
     fetchBlacklist()
   }, [page, search])
@@ -387,6 +346,78 @@ function Blacklist() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // Check for active import jobs on page load
+  const checkActiveJobs = async () => {
+    try {
+      const response = await api.get('/blacklist/migration/jobs')
+      const jobs = response.data?.data || []
+
+      // Find active job (pending or processing)
+      const active = jobs.find(j => j.status === 'pending' || j.status === 'processing')
+
+      if (active) {
+        console.log('Found active blacklist import job:', active)
+        setActiveJob(active)
+        startPolling(active.id)
+      }
+    } catch (error) {
+      console.log('No active import jobs')
+    }
+  }
+
+  const startPolling = (jobId) => {
+    // Clear existing poll
+    if (pollInterval.current) {
+      clearInterval(pollInterval.current)
+    }
+
+    // Poll immediately then every second
+    pollJobStatus(jobId)
+    pollInterval.current = setInterval(() => pollJobStatus(jobId), 1000)
+  }
+
+  const pollJobStatus = async (jobId) => {
+    try {
+      const response = await api.get(`/blacklist/migration/status/${jobId}`)
+      const job = response.data
+
+      setActiveJob(job)
+
+      if (job.status === 'completed') {
+        clearInterval(pollInterval.current)
+        pollInterval.current = null
+        toast.success(`${job.imported?.toLocaleString()} emails importados!`)
+        fetchBlacklist()
+
+        // Keep showing completed status for 30 seconds
+        setTimeout(() => {
+          setActiveJob(null)
+        }, 30000)
+      } else if (job.status === 'failed') {
+        clearInterval(pollInterval.current)
+        pollInterval.current = null
+        toast.error(job.error_message || 'Erro na importacao')
+      }
+    } catch (error) {
+      console.error('Poll error:', error)
+    }
+  }
+
+  const handleImportStarted = (jobId) => {
+    setMigrationModal(false)
+    setActiveJob({ id: jobId, status: 'pending', progress: 0 })
+    startPolling(jobId)
+  }
+
+  const dismissJob = () => {
+    if (pollInterval.current) {
+      clearInterval(pollInterval.current)
+      pollInterval.current = null
+    }
+    setActiveJob(null)
+    fetchBlacklist()
   }
 
   const removeFromBlacklist = async (id) => {
@@ -441,6 +472,7 @@ function Blacklist() {
           <button
             onClick={() => setMigrationModal(true)}
             className="btn btn-secondary flex items-center gap-2"
+            disabled={activeJob && (activeJob.status === 'pending' || activeJob.status === 'processing')}
           >
             <Database className="w-4 h-4" />
             Importar SQL
@@ -461,6 +493,15 @@ function Blacklist() {
           </button>
         </div>
       </div>
+
+      {/* Active Import Progress */}
+      {activeJob && (
+        <ImportProgressBar
+          job={activeJob}
+          onCancel={dismissJob}
+          onDismiss={dismissJob}
+        />
+      )}
 
       <div className="card">
         <div className="flex items-center gap-4 mb-4">
@@ -576,10 +617,7 @@ function Blacklist() {
       {migrationModal && (
         <DatabaseMigrationModal
           onClose={() => setMigrationModal(false)}
-          onSuccess={() => {
-            setMigrationModal(false)
-            fetchBlacklist()
-          }}
+          onStarted={handleImportStarted}
         />
       )}
     </div>
