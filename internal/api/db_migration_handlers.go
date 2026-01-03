@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"io"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -40,36 +41,14 @@ func (s *Server) importFromSQLFile(c *fiber.Ctx) error {
 	}
 	defer f.Close()
 
-	// Parse SQL file and extract emails
-	emails := make(map[string]bool)
-	scanner := bufio.NewScanner(f)
-
-	// Increase buffer size for large SQL files
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 50*1024*1024) // 50MB max line size
-
-	tableNameLower := strings.ToLower(tableName)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		lineLower := strings.ToLower(line)
-
-		// Check if line contains INSERT INTO our table
-		if !strings.Contains(lineLower, "insert into") {
-			continue
-		}
-		if !strings.Contains(lineLower, tableNameLower) {
-			continue
-		}
-
-		// Extract all values tuples from the line
-		extractedEmails := extractEmailsFromLine(line, emailIndex)
-		for _, email := range extractedEmails {
-			if email != "" && emailRegex.MatchString(email) {
-				emails[email] = true
-			}
-		}
+	// Read entire file content
+	content, err := io.ReadAll(f)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Erro ao ler arquivo"})
 	}
+
+	// Extract emails from SQL content
+	emails := extractEmailsFromSQL(string(content), tableName, emailIndex)
 
 	if len(emails) == 0 {
 		return c.Status(400).JSON(fiber.Map{
@@ -127,28 +106,27 @@ func (s *Server) importFromSQLFile(c *fiber.Ctx) error {
 	})
 }
 
-// extractEmailsFromLine extracts emails from a SQL INSERT line
-func extractEmailsFromLine(line string, emailIndex int) []string {
-	var emails []string
+// extractEmailsFromSQL extracts emails from SQL content
+func extractEmailsFromSQL(content string, tableName string, emailIndex int) map[string]bool {
+	emails := make(map[string]bool)
+	tableNameLower := strings.ToLower(tableName)
+	contentLower := strings.ToLower(content)
 
-	// Find VALUES keyword
-	valuesIdx := strings.Index(strings.ToLower(line), "values")
-	if valuesIdx == -1 {
+	// Check if table exists in content
+	if !strings.Contains(contentLower, tableNameLower) {
 		return emails
 	}
 
-	// Get everything after VALUES
-	valuesStr := line[valuesIdx+6:]
-
-	// Parse each tuple (value1, value2, ...)
-	tuples := parseTuples(valuesStr)
+	// Find all value tuples in the content
+	// Pattern: (value1, value2, value3, ...)
+	tuples := extractAllTuples(content)
 
 	for _, tuple := range tuples {
 		values := parseTupleValues(tuple)
 		if emailIndex < len(values) {
 			email := cleanEmailValue(values[emailIndex])
-			if email != "" {
-				emails = append(emails, email)
+			if email != "" && emailRegex.MatchString(email) {
+				emails[email] = true
 			}
 		}
 	}
@@ -156,33 +134,32 @@ func extractEmailsFromLine(line string, emailIndex int) []string {
 	return emails
 }
 
-// parseTuples splits "(v1,v2),(v3,v4)" into ["v1,v2", "v3,v4"]
-func parseTuples(s string) []string {
+// extractAllTuples extracts all (value, value, ...) tuples from SQL content
+func extractAllTuples(content string) []string {
 	var tuples []string
 	var current strings.Builder
 	depth := 0
 	inQuote := false
 	quoteChar := rune(0)
+	prevChar := rune(0)
 
-	for _, char := range s {
+	for _, char := range content {
 		// Handle escape sequences
-		if inQuote && char == '\\' {
+		if prevChar == '\\' && inQuote {
 			current.WriteRune(char)
+			prevChar = char
 			continue
 		}
 
 		// Handle quotes
-		if (char == '\'' || char == '"') && !inQuote {
-			inQuote = true
-			quoteChar = char
-			current.WriteRune(char)
-			continue
-		}
-		if char == quoteChar && inQuote {
-			inQuote = false
-			quoteChar = 0
-			current.WriteRune(char)
-			continue
+		if (char == '\'' || char == '"') && prevChar != '\\' {
+			if !inQuote {
+				inQuote = true
+				quoteChar = char
+			} else if char == quoteChar {
+				inQuote = false
+				quoteChar = 0
+			}
 		}
 
 		if !inQuote {
@@ -193,16 +170,22 @@ func parseTuples(s string) []string {
 					current.WriteRune(char)
 				}
 				depth++
+				prevChar = char
 				continue
 			}
 			if char == ')' {
 				depth--
 				if depth == 0 {
-					tuples = append(tuples, current.String())
+					tuple := current.String()
+					// Only add if it looks like data (contains comma and quote)
+					if strings.Contains(tuple, ",") && (strings.Contains(tuple, "'") || strings.Contains(tuple, "\"")) {
+						tuples = append(tuples, tuple)
+					}
 					current.Reset()
 				} else {
 					current.WriteRune(char)
 				}
+				prevChar = char
 				continue
 			}
 		}
@@ -210,6 +193,8 @@ func parseTuples(s string) []string {
 		if depth > 0 {
 			current.WriteRune(char)
 		}
+
+		prevChar = char
 	}
 
 	return tuples
@@ -221,42 +206,42 @@ func parseTupleValues(tuple string) []string {
 	var current strings.Builder
 	inQuote := false
 	quoteChar := rune(0)
-	escaped := false
+	prevChar := rune(0)
 
 	for _, char := range tuple {
-		if escaped {
+		// Handle escape
+		if prevChar == '\\' && inQuote {
 			current.WriteRune(char)
-			escaped = false
+			prevChar = char
 			continue
 		}
 
-		if char == '\\' && inQuote {
-			escaped = true
-			current.WriteRune(char)
-			continue
-		}
-
-		if (char == '\'' || char == '"') && !inQuote {
-			inQuote = true
-			quoteChar = char
-			current.WriteRune(char)
-			continue
-		}
-
-		if char == quoteChar && inQuote {
-			inQuote = false
-			quoteChar = 0
-			current.WriteRune(char)
+		// Handle quotes
+		if (char == '\'' || char == '"') && prevChar != '\\' {
+			if !inQuote {
+				inQuote = true
+				quoteChar = char
+				current.WriteRune(char)
+			} else if char == quoteChar {
+				inQuote = false
+				quoteChar = 0
+				current.WriteRune(char)
+			} else {
+				current.WriteRune(char)
+			}
+			prevChar = char
 			continue
 		}
 
 		if char == ',' && !inQuote {
 			values = append(values, strings.TrimSpace(current.String()))
 			current.Reset()
+			prevChar = char
 			continue
 		}
 
 		current.WriteRune(char)
+		prevChar = char
 	}
 
 	// Add last value
@@ -276,6 +261,10 @@ func cleanEmailValue(val string) string {
 			(val[0] == '"' && val[len(val)-1] == '"') {
 			val = val[1 : len(val)-1]
 		}
+	}
+	// Handle NULL values
+	if strings.ToUpper(val) == "NULL" {
+		return ""
 	}
 	return strings.ToLower(val)
 }
@@ -311,43 +300,31 @@ func (s *Server) previewSQLFile(c *fiber.Ctx) error {
 	}
 	defer f.Close()
 
-	emails := make(map[string]bool)
-	var samples []string
-	scanner := bufio.NewScanner(f)
-
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 50*1024*1024)
-
-	tableNameLower := strings.ToLower(tableName)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		lineLower := strings.ToLower(line)
-
-		if !strings.Contains(lineLower, "insert into") {
-			continue
-		}
-		if !strings.Contains(lineLower, tableNameLower) {
-			continue
-		}
-
-		extractedEmails := extractEmailsFromLine(line, emailIndex)
-		for _, email := range extractedEmails {
-			if email != "" && emailRegex.MatchString(email) {
-				if !emails[email] {
-					emails[email] = true
-					if len(samples) < 10 {
-						samples = append(samples, email)
-					}
-				}
-			}
-		}
+	// For preview, read file in chunks to handle large files
+	// but limit to first 50MB for preview
+	content, err := io.ReadAll(io.LimitReader(f, 50*1024*1024))
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Erro ao ler arquivo"})
 	}
+
+	emails := extractEmailsFromSQL(string(content), tableName, emailIndex)
 
 	if len(emails) == 0 {
 		return c.Status(400).JSON(fiber.Map{
 			"error": "Nenhum email encontrado. Verifique se o arquivo contem a tabela " + tableName,
 		})
+	}
+
+	// Get samples
+	var samples []string
+	count := 0
+	for email := range emails {
+		if count < 10 {
+			samples = append(samples, email)
+			count++
+		} else {
+			break
+		}
 	}
 
 	return c.JSON(fiber.Map{
@@ -382,4 +359,23 @@ func (s *Server) getMigrationStats(c *fiber.Ctx) error {
 			},
 		},
 	})
+}
+
+// Legacy function for line-by-line parsing (kept for reference)
+func extractEmailsFromLine(line string, emailIndex int) []string {
+	var emails []string
+	scanner := bufio.NewScanner(strings.NewReader(line))
+	for scanner.Scan() {
+		tuples := extractAllTuples(scanner.Text())
+		for _, tuple := range tuples {
+			values := parseTupleValues(tuple)
+			if emailIndex < len(values) {
+				email := cleanEmailValue(values[emailIndex])
+				if email != "" {
+					emails = append(emails, email)
+				}
+			}
+		}
+	}
+	return emails
 }
