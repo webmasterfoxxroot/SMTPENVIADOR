@@ -13,8 +13,38 @@ import (
 	"github.com/google/uuid"
 )
 
+// ensureBlacklistImportJobsTable creates the blacklist_import_jobs table if it doesn't exist
+func (s *Server) ensureBlacklistImportJobsTable() error {
+	_, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS blacklist_import_jobs (
+			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+			file_name VARCHAR(500) NOT NULL,
+			file_path VARCHAR(500),
+			db_type VARCHAR(50) NOT NULL,
+			status VARCHAR(50) DEFAULT 'pending',
+			total_emails INTEGER DEFAULT 0,
+			processed INTEGER DEFAULT 0,
+			imported INTEGER DEFAULT 0,
+			duplicates INTEGER DEFAULT 0,
+			errors INTEGER DEFAULT 0,
+			error_message TEXT,
+			started_at TIMESTAMP,
+			completed_at TIMESTAMP,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	return err
+}
+
 // startBlacklistImport starts an async import job for blacklist SQL file
 func (s *Server) startBlacklistImport(c *fiber.Ctx) error {
+	// Ensure table exists
+	if err := s.ensureBlacklistImportJobsTable(); err != nil {
+		log.Printf("[BlacklistImport] Failed to ensure table exists: %v", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao preparar banco de dados"})
+	}
+
 	file, err := c.FormFile("file")
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Nenhum arquivo enviado"})
