@@ -1,224 +1,111 @@
 package api
 
 import (
-	"database/sql"
-	"fmt"
+	"bufio"
+	"regexp"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
-	_ "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 )
 
-// DatabaseMigrationRequest represents a database migration request
-type DatabaseMigrationRequest struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	User     string `json:"user"`
-	Password string `json:"password"`
-	Database string `json:"database"`
-	Type     string `json:"type"` // mailwizz, newapp, mumara
+// SQLMigrationRequest represents the SQL file migration request
+type SQLMigrationRequest struct {
+	Type string `json:"type"` // mailwizz, newapp, mumara
 }
 
-// DatabaseMigrationTestRequest for testing connection
-type DatabaseMigrationTestRequest struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	User     string `json:"user"`
-	Password string `json:"password"`
-	Database string `json:"database"`
-	Type     string `json:"type"`
-}
-
-// testDatabaseConnection tests connection to external database
-func (s *Server) testDatabaseConnection(c *fiber.Ctx) error {
-	var req DatabaseMigrationTestRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
-	}
-
-	if req.Host == "" || req.User == "" || req.Database == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Host, user, and database are required"})
-	}
-
-	if req.Port == 0 {
-		req.Port = 3306
-	}
-
-	// Build MySQL connection string
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True",
-		req.User, req.Password, req.Host, req.Port, req.Database)
-
-	// Test connection
-	db, err := sql.Open("mysql", dsn)
+// importFromSQLFile imports blacklist from SQL dump file
+func (s *Server) importFromSQLFile(c *fiber.Ctx) error {
+	file, err := c.FormFile("file")
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to create connection: " + err.Error()})
-	}
-	defer db.Close()
-
-	if err := db.Ping(); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to connect: " + err.Error()})
+		return c.Status(400).JSON(fiber.Map{"error": "Nenhum arquivo enviado"})
 	}
 
-	// Get table name and count based on type
+	dbType := c.FormValue("type", "mailwizz")
+
+	// Validate database type
 	var tableName, emailColumn string
-	switch req.Type {
+	var emailIndex int
+	switch dbType {
 	case "mailwizz":
 		tableName = "mw_email_blacklist"
 		emailColumn = "email"
+		emailIndex = 2 // email_id, subscriber_id, email, reason, date_added, last_updated
 	case "newapp":
 		tableName = "email_banned_emails"
 		emailColumn = "emailaddress"
+		emailIndex = 1 // banid, emailaddress, list, bandate
 	case "mumara":
 		tableName = "suppression_list"
 		emailColumn = "email"
+		emailIndex = 1 // suppression_list_id, email, account_id_fk, type, list_id_fk, create_time
 	default:
-		return c.Status(400).JSON(fiber.Map{"error": "Invalid database type. Must be: mailwizz, newapp, or mumara"})
+		return c.Status(400).JSON(fiber.Map{"error": "Tipo de banco invalido. Use: mailwizz, newapp, ou mumara"})
 	}
 
-	// Count emails in source table
-	var count int
-	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)
-	err = db.QueryRow(query).Scan(&count)
+	f, err := file.Open()
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{
-			"error": fmt.Sprintf("Failed to query table %s: %s", tableName, err.Error()),
-		})
+		return c.Status(500).JSON(fiber.Map{"error": "Erro ao abrir arquivo"})
 	}
+	defer f.Close()
 
-	// Get sample emails
-	var samples []string
-	sampleQuery := fmt.Sprintf("SELECT %s FROM %s LIMIT 5", emailColumn, tableName)
-	rows, err := db.Query(sampleQuery)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var email string
-			if rows.Scan(&email) == nil {
-				samples = append(samples, email)
+	// Parse SQL file and extract emails
+	emails := make(map[string]bool) // Use map to deduplicate
+	scanner := bufio.NewScanner(f)
+
+	// Increase buffer size for large SQL files with long lines
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 10*1024*1024) // 10MB max line size
+
+	// Regex to match INSERT statements
+	insertRegex := regexp.MustCompile(`(?i)INSERT\s+INTO\s+` + "`?" + tableName + "`?" + `\s+`)
+
+	// Regex to extract values from INSERT
+	valuesRegex := regexp.MustCompile(`\(([^)]+)\)`)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Check if line contains INSERT for our table
+		if !insertRegex.MatchString(line) {
+			continue
+		}
+
+		// Find all value groups in the line
+		matches := valuesRegex.FindAllStringSubmatch(line, -1)
+		for _, match := range matches {
+			if len(match) < 2 {
+				continue
+			}
+
+			// Parse the values
+			values := parseInsertValues(match[1])
+			if emailIndex < len(values) {
+				email := cleanEmail(values[emailIndex])
+				if email != "" && emailRegex.MatchString(email) {
+					emails[email] = true
+				}
 			}
 		}
 	}
 
-	return c.JSON(fiber.Map{
-		"message":      "Connection successful",
-		"table":        tableName,
-		"email_column": emailColumn,
-		"total_emails": count,
-		"samples":      samples,
-	})
-}
-
-// migrateFromDatabase migrates blacklist from external database
-func (s *Server) migrateFromDatabase(c *fiber.Ctx) error {
-	var req DatabaseMigrationRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	if len(emails) == 0 {
+		return c.Status(400).JSON(fiber.Map{
+			"error": "Nenhum email encontrado no arquivo. Verifique se o arquivo contem a tabela " + tableName,
+		})
 	}
 
-	if req.Host == "" || req.User == "" || req.Database == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Host, user, and database are required"})
-	}
-
-	if req.Port == 0 {
-		req.Port = 3306
-	}
-
-	// Build MySQL connection string
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True",
-		req.User, req.Password, req.Host, req.Port, req.Database)
-
-	// Connect to external database
-	extDB, err := sql.Open("mysql", dsn)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to connect to external database: " + err.Error()})
-	}
-	defer extDB.Close()
-
-	if err := extDB.Ping(); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to ping external database: " + err.Error()})
-	}
-
-	// Get table name and email column based on type
-	var tableName, emailColumn, reasonColumn string
-	switch req.Type {
-	case "mailwizz":
-		tableName = "mw_email_blacklist"
-		emailColumn = "email"
-		reasonColumn = "reason"
-	case "newapp":
-		tableName = "email_banned_emails"
-		emailColumn = "emailaddress"
-		reasonColumn = "" // No reason column in newapp
-	case "mumara":
-		tableName = "suppression_list"
-		emailColumn = "email"
-		reasonColumn = "type"
-	default:
-		return c.Status(400).JSON(fiber.Map{"error": "Invalid database type. Must be: mailwizz, newapp, or mumara"})
-	}
-
-	// Query emails from external database
-	var query string
-	if reasonColumn != "" {
-		query = fmt.Sprintf("SELECT %s, %s FROM %s", emailColumn, reasonColumn, tableName)
-	} else {
-		query = fmt.Sprintf("SELECT %s FROM %s", emailColumn, tableName)
-	}
-
-	rows, err := extDB.Query(query)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to query external database: " + err.Error()})
-	}
-	defer rows.Close()
-
-	// Begin transaction in local database
+	// Begin transaction
 	tx, err := s.db.Begin()
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to begin transaction"})
+		return c.Status(500).JSON(fiber.Map{"error": "Erro ao iniciar transacao"})
 	}
 
 	imported := 0
 	duplicates := 0
-	errors := 0
+	reason := "import_" + dbType
 
-	// Process emails
-	for rows.Next() {
-		var email string
-		var reason string
-
-		if reasonColumn != "" {
-			var reasonPtr *string
-			if err := rows.Scan(&email, &reasonPtr); err != nil {
-				errors++
-				continue
-			}
-			if reasonPtr != nil {
-				reason = *reasonPtr
-			}
-		} else {
-			if err := rows.Scan(&email); err != nil {
-				errors++
-				continue
-			}
-		}
-
-		// Clean and validate email
-		email = strings.ToLower(strings.TrimSpace(email))
-		if email == "" || !emailRegex.MatchString(email) {
-			errors++
-			continue
-		}
-
-		// Set default reason based on source
-		if reason == "" {
-			reason = fmt.Sprintf("import_%s", req.Type)
-		} else {
-			// Normalize reason from source
-			reason = normalizeReason(reason, req.Type)
-		}
-
-		// Insert into blacklist
+	for email := range emails {
 		id := uuid.New().String()
 		result, err := tx.Exec(`
 			INSERT INTO blacklist (id, email, reason)
@@ -227,65 +114,181 @@ func (s *Server) migrateFromDatabase(c *fiber.Ctx) error {
 		`, id, email, reason)
 
 		if err != nil {
-			errors++
 			continue
 		}
 
-		rowsAffected, _ := result.RowsAffected()
-		if rowsAffected > 0 {
+		rows, _ := result.RowsAffected()
+		if rows > 0 {
 			imported++
 		} else {
 			duplicates++
 		}
 	}
 
-	// Commit transaction
 	if err := tx.Commit(); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to commit transaction"})
+		return c.Status(500).JSON(fiber.Map{"error": "Erro ao salvar dados"})
 	}
 
-	// Update emails table to mark blacklisted emails as invalid
+	// Update emails table
 	s.db.Exec(`
 		UPDATE emails SET valid = false
 		WHERE LOWER(email) IN (SELECT email FROM blacklist)
 	`)
 
 	return c.JSON(fiber.Map{
-		"message":    "Migration completed",
-		"source":     req.Type,
-		"imported":   imported,
-		"duplicates": duplicates,
-		"errors":     errors,
-		"total":      imported + duplicates + errors,
+		"message":      "Importacao concluida",
+		"source":       dbType,
+		"table":        tableName,
+		"email_column": emailColumn,
+		"imported":     imported,
+		"duplicates":   duplicates,
+		"total":        imported + duplicates,
 	})
 }
 
-// normalizeReason normalizes reason strings from different sources
-func normalizeReason(reason string, sourceType string) string {
-	reason = strings.ToLower(strings.TrimSpace(reason))
+// parseInsertValues parses comma-separated values from SQL INSERT
+func parseInsertValues(valuesStr string) []string {
+	var values []string
+	var current strings.Builder
+	inQuote := false
+	quoteChar := rune(0)
+	escaped := false
 
-	// Normalize common reason values
-	switch {
-	case strings.Contains(reason, "bounce"):
-		return "bounce"
-	case strings.Contains(reason, "unsubscribe"):
-		return "unsubscribe"
-	case strings.Contains(reason, "complaint") || strings.Contains(reason, "spam"):
-		return "complaint"
-	case strings.Contains(reason, "manual"):
-		return "manual"
-	case strings.Contains(reason, "spamtrap"):
-		return "spamtrap"
-	case strings.Contains(reason, "invalid"):
-		return "invalid"
-	default:
-		return fmt.Sprintf("import_%s", sourceType)
+	for _, char := range valuesStr {
+		if escaped {
+			current.WriteRune(char)
+			escaped = false
+			continue
+		}
+
+		if char == '\\' {
+			escaped = true
+			continue
+		}
+
+		if (char == '\'' || char == '"') && !inQuote {
+			inQuote = true
+			quoteChar = char
+			continue
+		}
+
+		if char == quoteChar && inQuote {
+			inQuote = false
+			quoteChar = 0
+			continue
+		}
+
+		if char == ',' && !inQuote {
+			values = append(values, strings.TrimSpace(current.String()))
+			current.Reset()
+			continue
+		}
+
+		current.WriteRune(char)
 	}
+
+	// Add last value
+	if current.Len() > 0 {
+		values = append(values, strings.TrimSpace(current.String()))
+	}
+
+	return values
 }
 
-// getMigrationStats returns stats about potential migration sources
+// cleanEmail removes quotes and trims whitespace from email
+func cleanEmail(email string) string {
+	email = strings.TrimSpace(email)
+	email = strings.Trim(email, "'\"")
+	email = strings.ToLower(email)
+	return email
+}
+
+// previewSQLFile previews the SQL file without importing
+func (s *Server) previewSQLFile(c *fiber.Ctx) error {
+	file, err := c.FormFile("file")
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Nenhum arquivo enviado"})
+	}
+
+	dbType := c.FormValue("type", "mailwizz")
+
+	// Validate database type
+	var tableName string
+	var emailIndex int
+	switch dbType {
+	case "mailwizz":
+		tableName = "mw_email_blacklist"
+		emailIndex = 2
+	case "newapp":
+		tableName = "email_banned_emails"
+		emailIndex = 1
+	case "mumara":
+		tableName = "suppression_list"
+		emailIndex = 1
+	default:
+		return c.Status(400).JSON(fiber.Map{"error": "Tipo de banco invalido"})
+	}
+
+	f, err := file.Open()
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Erro ao abrir arquivo"})
+	}
+	defer f.Close()
+
+	emails := make(map[string]bool)
+	var samples []string
+	scanner := bufio.NewScanner(f)
+
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 10*1024*1024)
+
+	insertRegex := regexp.MustCompile(`(?i)INSERT\s+INTO\s+` + "`?" + tableName + "`?" + `\s+`)
+	valuesRegex := regexp.MustCompile(`\(([^)]+)\)`)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if !insertRegex.MatchString(line) {
+			continue
+		}
+
+		matches := valuesRegex.FindAllStringSubmatch(line, -1)
+		for _, match := range matches {
+			if len(match) < 2 {
+				continue
+			}
+
+			values := parseInsertValues(match[1])
+			if emailIndex < len(values) {
+				email := cleanEmail(values[emailIndex])
+				if email != "" && emailRegex.MatchString(email) {
+					if !emails[email] {
+						emails[email] = true
+						if len(samples) < 10 {
+							samples = append(samples, email)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if len(emails) == 0 {
+		return c.Status(400).JSON(fiber.Map{
+			"error": "Nenhum email encontrado. Verifique se o arquivo contem a tabela " + tableName,
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"message":      "Arquivo analisado",
+		"table":        tableName,
+		"total_emails": len(emails),
+		"samples":      samples,
+	})
+}
+
+// getMigrationStats returns info about supported database types
 func (s *Server) getMigrationStats(c *fiber.Ctx) error {
-	// Return information about supported database types
 	return c.JSON(fiber.Map{
 		"supported_databases": []fiber.Map{
 			{
