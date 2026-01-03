@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -164,43 +165,7 @@ func (s *Server) downloadList(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "List not found"})
 	}
 
-	// Get emails
-	rows, err := s.db.Query(`
-		SELECT email, COALESCE(name, '')
-		FROM emails
-		WHERE list_id = $1 AND valid = true
-		ORDER BY email ASC
-	`, listID)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch emails"})
-	}
-	defer rows.Close()
-
-	// Build output
-	var output string
-	delimiter := ","
-	if format == "txt" {
-		delimiter = "\n"
-	} else {
-		output = "email,name\n" // CSV header
-	}
-
-	for rows.Next() {
-		var email, name string
-		rows.Scan(&email, &name)
-		if format == "txt" {
-			output += email + delimiter
-		} else {
-			// Escape quotes in name for CSV
-			if name != "" {
-				output += email + "," + "\"" + name + "\"" + "\n"
-			} else {
-				output += email + ",\n"
-			}
-		}
-	}
-
-	// Set headers for download
+	// Set headers for download BEFORE streaming
 	contentType := "text/csv"
 	ext := ".csv"
 	if format == "txt" {
@@ -211,5 +176,39 @@ func (s *Server) downloadList(c *fiber.Ctx) error {
 	c.Set("Content-Type", contentType)
 	c.Set("Content-Disposition", "attachment; filename=\""+listName+ext+"\"")
 
-	return c.SendString(output)
+	// Stream response
+	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+		// Write CSV header
+		if format == "csv" {
+			w.WriteString("email,name\n")
+		}
+
+		// Get emails - no ORDER BY for speed
+		rows, err := s.db.Query(`
+			SELECT email, COALESCE(name, '')
+			FROM emails
+			WHERE list_id = $1 AND valid = true
+		`, listID)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var email, name string
+			rows.Scan(&email, &name)
+			if format == "txt" {
+				w.WriteString(email + "\n")
+			} else {
+				if name != "" {
+					w.WriteString(email + ",\"" + name + "\"\n")
+				} else {
+					w.WriteString(email + ",\n")
+				}
+			}
+		}
+		w.Flush()
+	})
+
+	return nil
 }
