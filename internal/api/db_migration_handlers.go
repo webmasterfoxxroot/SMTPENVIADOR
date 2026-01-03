@@ -1,224 +1,93 @@
 package api
 
 import (
-	"database/sql"
-	"fmt"
+	"bufio"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
-	_ "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 )
 
-// DatabaseMigrationRequest represents a database migration request
-type DatabaseMigrationRequest struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	User     string `json:"user"`
-	Password string `json:"password"`
-	Database string `json:"database"`
-	Type     string `json:"type"` // mailwizz, newapp, mumara
-}
-
-// DatabaseMigrationTestRequest for testing connection
-type DatabaseMigrationTestRequest struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	User     string `json:"user"`
-	Password string `json:"password"`
-	Database string `json:"database"`
-	Type     string `json:"type"`
-}
-
-// testDatabaseConnection tests connection to external database
-func (s *Server) testDatabaseConnection(c *fiber.Ctx) error {
-	var req DatabaseMigrationTestRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
-	}
-
-	if req.Host == "" || req.User == "" || req.Database == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Host, user, and database are required"})
-	}
-
-	if req.Port == 0 {
-		req.Port = 3306
-	}
-
-	// Build MySQL connection string
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True",
-		req.User, req.Password, req.Host, req.Port, req.Database)
-
-	// Test connection
-	db, err := sql.Open("mysql", dsn)
+// importFromSQLFile imports blacklist from SQL dump file
+func (s *Server) importFromSQLFile(c *fiber.Ctx) error {
+	file, err := c.FormFile("file")
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to create connection: " + err.Error()})
-	}
-	defer db.Close()
-
-	if err := db.Ping(); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to connect: " + err.Error()})
+		return c.Status(400).JSON(fiber.Map{"error": "Nenhum arquivo enviado"})
 	}
 
-	// Get table name and count based on type
-	var tableName, emailColumn string
-	switch req.Type {
+	dbType := c.FormValue("type", "mailwizz")
+
+	// Validate database type and get email column index
+	var tableName string
+	var emailIndex int
+	switch dbType {
 	case "mailwizz":
 		tableName = "mw_email_blacklist"
-		emailColumn = "email"
+		emailIndex = 2 // (email_id, subscriber_id, EMAIL, reason, date_added, last_updated)
 	case "newapp":
 		tableName = "email_banned_emails"
-		emailColumn = "emailaddress"
+		emailIndex = 1 // (banid, EMAILADDRESS, list, bandate)
 	case "mumara":
 		tableName = "suppression_list"
-		emailColumn = "email"
+		emailIndex = 1 // (suppression_list_id, EMAIL, account_id_fk, type, list_id_fk, create_time)
 	default:
-		return c.Status(400).JSON(fiber.Map{"error": "Invalid database type. Must be: mailwizz, newapp, or mumara"})
+		return c.Status(400).JSON(fiber.Map{"error": "Tipo de banco invalido. Use: mailwizz, newapp, ou mumara"})
 	}
 
-	// Count emails in source table
-	var count int
-	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)
-	err = db.QueryRow(query).Scan(&count)
+	f, err := file.Open()
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{
-			"error": fmt.Sprintf("Failed to query table %s: %s", tableName, err.Error()),
-		})
+		return c.Status(500).JSON(fiber.Map{"error": "Erro ao abrir arquivo"})
 	}
+	defer f.Close()
 
-	// Get sample emails
-	var samples []string
-	sampleQuery := fmt.Sprintf("SELECT %s FROM %s LIMIT 5", emailColumn, tableName)
-	rows, err := db.Query(sampleQuery)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var email string
-			if rows.Scan(&email) == nil {
-				samples = append(samples, email)
+	// Parse SQL file and extract emails
+	emails := make(map[string]bool)
+	scanner := bufio.NewScanner(f)
+
+	// Increase buffer size for large SQL files
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 50*1024*1024) // 50MB max line size
+
+	tableNameLower := strings.ToLower(tableName)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		lineLower := strings.ToLower(line)
+
+		// Check if line contains INSERT INTO our table
+		if !strings.Contains(lineLower, "insert into") {
+			continue
+		}
+		if !strings.Contains(lineLower, tableNameLower) {
+			continue
+		}
+
+		// Extract all values tuples from the line
+		extractedEmails := extractEmailsFromLine(line, emailIndex)
+		for _, email := range extractedEmails {
+			if email != "" && emailRegex.MatchString(email) {
+				emails[email] = true
 			}
 		}
 	}
 
-	return c.JSON(fiber.Map{
-		"message":      "Connection successful",
-		"table":        tableName,
-		"email_column": emailColumn,
-		"total_emails": count,
-		"samples":      samples,
-	})
-}
-
-// migrateFromDatabase migrates blacklist from external database
-func (s *Server) migrateFromDatabase(c *fiber.Ctx) error {
-	var req DatabaseMigrationRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	if len(emails) == 0 {
+		return c.Status(400).JSON(fiber.Map{
+			"error": "Nenhum email encontrado no arquivo. Verifique se o arquivo contem a tabela " + tableName,
+		})
 	}
 
-	if req.Host == "" || req.User == "" || req.Database == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Host, user, and database are required"})
-	}
-
-	if req.Port == 0 {
-		req.Port = 3306
-	}
-
-	// Build MySQL connection string
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True",
-		req.User, req.Password, req.Host, req.Port, req.Database)
-
-	// Connect to external database
-	extDB, err := sql.Open("mysql", dsn)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to connect to external database: " + err.Error()})
-	}
-	defer extDB.Close()
-
-	if err := extDB.Ping(); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to ping external database: " + err.Error()})
-	}
-
-	// Get table name and email column based on type
-	var tableName, emailColumn, reasonColumn string
-	switch req.Type {
-	case "mailwizz":
-		tableName = "mw_email_blacklist"
-		emailColumn = "email"
-		reasonColumn = "reason"
-	case "newapp":
-		tableName = "email_banned_emails"
-		emailColumn = "emailaddress"
-		reasonColumn = "" // No reason column in newapp
-	case "mumara":
-		tableName = "suppression_list"
-		emailColumn = "email"
-		reasonColumn = "type"
-	default:
-		return c.Status(400).JSON(fiber.Map{"error": "Invalid database type. Must be: mailwizz, newapp, or mumara"})
-	}
-
-	// Query emails from external database
-	var query string
-	if reasonColumn != "" {
-		query = fmt.Sprintf("SELECT %s, %s FROM %s", emailColumn, reasonColumn, tableName)
-	} else {
-		query = fmt.Sprintf("SELECT %s FROM %s", emailColumn, tableName)
-	}
-
-	rows, err := extDB.Query(query)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to query external database: " + err.Error()})
-	}
-	defer rows.Close()
-
-	// Begin transaction in local database
+	// Begin transaction
 	tx, err := s.db.Begin()
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to begin transaction"})
+		return c.Status(500).JSON(fiber.Map{"error": "Erro ao iniciar transacao"})
 	}
 
 	imported := 0
 	duplicates := 0
-	errors := 0
+	reason := "import_" + dbType
 
-	// Process emails
-	for rows.Next() {
-		var email string
-		var reason string
-
-		if reasonColumn != "" {
-			var reasonPtr *string
-			if err := rows.Scan(&email, &reasonPtr); err != nil {
-				errors++
-				continue
-			}
-			if reasonPtr != nil {
-				reason = *reasonPtr
-			}
-		} else {
-			if err := rows.Scan(&email); err != nil {
-				errors++
-				continue
-			}
-		}
-
-		// Clean and validate email
-		email = strings.ToLower(strings.TrimSpace(email))
-		if email == "" || !emailRegex.MatchString(email) {
-			errors++
-			continue
-		}
-
-		// Set default reason based on source
-		if reason == "" {
-			reason = fmt.Sprintf("import_%s", req.Type)
-		} else {
-			// Normalize reason from source
-			reason = normalizeReason(reason, req.Type)
-		}
-
-		// Insert into blacklist
+	for email := range emails {
 		id := uuid.New().String()
 		result, err := tx.Exec(`
 			INSERT INTO blacklist (id, email, reason)
@@ -227,87 +96,289 @@ func (s *Server) migrateFromDatabase(c *fiber.Ctx) error {
 		`, id, email, reason)
 
 		if err != nil {
-			errors++
 			continue
 		}
 
-		rowsAffected, _ := result.RowsAffected()
-		if rowsAffected > 0 {
+		rows, _ := result.RowsAffected()
+		if rows > 0 {
 			imported++
 		} else {
 			duplicates++
 		}
 	}
 
-	// Commit transaction
 	if err := tx.Commit(); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to commit transaction"})
+		return c.Status(500).JSON(fiber.Map{"error": "Erro ao salvar dados"})
 	}
 
-	// Update emails table to mark blacklisted emails as invalid
+	// Update emails table
 	s.db.Exec(`
 		UPDATE emails SET valid = false
 		WHERE LOWER(email) IN (SELECT email FROM blacklist)
 	`)
 
 	return c.JSON(fiber.Map{
-		"message":    "Migration completed",
-		"source":     req.Type,
+		"message":    "Importacao concluida",
+		"source":     dbType,
+		"table":      tableName,
 		"imported":   imported,
 		"duplicates": duplicates,
-		"errors":     errors,
-		"total":      imported + duplicates + errors,
+		"total":      imported + duplicates,
 	})
 }
 
-// normalizeReason normalizes reason strings from different sources
-func normalizeReason(reason string, sourceType string) string {
-	reason = strings.ToLower(strings.TrimSpace(reason))
+// extractEmailsFromLine extracts emails from a SQL INSERT line
+func extractEmailsFromLine(line string, emailIndex int) []string {
+	var emails []string
 
-	// Normalize common reason values
-	switch {
-	case strings.Contains(reason, "bounce"):
-		return "bounce"
-	case strings.Contains(reason, "unsubscribe"):
-		return "unsubscribe"
-	case strings.Contains(reason, "complaint") || strings.Contains(reason, "spam"):
-		return "complaint"
-	case strings.Contains(reason, "manual"):
-		return "manual"
-	case strings.Contains(reason, "spamtrap"):
-		return "spamtrap"
-	case strings.Contains(reason, "invalid"):
-		return "invalid"
-	default:
-		return fmt.Sprintf("import_%s", sourceType)
+	// Find VALUES keyword
+	valuesIdx := strings.Index(strings.ToLower(line), "values")
+	if valuesIdx == -1 {
+		return emails
 	}
+
+	// Get everything after VALUES
+	valuesStr := line[valuesIdx+6:]
+
+	// Parse each tuple (value1, value2, ...)
+	tuples := parseTuples(valuesStr)
+
+	for _, tuple := range tuples {
+		values := parseTupleValues(tuple)
+		if emailIndex < len(values) {
+			email := cleanEmailValue(values[emailIndex])
+			if email != "" {
+				emails = append(emails, email)
+			}
+		}
+	}
+
+	return emails
 }
 
-// getMigrationStats returns stats about potential migration sources
+// parseTuples splits "(v1,v2),(v3,v4)" into ["v1,v2", "v3,v4"]
+func parseTuples(s string) []string {
+	var tuples []string
+	var current strings.Builder
+	depth := 0
+	inQuote := false
+	quoteChar := rune(0)
+
+	for _, char := range s {
+		// Handle escape sequences
+		if inQuote && char == '\\' {
+			current.WriteRune(char)
+			continue
+		}
+
+		// Handle quotes
+		if (char == '\'' || char == '"') && !inQuote {
+			inQuote = true
+			quoteChar = char
+			current.WriteRune(char)
+			continue
+		}
+		if char == quoteChar && inQuote {
+			inQuote = false
+			quoteChar = 0
+			current.WriteRune(char)
+			continue
+		}
+
+		if !inQuote {
+			if char == '(' {
+				if depth == 0 {
+					current.Reset()
+				} else {
+					current.WriteRune(char)
+				}
+				depth++
+				continue
+			}
+			if char == ')' {
+				depth--
+				if depth == 0 {
+					tuples = append(tuples, current.String())
+					current.Reset()
+				} else {
+					current.WriteRune(char)
+				}
+				continue
+			}
+		}
+
+		if depth > 0 {
+			current.WriteRune(char)
+		}
+	}
+
+	return tuples
+}
+
+// parseTupleValues splits "v1, v2, v3" into ["v1", "v2", "v3"]
+func parseTupleValues(tuple string) []string {
+	var values []string
+	var current strings.Builder
+	inQuote := false
+	quoteChar := rune(0)
+	escaped := false
+
+	for _, char := range tuple {
+		if escaped {
+			current.WriteRune(char)
+			escaped = false
+			continue
+		}
+
+		if char == '\\' && inQuote {
+			escaped = true
+			current.WriteRune(char)
+			continue
+		}
+
+		if (char == '\'' || char == '"') && !inQuote {
+			inQuote = true
+			quoteChar = char
+			current.WriteRune(char)
+			continue
+		}
+
+		if char == quoteChar && inQuote {
+			inQuote = false
+			quoteChar = 0
+			current.WriteRune(char)
+			continue
+		}
+
+		if char == ',' && !inQuote {
+			values = append(values, strings.TrimSpace(current.String()))
+			current.Reset()
+			continue
+		}
+
+		current.WriteRune(char)
+	}
+
+	// Add last value
+	if current.Len() > 0 || len(values) > 0 {
+		values = append(values, strings.TrimSpace(current.String()))
+	}
+
+	return values
+}
+
+// cleanEmailValue removes quotes and converts to lowercase
+func cleanEmailValue(val string) string {
+	val = strings.TrimSpace(val)
+	// Remove surrounding quotes
+	if len(val) >= 2 {
+		if (val[0] == '\'' && val[len(val)-1] == '\'') ||
+			(val[0] == '"' && val[len(val)-1] == '"') {
+			val = val[1 : len(val)-1]
+		}
+	}
+	return strings.ToLower(val)
+}
+
+// previewSQLFile previews the SQL file without importing
+func (s *Server) previewSQLFile(c *fiber.Ctx) error {
+	file, err := c.FormFile("file")
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Nenhum arquivo enviado"})
+	}
+
+	dbType := c.FormValue("type", "mailwizz")
+
+	var tableName string
+	var emailIndex int
+	switch dbType {
+	case "mailwizz":
+		tableName = "mw_email_blacklist"
+		emailIndex = 2
+	case "newapp":
+		tableName = "email_banned_emails"
+		emailIndex = 1
+	case "mumara":
+		tableName = "suppression_list"
+		emailIndex = 1
+	default:
+		return c.Status(400).JSON(fiber.Map{"error": "Tipo de banco invalido"})
+	}
+
+	f, err := file.Open()
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Erro ao abrir arquivo"})
+	}
+	defer f.Close()
+
+	emails := make(map[string]bool)
+	var samples []string
+	scanner := bufio.NewScanner(f)
+
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 50*1024*1024)
+
+	tableNameLower := strings.ToLower(tableName)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		lineLower := strings.ToLower(line)
+
+		if !strings.Contains(lineLower, "insert into") {
+			continue
+		}
+		if !strings.Contains(lineLower, tableNameLower) {
+			continue
+		}
+
+		extractedEmails := extractEmailsFromLine(line, emailIndex)
+		for _, email := range extractedEmails {
+			if email != "" && emailRegex.MatchString(email) {
+				if !emails[email] {
+					emails[email] = true
+					if len(samples) < 10 {
+						samples = append(samples, email)
+					}
+				}
+			}
+		}
+	}
+
+	if len(emails) == 0 {
+		return c.Status(400).JSON(fiber.Map{
+			"error": "Nenhum email encontrado. Verifique se o arquivo contem a tabela " + tableName,
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"message":      "Arquivo analisado",
+		"table":        tableName,
+		"total_emails": len(emails),
+		"samples":      samples,
+	})
+}
+
+// getMigrationStats returns info about supported database types
 func (s *Server) getMigrationStats(c *fiber.Ctx) error {
-	// Return information about supported database types
 	return c.JSON(fiber.Map{
 		"supported_databases": []fiber.Map{
 			{
-				"type":         "mailwizz",
-				"name":         "MailWizz",
-				"table":        "mw_email_blacklist",
-				"email_column": "email",
-				"description":  "MailWizz email marketing platform blacklist",
+				"type":        "mailwizz",
+				"name":        "MailWizz",
+				"table":       "mw_email_blacklist",
+				"description": "MailWizz blacklist",
 			},
 			{
-				"type":         "newapp",
-				"name":         "NewApp",
-				"table":        "email_banned_emails",
-				"email_column": "emailaddress",
-				"description":  "NewApp banned emails list",
+				"type":        "newapp",
+				"name":        "NewApp",
+				"table":       "email_banned_emails",
+				"description": "NewApp banned emails",
 			},
 			{
-				"type":         "mumara",
-				"name":         "Mumara",
-				"table":        "suppression_list",
-				"email_column": "email",
-				"description":  "Mumara suppression list",
+				"type":        "mumara",
+				"name":        "Mumara",
+				"table":       "suppression_list",
+				"description": "Mumara suppression list",
 			},
 		},
 	})

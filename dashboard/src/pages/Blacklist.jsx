@@ -140,18 +140,12 @@ function ImportModal({ onClose, onSuccess }) {
 }
 
 function DatabaseMigrationModal({ onClose, onSuccess }) {
-  const [step, setStep] = useState(1) // 1: config, 2: test result, 3: migrating
+  const [step, setStep] = useState(1) // 1: upload, 2: preview, 3: importing
   const [loading, setLoading] = useState(false)
-  const [testResult, setTestResult] = useState(null)
-  const [migrationResult, setMigrationResult] = useState(null)
-  const [config, setConfig] = useState({
-    host: '',
-    port: 3306,
-    user: '',
-    password: '',
-    database: '',
-    type: 'mailwizz'
-  })
+  const [file, setFile] = useState(null)
+  const [dbType, setDbType] = useState('mailwizz')
+  const [previewResult, setPreviewResult] = useState(null)
+  const [importResult, setImportResult] = useState(null)
 
   const databaseTypes = [
     { value: 'mailwizz', name: 'MailWizz', table: 'mw_email_blacklist' },
@@ -159,47 +153,68 @@ function DatabaseMigrationModal({ onClose, onSuccess }) {
     { value: 'mumara', name: 'Mumara', table: 'suppression_list' }
   ]
 
-  const handleTest = async () => {
-    if (!config.host || !config.user || !config.database) {
-      toast.error('Preencha host, usuario e banco de dados')
+  const handlePreview = async () => {
+    if (!file) {
+      toast.error('Selecione um arquivo .sql')
       return
     }
 
     setLoading(true)
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('type', dbType)
+
     try {
-      const response = await api.post('/blacklist/migration/test', config)
-      setTestResult(response.data)
+      const response = await api.post('/blacklist/migration/preview', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      setPreviewResult(response.data)
       setStep(2)
-      toast.success('Conexao bem sucedida!')
+      toast.success('Arquivo analisado!')
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Erro ao testar conexao')
-      setTestResult({ error: error.response?.data?.error || 'Erro desconhecido' })
+      toast.error(error.response?.data?.error || 'Erro ao analisar arquivo')
+      setPreviewResult({ error: error.response?.data?.error || 'Erro desconhecido' })
+      setStep(2)
     } finally {
       setLoading(false)
     }
   }
 
-  const handleMigrate = async () => {
+  const handleImport = async () => {
     setLoading(true)
     setStep(3)
+
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('type', dbType)
+
     try {
-      const response = await api.post('/blacklist/migration/import', config)
-      setMigrationResult(response.data)
-      toast.success(`Migracao concluida! ${response.data.imported} emails importados`)
+      const response = await api.post('/blacklist/migration/import', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      setImportResult(response.data)
+      toast.success(`Importacao concluida! ${response.data.imported} emails importados`)
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Erro na migracao')
-      setMigrationResult({ error: error.response?.data?.error || 'Erro desconhecido' })
+      toast.error(error.response?.data?.error || 'Erro na importacao')
+      setImportResult({ error: error.response?.data?.error || 'Erro desconhecido' })
     } finally {
       setLoading(false)
     }
   }
 
   const handleClose = () => {
-    if (migrationResult && !migrationResult.error) {
+    if (importResult && !importResult.error) {
       onSuccess()
     } else {
       onClose()
     }
+  }
+
+  const resetForm = () => {
+    setStep(1)
+    setFile(null)
+    setPreviewResult(null)
+    setImportResult(null)
   }
 
   return (
@@ -207,127 +222,89 @@ function DatabaseMigrationModal({ onClose, onSuccess }) {
       <div className="bg-white rounded-xl p-6 w-full max-w-lg">
         <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
           <Database className="w-5 h-5" />
-          Migrar de Banco de Dados
+          Importar Blacklist de SQL
         </h2>
 
         {step === 1 && (
           <div className="space-y-4">
             <p className="text-sm text-gray-600 mb-4">
-              Importe emails de blacklists de outros sistemas (MailWizz, NewApp, Mumara)
+              Carregue o arquivo .sql exportado do banco de dados (MailWizz, NewApp, Mumara)
             </p>
 
             <div>
-              <label className="label">Tipo de Banco</label>
+              <label className="label">Tipo de Banco de Origem</label>
               <select
-                value={config.type}
-                onChange={(e) => setConfig({ ...config, type: e.target.value })}
+                value={dbType}
+                onChange={(e) => setDbType(e.target.value)}
                 className="input"
               >
                 {databaseTypes.map((db) => (
                   <option key={db.value} value={db.value}>
-                    {db.name} ({db.table})
+                    {db.name} (tabela: {db.table})
                   </option>
                 ))}
               </select>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="label">Host</label>
-                <input
-                  type="text"
-                  value={config.host}
-                  onChange={(e) => setConfig({ ...config, host: e.target.value })}
-                  className="input"
-                  placeholder="localhost ou IP"
-                />
-              </div>
-              <div>
-                <label className="label">Porta</label>
-                <input
-                  type="number"
-                  value={config.port}
-                  onChange={(e) => setConfig({ ...config, port: parseInt(e.target.value) || 3306 })}
-                  className="input"
-                  placeholder="3306"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="label">Usuario</label>
-                <input
-                  type="text"
-                  value={config.user}
-                  onChange={(e) => setConfig({ ...config, user: e.target.value })}
-                  className="input"
-                  placeholder="root"
-                />
-              </div>
-              <div>
-                <label className="label">Senha</label>
-                <input
-                  type="password"
-                  value={config.password}
-                  onChange={(e) => setConfig({ ...config, password: e.target.value })}
-                  className="input"
-                  placeholder="********"
-                />
-              </div>
-            </div>
-
             <div>
-              <label className="label">Nome do Banco de Dados</label>
+              <label className="label">Arquivo SQL</label>
               <input
-                type="text"
-                value={config.database}
-                onChange={(e) => setConfig({ ...config, database: e.target.value })}
+                type="file"
+                accept=".sql,.txt,*/*"
+                onChange={(e) => setFile(e.target.files[0])}
                 className="input"
-                placeholder="mailwizz, newapp, mumara..."
               />
+              {file && (
+                <p className="text-sm text-gray-500 mt-1">
+                  Arquivo: {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
+                </p>
+              )}
+            </div>
+
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
+              <p className="font-medium mb-1">Como exportar o arquivo SQL:</p>
+              <p>Use phpMyAdmin ou mysqldump para exportar a tabela de blacklist do seu sistema antigo.</p>
             </div>
 
             <div className="flex justify-end gap-3 pt-4">
               <button type="button" onClick={onClose} className="btn btn-secondary">
                 Cancelar
               </button>
-              <button onClick={handleTest} disabled={loading} className="btn btn-primary">
-                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Testar Conexao'}
+              <button onClick={handlePreview} disabled={loading || !file} className="btn btn-primary">
+                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Analisar Arquivo'}
               </button>
             </div>
           </div>
         )}
 
-        {step === 2 && testResult && (
+        {step === 2 && (
           <div className="space-y-4">
-            {testResult.error ? (
+            {previewResult?.error ? (
               <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
                 <div className="flex items-center gap-2 text-red-700 font-medium mb-2">
                   <AlertCircle className="w-5 h-5" />
-                  Erro na Conexao
+                  Erro ao Analisar
                 </div>
-                <p className="text-red-600 text-sm">{testResult.error}</p>
+                <p className="text-red-600 text-sm">{previewResult.error}</p>
               </div>
             ) : (
               <>
                 <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
                   <div className="flex items-center gap-2 text-green-700 font-medium mb-2">
                     <CheckCircle2 className="w-5 h-5" />
-                    Conexao Bem Sucedida!
+                    Arquivo Analisado!
                   </div>
                   <div className="text-sm text-green-700 space-y-1">
-                    <p><strong>Tabela:</strong> {testResult.table}</p>
-                    <p><strong>Coluna de Email:</strong> {testResult.email_column}</p>
-                    <p><strong>Total de Emails:</strong> {testResult.total_emails?.toLocaleString()}</p>
+                    <p><strong>Tabela encontrada:</strong> {previewResult.table}</p>
+                    <p><strong>Total de Emails:</strong> {previewResult.total_emails?.toLocaleString()}</p>
                   </div>
                 </div>
 
-                {testResult.samples && testResult.samples.length > 0 && (
+                {previewResult.samples && previewResult.samples.length > 0 && (
                   <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
                     <p className="text-sm font-medium text-gray-700 mb-2">Amostra de Emails:</p>
                     <ul className="text-sm text-gray-600 font-mono space-y-1">
-                      {testResult.samples.map((email, i) => (
+                      {previewResult.samples.map((email, i) => (
                         <li key={i}>{email}</li>
                       ))}
                     </ul>
@@ -337,12 +314,12 @@ function DatabaseMigrationModal({ onClose, onSuccess }) {
             )}
 
             <div className="flex justify-end gap-3 pt-4">
-              <button onClick={() => { setStep(1); setTestResult(null) }} className="btn btn-secondary">
+              <button onClick={resetForm} className="btn btn-secondary">
                 Voltar
               </button>
-              {!testResult.error && (
-                <button onClick={handleMigrate} disabled={loading} className="btn btn-primary">
-                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : `Importar ${testResult.total_emails?.toLocaleString()} Emails`}
+              {!previewResult?.error && (
+                <button onClick={handleImport} disabled={loading} className="btn btn-primary">
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : `Importar ${previewResult?.total_emails?.toLocaleString()} Emails`}
                 </button>
               )}
             </div>
@@ -354,32 +331,30 @@ function DatabaseMigrationModal({ onClose, onSuccess }) {
             {loading ? (
               <div className="text-center py-8">
                 <Loader2 className="w-12 h-12 animate-spin mx-auto text-blue-500 mb-4" />
-                <p className="text-gray-600">Migrando emails...</p>
+                <p className="text-gray-600">Importando emails...</p>
                 <p className="text-sm text-gray-500">Isso pode levar alguns minutos</p>
               </div>
-            ) : migrationResult?.error ? (
+            ) : importResult?.error ? (
               <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
                 <div className="flex items-center gap-2 text-red-700 font-medium mb-2">
                   <AlertCircle className="w-5 h-5" />
-                  Erro na Migracao
+                  Erro na Importacao
                 </div>
-                <p className="text-red-600 text-sm">{migrationResult.error}</p>
+                <p className="text-red-600 text-sm">{importResult.error}</p>
               </div>
             ) : (
               <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
                 <div className="flex items-center gap-2 text-green-700 font-medium mb-2">
                   <CheckCircle2 className="w-5 h-5" />
-                  Migracao Concluida!
+                  Importacao Concluida!
                 </div>
                 <div className="text-sm text-green-700 space-y-1">
-                  <p><strong>Fonte:</strong> {migrationResult.source}</p>
-                  <p><strong>Importados:</strong> {migrationResult.imported?.toLocaleString()}</p>
-                  <p><strong>Duplicados (ja existiam):</strong> {migrationResult.duplicates?.toLocaleString()}</p>
-                  {migrationResult.errors > 0 && (
-                    <p><strong>Erros:</strong> {migrationResult.errors?.toLocaleString()}</p>
-                  )}
+                  <p><strong>Fonte:</strong> {importResult.source}</p>
+                  <p><strong>Tabela:</strong> {importResult.table}</p>
+                  <p><strong>Importados:</strong> {importResult.imported?.toLocaleString()}</p>
+                  <p><strong>Duplicados (ja existiam):</strong> {importResult.duplicates?.toLocaleString()}</p>
                   <p className="pt-2 border-t border-green-200 mt-2">
-                    <strong>Total processado:</strong> {migrationResult.total?.toLocaleString()}
+                    <strong>Total processado:</strong> {importResult.total?.toLocaleString()}
                   </p>
                 </div>
               </div>
@@ -387,7 +362,7 @@ function DatabaseMigrationModal({ onClose, onSuccess }) {
 
             <div className="flex justify-end gap-3 pt-4">
               <button onClick={handleClose} className="btn btn-primary">
-                {migrationResult?.error ? 'Voltar' : 'Fechar'}
+                {importResult?.error ? 'Voltar' : 'Fechar'}
               </button>
             </div>
           </div>
@@ -458,7 +433,7 @@ function Blacklist() {
             className="btn btn-secondary flex items-center gap-2"
           >
             <Database className="w-4 h-4" />
-            Migrar de Banco
+            Importar SQL
           </button>
           <button
             onClick={() => setImportModal(true)}
