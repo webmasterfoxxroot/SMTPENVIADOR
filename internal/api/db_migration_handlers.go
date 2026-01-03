@@ -2,17 +2,11 @@ package api
 
 import (
 	"bufio"
-	"regexp"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
-
-// SQLMigrationRequest represents the SQL file migration request
-type SQLMigrationRequest struct {
-	Type string `json:"type"` // mailwizz, newapp, mumara
-}
 
 // importFromSQLFile imports blacklist from SQL dump file
 func (s *Server) importFromSQLFile(c *fiber.Ctx) error {
@@ -23,22 +17,19 @@ func (s *Server) importFromSQLFile(c *fiber.Ctx) error {
 
 	dbType := c.FormValue("type", "mailwizz")
 
-	// Validate database type
-	var tableName, emailColumn string
+	// Validate database type and get email column index
+	var tableName string
 	var emailIndex int
 	switch dbType {
 	case "mailwizz":
 		tableName = "mw_email_blacklist"
-		emailColumn = "email"
-		emailIndex = 2 // email_id, subscriber_id, email, reason, date_added, last_updated
+		emailIndex = 2 // (email_id, subscriber_id, EMAIL, reason, date_added, last_updated)
 	case "newapp":
 		tableName = "email_banned_emails"
-		emailColumn = "emailaddress"
-		emailIndex = 1 // banid, emailaddress, list, bandate
+		emailIndex = 1 // (banid, EMAILADDRESS, list, bandate)
 	case "mumara":
 		tableName = "suppression_list"
-		emailColumn = "email"
-		emailIndex = 1 // suppression_list_id, email, account_id_fk, type, list_id_fk, create_time
+		emailIndex = 1 // (suppression_list_id, EMAIL, account_id_fk, type, list_id_fk, create_time)
 	default:
 		return c.Status(400).JSON(fiber.Map{"error": "Tipo de banco invalido. Use: mailwizz, newapp, ou mumara"})
 	}
@@ -50,41 +41,32 @@ func (s *Server) importFromSQLFile(c *fiber.Ctx) error {
 	defer f.Close()
 
 	// Parse SQL file and extract emails
-	emails := make(map[string]bool) // Use map to deduplicate
+	emails := make(map[string]bool)
 	scanner := bufio.NewScanner(f)
 
-	// Increase buffer size for large SQL files with long lines
+	// Increase buffer size for large SQL files
 	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 10*1024*1024) // 10MB max line size
+	scanner.Buffer(buf, 50*1024*1024) // 50MB max line size
 
-	// Regex to match INSERT statements
-	insertRegex := regexp.MustCompile(`(?i)INSERT\s+INTO\s+` + "`?" + tableName + "`?" + `\s+`)
-
-	// Regex to extract values from INSERT
-	valuesRegex := regexp.MustCompile(`\(([^)]+)\)`)
+	tableNameLower := strings.ToLower(tableName)
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		lineLower := strings.ToLower(line)
 
-		// Check if line contains INSERT for our table
-		if !insertRegex.MatchString(line) {
+		// Check if line contains INSERT INTO our table
+		if !strings.Contains(lineLower, "insert into") {
+			continue
+		}
+		if !strings.Contains(lineLower, tableNameLower) {
 			continue
 		}
 
-		// Find all value groups in the line
-		matches := valuesRegex.FindAllStringSubmatch(line, -1)
-		for _, match := range matches {
-			if len(match) < 2 {
-				continue
-			}
-
-			// Parse the values
-			values := parseInsertValues(match[1])
-			if emailIndex < len(values) {
-				email := cleanEmail(values[emailIndex])
-				if email != "" && emailRegex.MatchString(email) {
-					emails[email] = true
-				}
+		// Extract all values tuples from the line
+		extractedEmails := extractEmailsFromLine(line, emailIndex)
+		for _, email := range extractedEmails {
+			if email != "" && emailRegex.MatchString(email) {
+				emails[email] = true
 			}
 		}
 	}
@@ -136,45 +118,135 @@ func (s *Server) importFromSQLFile(c *fiber.Ctx) error {
 	`)
 
 	return c.JSON(fiber.Map{
-		"message":      "Importacao concluida",
-		"source":       dbType,
-		"table":        tableName,
-		"email_column": emailColumn,
-		"imported":     imported,
-		"duplicates":   duplicates,
-		"total":        imported + duplicates,
+		"message":    "Importacao concluida",
+		"source":     dbType,
+		"table":      tableName,
+		"imported":   imported,
+		"duplicates": duplicates,
+		"total":      imported + duplicates,
 	})
 }
 
-// parseInsertValues parses comma-separated values from SQL INSERT
-func parseInsertValues(valuesStr string) []string {
+// extractEmailsFromLine extracts emails from a SQL INSERT line
+func extractEmailsFromLine(line string, emailIndex int) []string {
+	var emails []string
+
+	// Find VALUES keyword
+	valuesIdx := strings.Index(strings.ToLower(line), "values")
+	if valuesIdx == -1 {
+		return emails
+	}
+
+	// Get everything after VALUES
+	valuesStr := line[valuesIdx+6:]
+
+	// Parse each tuple (value1, value2, ...)
+	tuples := parseTuples(valuesStr)
+
+	for _, tuple := range tuples {
+		values := parseTupleValues(tuple)
+		if emailIndex < len(values) {
+			email := cleanEmailValue(values[emailIndex])
+			if email != "" {
+				emails = append(emails, email)
+			}
+		}
+	}
+
+	return emails
+}
+
+// parseTuples splits "(v1,v2),(v3,v4)" into ["v1,v2", "v3,v4"]
+func parseTuples(s string) []string {
+	var tuples []string
+	var current strings.Builder
+	depth := 0
+	inQuote := false
+	quoteChar := rune(0)
+
+	for _, char := range s {
+		// Handle escape sequences
+		if inQuote && char == '\\' {
+			current.WriteRune(char)
+			continue
+		}
+
+		// Handle quotes
+		if (char == '\'' || char == '"') && !inQuote {
+			inQuote = true
+			quoteChar = char
+			current.WriteRune(char)
+			continue
+		}
+		if char == quoteChar && inQuote {
+			inQuote = false
+			quoteChar = 0
+			current.WriteRune(char)
+			continue
+		}
+
+		if !inQuote {
+			if char == '(' {
+				if depth == 0 {
+					current.Reset()
+				} else {
+					current.WriteRune(char)
+				}
+				depth++
+				continue
+			}
+			if char == ')' {
+				depth--
+				if depth == 0 {
+					tuples = append(tuples, current.String())
+					current.Reset()
+				} else {
+					current.WriteRune(char)
+				}
+				continue
+			}
+		}
+
+		if depth > 0 {
+			current.WriteRune(char)
+		}
+	}
+
+	return tuples
+}
+
+// parseTupleValues splits "v1, v2, v3" into ["v1", "v2", "v3"]
+func parseTupleValues(tuple string) []string {
 	var values []string
 	var current strings.Builder
 	inQuote := false
 	quoteChar := rune(0)
 	escaped := false
 
-	for _, char := range valuesStr {
+	for _, char := range tuple {
 		if escaped {
 			current.WriteRune(char)
 			escaped = false
 			continue
 		}
 
-		if char == '\\' {
+		if char == '\\' && inQuote {
 			escaped = true
+			current.WriteRune(char)
 			continue
 		}
 
 		if (char == '\'' || char == '"') && !inQuote {
 			inQuote = true
 			quoteChar = char
+			current.WriteRune(char)
 			continue
 		}
 
 		if char == quoteChar && inQuote {
 			inQuote = false
 			quoteChar = 0
+			current.WriteRune(char)
 			continue
 		}
 
@@ -188,19 +260,24 @@ func parseInsertValues(valuesStr string) []string {
 	}
 
 	// Add last value
-	if current.Len() > 0 {
+	if current.Len() > 0 || len(values) > 0 {
 		values = append(values, strings.TrimSpace(current.String()))
 	}
 
 	return values
 }
 
-// cleanEmail removes quotes and trims whitespace from email
-func cleanEmail(email string) string {
-	email = strings.TrimSpace(email)
-	email = strings.Trim(email, "'\"")
-	email = strings.ToLower(email)
-	return email
+// cleanEmailValue removes quotes and converts to lowercase
+func cleanEmailValue(val string) string {
+	val = strings.TrimSpace(val)
+	// Remove surrounding quotes
+	if len(val) >= 2 {
+		if (val[0] == '\'' && val[len(val)-1] == '\'') ||
+			(val[0] == '"' && val[len(val)-1] == '"') {
+			val = val[1 : len(val)-1]
+		}
+	}
+	return strings.ToLower(val)
 }
 
 // previewSQLFile previews the SQL file without importing
@@ -212,7 +289,6 @@ func (s *Server) previewSQLFile(c *fiber.Ctx) error {
 
 	dbType := c.FormValue("type", "mailwizz")
 
-	// Validate database type
 	var tableName string
 	var emailIndex int
 	switch dbType {
@@ -240,33 +316,28 @@ func (s *Server) previewSQLFile(c *fiber.Ctx) error {
 	scanner := bufio.NewScanner(f)
 
 	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 10*1024*1024)
+	scanner.Buffer(buf, 50*1024*1024)
 
-	insertRegex := regexp.MustCompile(`(?i)INSERT\s+INTO\s+` + "`?" + tableName + "`?" + `\s+`)
-	valuesRegex := regexp.MustCompile(`\(([^)]+)\)`)
+	tableNameLower := strings.ToLower(tableName)
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		lineLower := strings.ToLower(line)
 
-		if !insertRegex.MatchString(line) {
+		if !strings.Contains(lineLower, "insert into") {
+			continue
+		}
+		if !strings.Contains(lineLower, tableNameLower) {
 			continue
 		}
 
-		matches := valuesRegex.FindAllStringSubmatch(line, -1)
-		for _, match := range matches {
-			if len(match) < 2 {
-				continue
-			}
-
-			values := parseInsertValues(match[1])
-			if emailIndex < len(values) {
-				email := cleanEmail(values[emailIndex])
-				if email != "" && emailRegex.MatchString(email) {
-					if !emails[email] {
-						emails[email] = true
-						if len(samples) < 10 {
-							samples = append(samples, email)
-						}
+		extractedEmails := extractEmailsFromLine(line, emailIndex)
+		for _, email := range extractedEmails {
+			if email != "" && emailRegex.MatchString(email) {
+				if !emails[email] {
+					emails[email] = true
+					if len(samples) < 10 {
+						samples = append(samples, email)
 					}
 				}
 			}
@@ -292,25 +363,22 @@ func (s *Server) getMigrationStats(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"supported_databases": []fiber.Map{
 			{
-				"type":         "mailwizz",
-				"name":         "MailWizz",
-				"table":        "mw_email_blacklist",
-				"email_column": "email",
-				"description":  "MailWizz email marketing platform blacklist",
+				"type":        "mailwizz",
+				"name":        "MailWizz",
+				"table":       "mw_email_blacklist",
+				"description": "MailWizz blacklist",
 			},
 			{
-				"type":         "newapp",
-				"name":         "NewApp",
-				"table":        "email_banned_emails",
-				"email_column": "emailaddress",
-				"description":  "NewApp banned emails list",
+				"type":        "newapp",
+				"name":        "NewApp",
+				"table":       "email_banned_emails",
+				"description": "NewApp banned emails",
 			},
 			{
-				"type":         "mumara",
-				"name":         "Mumara",
-				"table":        "suppression_list",
-				"email_column": "email",
-				"description":  "Mumara suppression list",
+				"type":        "mumara",
+				"name":        "Mumara",
+				"table":       "suppression_list",
+				"description": "Mumara suppression list",
 			},
 		},
 	})
