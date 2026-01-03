@@ -717,7 +717,7 @@ function EmailLists() {
   const downloadList = async (listId, listName) => {
     try {
       // Use fetch for better blob handling
-      const token = localStorage.getItem('token')
+      const token = localStorage.getItem('smtpenviador_token')
       const response = await fetch(`/api/v1/lists/${listId}/download?format=csv`, {
         headers: {
           'Authorization': `Bearer ${token}`
