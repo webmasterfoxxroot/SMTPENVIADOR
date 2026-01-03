@@ -250,7 +250,7 @@ function DatabaseMigrationModal({ onClose, onSuccess }) {
               <label className="label">Arquivo SQL</label>
               <input
                 type="file"
-                accept=".sql"
+                accept=".sql,.txt,*/*"
                 onChange={(e) => setFile(e.target.files[0])}
                 className="input"
               />
