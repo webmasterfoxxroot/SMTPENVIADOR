@@ -611,9 +611,12 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, 
                 <Upload className="w-4 h-4" />
               </button>
               <button
-                onClick={onDownload}
+                onClick={() => {
+                  console.log('Download clicked', { listId: list?.id, listName: list?.name })
+                  onDownload()
+                }}
                 className="p-2 text-gray-500 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
-                disabled={isDeleting || totalEmails === 0}
+                disabled={isDeleting}
                 title="Download da lista"
               >
                 <Download className="w-4 h-4" />
