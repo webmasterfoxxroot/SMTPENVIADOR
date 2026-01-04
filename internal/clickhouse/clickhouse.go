@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -304,6 +305,82 @@ func (c *Client) MarkEmailsAsInvalid(ctx context.Context, listID string) error {
 	`, listID)
 }
 
+// GetEmailsForCampaign returns emails for a campaign from specified lists
+func (c *Client) GetEmailsForCampaign(ctx context.Context, listIDs []string) ([]CampaignEmail, error) {
+	if len(listIDs) == 0 {
+		return nil, nil
+	}
+
+	// Build placeholders for list IDs
+	placeholders := make([]string, len(listIDs))
+	for i := range listIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
+		FROM emails
+		WHERE list_id IN (%s) AND valid = 1 AND bounced = 0 AND unsubscribed = 0
+	`, placeholderList(len(listIDs)))
+
+	// Convert listIDs to interface slice for query
+	args := make([]interface{}, len(listIDs))
+	for i, id := range listIDs {
+		args[i] = id
+	}
+
+	rows, err := c.conn.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query emails: %w", err)
+	}
+	defer rows.Close()
+
+	var emails []CampaignEmail
+	for rows.Next() {
+		var e CampaignEmail
+		if err := rows.Scan(&e.ID, &e.Email, &e.Name, &e.Custom1, &e.Custom2, &e.Custom3, &e.Custom4, &e.Custom5); err != nil {
+			log.Printf("Failed to scan email: %v", err)
+			continue
+		}
+		emails = append(emails, e)
+	}
+
+	return emails, nil
+}
+
+// GetEmailCountForCampaign returns count of valid emails for a campaign from specified lists
+func (c *Client) GetEmailCountForCampaign(ctx context.Context, listIDs []string) (uint64, error) {
+	if len(listIDs) == 0 {
+		return 0, nil
+	}
+
+	query := fmt.Sprintf(`
+		SELECT count() FROM emails
+		WHERE list_id IN (%s) AND valid = 1 AND bounced = 0 AND unsubscribed = 0
+	`, placeholderList(len(listIDs)))
+
+	args := make([]interface{}, len(listIDs))
+	for i, id := range listIDs {
+		args[i] = id
+	}
+
+	var count uint64
+	err := c.conn.QueryRow(ctx, query, args...).Scan(&count)
+	return count, err
+}
+
+// placeholderList generates ClickHouse parameter placeholders
+func placeholderList(n int) string {
+	if n == 0 {
+		return ""
+	}
+	placeholders := make([]string, n)
+	for i := 0; i < n; i++ {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+	}
+	return strings.Join(placeholders, ", ")
+}
+
 // ===========================================
 // TYPES
 // ===========================================
@@ -313,6 +390,17 @@ type BlacklistEntry struct {
 	Email     string
 	Reason    string
 	CreatedAt time.Time
+}
+
+type CampaignEmail struct {
+	ID      string
+	Email   string
+	Name    string
+	Custom1 string
+	Custom2 string
+	Custom3 string
+	Custom4 string
+	Custom5 string
 }
 
 type EmailEntry struct {
