@@ -276,6 +276,56 @@ func (s *Server) updateEmailList(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Email list updated"})
 }
 
+// refreshListCounts updates email counts from ClickHouse for all lists
+func (s *Server) refreshListCounts(c *fiber.Ctx) error {
+	if s.ch == nil {
+		return c.Status(400).JSON(fiber.Map{"error": "ClickHouse not available"})
+	}
+
+	ctx := context.Background()
+
+	// Get all lists
+	listRows, err := s.db.Query(`SELECT id FROM email_lists`)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get lists"})
+	}
+	defer listRows.Close()
+
+	updatedCount := 0
+	for listRows.Next() {
+		var listID string
+		if err := listRows.Scan(&listID); err != nil {
+			continue
+		}
+
+		// Get count from ClickHouse
+		count, err := s.ch.GetEmailCountByList(ctx, listID)
+		if err != nil {
+			log.Printf("Error getting count for list %s: %v", listID, err)
+			continue
+		}
+
+		// Update in PostgreSQL
+		_, err = s.db.Exec(`
+			UPDATE email_lists SET total_emails = $1, valid_emails = $1 WHERE id = $2
+		`, count, listID)
+		if err != nil {
+			log.Printf("Error updating count for list %s: %v", listID, err)
+			continue
+		}
+
+		if count > 0 {
+			log.Printf("Updated list %s with %d emails", listID, count)
+			updatedCount++
+		}
+	}
+
+	return c.JSON(fiber.Map{
+		"message": fmt.Sprintf("%d listas atualizadas", updatedCount),
+		"updated": updatedCount,
+	})
+}
+
 // deleteEmailList deletes an email list and all its emails (in batches for large lists)
 func (s *Server) deleteEmailList(c *fiber.Ctx) error {
 	id := c.Params("id")
