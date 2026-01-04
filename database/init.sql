@@ -51,6 +51,16 @@ CREATE TABLE smtp_senders (
 
 CREATE INDEX idx_smtp_senders_smtp_id ON smtp_senders(smtp_id);
 
+-- Email List Groups table
+CREATE TABLE email_list_groups (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    color VARCHAR(20) DEFAULT '#3B82F6',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Email Lists table
 CREATE TABLE email_lists (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -60,6 +70,7 @@ CREATE TABLE email_lists (
     valid_emails INTEGER DEFAULT 0,
     invalid_emails INTEGER DEFAULT 0,
     status VARCHAR(50) DEFAULT 'pending', -- pending, processing, ready, error
+    group_id UUID REFERENCES email_list_groups(id) ON DELETE SET NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -261,6 +272,7 @@ $$ language 'plpgsql';
 -- Apply trigger to tables
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_smtp_servers_updated_at BEFORE UPDATE ON smtp_servers FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_email_list_groups_updated_at BEFORE UPDATE ON email_list_groups FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_email_lists_updated_at BEFORE UPDATE ON email_lists FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_templates_updated_at BEFORE UPDATE ON templates FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_campaigns_updated_at BEFORE UPDATE ON campaigns FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
