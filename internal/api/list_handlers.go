@@ -1150,14 +1150,31 @@ func (s *Server) processImportJobDB(jobID string) {
 
 	log.Printf("Import job %s: file processing complete, updating database...", jobID)
 
-	// Update list stats (total_emails already updated incrementally, just set valid/invalid and status)
+	// Update list stats - get count from ClickHouse if available, otherwise from PostgreSQL
+	var totalEmailCount int64
+	if s.ch != nil {
+		ctx := context.Background()
+		count, err := s.ch.GetEmailCountByList(ctx, listID)
+		if err == nil {
+			totalEmailCount = int64(count)
+			log.Printf("Import job %s: got %d emails from ClickHouse", jobID, totalEmailCount)
+		}
+	}
+
+	// If ClickHouse count is 0, try PostgreSQL
+	if totalEmailCount == 0 {
+		s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE list_id = $1 AND valid = true`, listID).Scan(&totalEmailCount)
+	}
+
+	// Update list stats with the actual count
 	_, err = s.db.Exec(`
 		UPDATE email_lists SET
-			valid_emails = (SELECT COUNT(*) FROM emails WHERE list_id = $1 AND valid = true),
+			total_emails = $1,
+			valid_emails = $1,
 			invalid_emails = $2,
 			status = 'ready'
-		WHERE id = $1
-	`, listID, invalidCount)
+		WHERE id = $3
+	`, totalEmailCount, invalidCount, listID)
 	if err != nil {
 		log.Printf("Import job %s: error updating list stats: %v", jobID, err)
 	}
