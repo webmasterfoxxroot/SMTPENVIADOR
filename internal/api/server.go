@@ -238,6 +238,7 @@ func (s *Server) setupRoutes() {
 	lists.Delete("/:id/emails/:emailId", s.deleteEmail)
 	lists.Get("/:id/download", s.downloadList)
 	lists.Put("/:id/group", s.moveListToGroup)
+	lists.Post("/refresh-counts", s.refreshListCounts)
 
 	// Email List Groups
 	groups := protected.Group("/groups")
