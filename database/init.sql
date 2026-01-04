@@ -146,10 +146,11 @@ CREATE TABLE campaigns (
 );
 
 -- Campaign Emails (queue)
+-- Note: email_id references ClickHouse emails, not PostgreSQL
 CREATE TABLE campaign_emails (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     campaign_id UUID REFERENCES campaigns(id) ON DELETE CASCADE,
-    email_id UUID REFERENCES emails(id) ON DELETE CASCADE,
+    email_id UUID NOT NULL, -- References emails in ClickHouse, no FK constraint
     smtp_id UUID REFERENCES smtp_servers(id),
     status VARCHAR(50) DEFAULT 'pending', -- pending, queued, sending, sent, failed, bounced
     error_message TEXT,
@@ -163,10 +164,11 @@ CREATE INDEX idx_campaign_emails_campaign_id ON campaign_emails(campaign_id);
 CREATE INDEX idx_campaign_emails_status ON campaign_emails(status);
 
 -- Tracking Events table
+-- Note: email_id references ClickHouse emails, not PostgreSQL
 CREATE TABLE tracking_events (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     campaign_id UUID REFERENCES campaigns(id) ON DELETE CASCADE,
-    email_id UUID REFERENCES emails(id) ON DELETE CASCADE,
+    email_id UUID NOT NULL, -- References emails in ClickHouse, no FK constraint
     event_type VARCHAR(50) NOT NULL, -- open, click, bounce, unsubscribe
     link_url TEXT,
     ip_address VARCHAR(45),
