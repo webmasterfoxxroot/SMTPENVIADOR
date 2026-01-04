@@ -137,13 +137,14 @@ function MoveToGroupModal({ list, groups, onClose, onSave }) {
 }
 
 // Modal para upload com divisão em múltiplas listas
-function SplitUploadModal({ onClose, onUploadStarted }) {
+function SplitUploadModal({ groups, onClose, onUploadStarted, onCreateGroup }) {
   const [file, setFile] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [hasHeader, setHasHeader] = useState(false)
   const [delimiter, setDelimiter] = useState(',')
   const [baseName, setBaseName] = useState('')
   const [numParts, setNumParts] = useState(5)
+  const [groupId, setGroupId] = useState('')
 
   const handleUpload = async (e) => {
     e.preventDefault()
@@ -156,6 +157,9 @@ function SplitUploadModal({ onClose, onUploadStarted }) {
     formData.append('delimiter', delimiter)
     formData.append('base_name', baseName)
     formData.append('num_parts', numParts)
+    if (groupId) {
+      formData.append('group_id', groupId)
+    }
 
     try {
       const response = await api.post('/lists/upload-split', formData, {
@@ -178,7 +182,7 @@ function SplitUploadModal({ onClose, onUploadStarted }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl p-6 w-full max-w-md">
+      <div className="bg-white rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-bold flex items-center gap-2">
             <Split className="w-5 h-5 text-blue-500" />
@@ -218,6 +222,33 @@ function SplitUploadModal({ onClose, onUploadStarted }) {
             />
             <p className="text-xs text-gray-500 mt-1">
               Será criado: {baseName || 'LISTA'} 01, {baseName || 'LISTA'} 02, ...
+            </p>
+          </div>
+
+          <div>
+            <label className="label">Grupo (opcional)</label>
+            <div className="flex gap-2">
+              <select
+                value={groupId}
+                onChange={(e) => setGroupId(e.target.value)}
+                className="input flex-1"
+              >
+                <option value="">Sem grupo</option>
+                {groups.map(g => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={onCreateGroup}
+                className="btn btn-secondary px-3"
+                title="Criar novo grupo"
+              >
+                <FolderPlus className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              Todas as listas criadas serão adicionadas a este grupo
             </p>
           </div>
 
@@ -268,6 +299,7 @@ function SplitUploadModal({ onClose, onUploadStarted }) {
               <ul className="text-blue-700 space-y-1">
                 <li>~{estimatedPerPart.toLocaleString()} emails por lista</li>
                 <li>{numParts} listas serão criadas</li>
+                {groupId && <li>Grupo: {groups.find(g => g.id === groupId)?.name}</li>}
               </ul>
             </div>
           )}
@@ -410,10 +442,11 @@ function UploadModal({ listId, onClose, onUploadStarted }) {
   )
 }
 
-function ListModal({ list, onClose, onSave }) {
+function ListModal({ list, groups, onClose, onSave, onCreateGroup }) {
   const [form, setForm] = useState({
     name: '',
     description: '',
+    group_id: '',
     ...list
   })
   const [loading, setLoading] = useState(false)
@@ -422,11 +455,23 @@ function ListModal({ list, onClose, onSave }) {
     e.preventDefault()
     setLoading(true)
     try {
+      const payload = {
+        ...form,
+        group_id: form.group_id || null
+      }
       if (list?.id) {
-        await api.put(`/lists/${list.id}`, form)
+        await api.put(`/lists/${list.id}`, payload)
+        // If group changed, update it
+        if (form.group_id !== list.group_id) {
+          await api.put(`/lists/${list.id}/group`, { group_id: form.group_id || null })
+        }
         toast.success('Lista atualizada!')
       } else {
-        await api.post('/lists', form)
+        const response = await api.post('/lists', payload)
+        // If group selected, move to group
+        if (form.group_id && response.data.id) {
+          await api.put(`/lists/${response.data.id}/group`, { group_id: form.group_id })
+        }
         toast.success('Lista criada!')
       }
       onSave()
@@ -466,6 +511,30 @@ function ListModal({ list, onClose, onSave }) {
               rows={3}
               placeholder="Descrição opcional..."
             />
+          </div>
+
+          <div>
+            <label className="label">Grupo</label>
+            <div className="flex gap-2">
+              <select
+                value={form.group_id || ''}
+                onChange={(e) => setForm({ ...form, group_id: e.target.value })}
+                className="input flex-1"
+              >
+                <option value="">Sem grupo</option>
+                {groups.map(g => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={onCreateGroup}
+                className="btn btn-secondary px-3"
+                title="Criar novo grupo"
+              >
+                <FolderPlus className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           <div className="flex justify-end gap-3 pt-4">
@@ -1050,10 +1119,16 @@ function EmailLists() {
       {modal.open && (
         <ListModal
           list={modal.list}
+          groups={groups}
           onClose={() => setModal({ open: false, list: null })}
           onSave={() => {
             setModal({ open: false, list: null })
             fetchLists()
+            fetchGroups()
+          }}
+          onCreateGroup={() => {
+            setModal({ open: false, list: null })
+            setGroupModal({ open: true, group: null, returnToList: modal.list })
           }}
         />
       )}
@@ -1068,18 +1143,40 @@ function EmailLists() {
 
       {splitModal && (
         <SplitUploadModal
+          groups={groups}
           onClose={() => setSplitModal(false)}
           onUploadStarted={handleSplitUploadStarted}
+          onCreateGroup={() => {
+            setSplitModal(false)
+            setGroupModal({ open: true, group: null, returnToSplit: true })
+          }}
         />
       )}
 
       {groupModal.open && (
         <GroupModal
           group={groupModal.group}
-          onClose={() => setGroupModal({ open: false, group: null })}
-          onSave={() => {
+          onClose={() => {
+            const returnToList = groupModal.returnToList
+            const returnToSplit = groupModal.returnToSplit
             setGroupModal({ open: false, group: null })
-            fetchGroups()
+            if (returnToList !== undefined) {
+              setModal({ open: true, list: returnToList })
+            } else if (returnToSplit) {
+              setSplitModal(true)
+            }
+          }}
+          onSave={() => {
+            const returnToList = groupModal.returnToList
+            const returnToSplit = groupModal.returnToSplit
+            setGroupModal({ open: false, group: null })
+            fetchGroups().then(() => {
+              if (returnToList !== undefined) {
+                setModal({ open: true, list: returnToList })
+              } else if (returnToSplit) {
+                setSplitModal(true)
+              }
+            })
           }}
         />
       )}

@@ -1349,8 +1349,9 @@ func (s *Server) uploadEmailsSplit(c *fiber.Ctx) error {
 	}
 	hasHeader := c.FormValue("has_header", "false") == "true"
 	delimiter := c.FormValue("delimiter", ",")
+	groupID := c.FormValue("group_id", "")
 
-	log.Printf("Split upload: baseName=%s, numParts=%d, hasHeader=%v", baseName, numParts, hasHeader)
+	log.Printf("Split upload: baseName=%s, numParts=%d, hasHeader=%v, groupID=%s", baseName, numParts, hasHeader, groupID)
 
 	// Create uploads directory
 	uploadDir := "/tmp/smtpenviador/uploads"
@@ -1477,10 +1478,17 @@ func (s *Server) uploadEmailsSplit(c *fiber.Ctx) error {
 			// Create new list
 			listName := fmt.Sprintf("%s %02d", baseName, currentPart)
 			currentListID = uuid.New().String()
-			_, err = s.db.Exec(`
-				INSERT INTO email_lists (id, name, description, total_emails, valid_emails, invalid_emails, status)
-				VALUES ($1, $2, $3, 0, 0, 0, 'pending')
-			`, currentListID, listName, fmt.Sprintf("Parte %d de %d", currentPart, numParts))
+			if groupID != "" {
+				_, err = s.db.Exec(`
+					INSERT INTO email_lists (id, name, description, total_emails, valid_emails, invalid_emails, status, group_id)
+					VALUES ($1, $2, $3, 0, 0, 0, 'pending', $4)
+				`, currentListID, listName, fmt.Sprintf("Parte %d de %d", currentPart, numParts), groupID)
+			} else {
+				_, err = s.db.Exec(`
+					INSERT INTO email_lists (id, name, description, total_emails, valid_emails, invalid_emails, status)
+					VALUES ($1, $2, $3, 0, 0, 0, 'pending')
+				`, currentListID, listName, fmt.Sprintf("Parte %d de %d", currentPart, numParts))
+			}
 			if err != nil {
 				log.Printf("Failed to create list %s: %v", listName, err)
 				continue
