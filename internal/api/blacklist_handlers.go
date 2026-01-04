@@ -2,7 +2,9 @@ package api
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
+	"log"
 	"strings"
 	"time"
 
@@ -22,7 +24,32 @@ func (s *Server) listBlacklist(c *fiber.Ctx) error {
 	search := c.Query("search", "")
 	offset := (page - 1) * limit
 
-	// Get total count
+	// Use ClickHouse if available
+	if s.ch != nil {
+		ctx := context.Background()
+		entries, total, err := s.ch.SearchBlacklist(ctx, search, limit, offset)
+		if err != nil {
+			log.Printf("[Blacklist] ClickHouse error: %v, falling back to PostgreSQL", err)
+		} else {
+			var blacklist []fiber.Map
+			for _, entry := range entries {
+				blacklist = append(blacklist, fiber.Map{
+					"id":         entry.ID,
+					"email":      entry.Email,
+					"reason":     entry.Reason,
+					"created_at": entry.CreatedAt,
+				})
+			}
+			return c.JSON(fiber.Map{
+				"data":  blacklist,
+				"total": total,
+				"page":  page,
+				"limit": limit,
+			})
+		}
+	}
+
+	// Fallback to PostgreSQL
 	var total int
 	if search != "" {
 		s.db.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE email LIKE $1`, "%"+search+"%").Scan(&total)
@@ -30,7 +57,6 @@ func (s *Server) listBlacklist(c *fiber.Ctx) error {
 		s.db.QueryRow(`SELECT COUNT(*) FROM blacklist`).Scan(&total)
 	}
 
-	// Build query
 	var rows *sql.Rows
 	var err error
 	if search != "" {
@@ -96,6 +122,23 @@ func (s *Server) addToBlacklist(c *fiber.Ctx) error {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	id := uuid.New().String()
 
+	// Insert into ClickHouse if available
+	if s.ch != nil {
+		ctx := context.Background()
+		_, _, err := s.ch.InsertBlacklistBatch(ctx, []string{email}, req.Reason)
+		if err != nil {
+			log.Printf("[Blacklist] ClickHouse insert error: %v, falling back to PostgreSQL", err)
+		} else {
+			// Mark email as invalid in all lists (still in PostgreSQL for now)
+			s.db.Exec(`UPDATE emails SET valid = false WHERE LOWER(email) = $1`, email)
+			return c.Status(201).JSON(fiber.Map{
+				"message": "Email added to blacklist",
+				"id":      id,
+			})
+		}
+	}
+
+	// Fallback to PostgreSQL
 	_, err := s.db.Exec(`
 		INSERT INTO blacklist (id, email, reason)
 		VALUES ($1, $2, $3)
@@ -119,8 +162,25 @@ func (s *Server) addToBlacklist(c *fiber.Ctx) error {
 func (s *Server) removeFromBlacklist(c *fiber.Ctx) error {
 	id := c.Params("id")
 
-	// Get email before deleting
+	// For ClickHouse, we need to get the email first
 	var email string
+
+	if s.ch != nil {
+		ctx := context.Background()
+		// Delete from ClickHouse
+		err := s.ch.DeleteFromBlacklist(ctx, id)
+		if err != nil {
+			log.Printf("[Blacklist] ClickHouse delete error: %v, falling back to PostgreSQL", err)
+		} else {
+			// Mark email as valid in all lists (if not bounced/unsubscribed)
+			if email != "" {
+				s.db.Exec(`UPDATE emails SET valid = true WHERE LOWER(email) = $1 AND bounced = false AND unsubscribed = false`, strings.ToLower(email))
+			}
+			return c.JSON(fiber.Map{"message": "Email removed from blacklist"})
+		}
+	}
+
+	// Fallback to PostgreSQL
 	s.db.QueryRow(`SELECT email FROM blacklist WHERE id = $1`, id).Scan(&email)
 
 	result, err := s.db.Exec(`DELETE FROM blacklist WHERE id = $1`, id)
@@ -143,20 +203,40 @@ func (s *Server) removeFromBlacklist(c *fiber.Ctx) error {
 
 // clearBlacklist removes all entries from the blacklist
 func (s *Server) clearBlacklist(c *fiber.Ctx) error {
-	// Get count before deleting
 	var count int
+
+	// Clear ClickHouse if available
+	if s.ch != nil {
+		ctx := context.Background()
+		total, err := s.ch.GetBlacklistCount(ctx)
+		if err == nil {
+			count = int(total)
+			err = s.ch.ClearBlacklist(ctx)
+			if err != nil {
+				log.Printf("[Blacklist] ClickHouse clear error: %v, falling back to PostgreSQL", err)
+			} else {
+				// Also clear from PostgreSQL for consistency
+				s.db.Exec(`DELETE FROM blacklist`)
+				s.db.Exec(`DELETE FROM blacklist_import_jobs`)
+				s.db.Exec(`UPDATE emails SET valid = true WHERE bounced = false AND unsubscribed = false`)
+
+				return c.JSON(fiber.Map{
+					"message": "Blacklist limpa com sucesso",
+					"deleted": count,
+				})
+			}
+		}
+	}
+
+	// Fallback to PostgreSQL
 	s.db.QueryRow(`SELECT COUNT(*) FROM blacklist`).Scan(&count)
 
-	// Delete all entries
 	_, err := s.db.Exec(`DELETE FROM blacklist`)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Falha ao limpar blacklist"})
 	}
 
-	// Also clear import jobs
 	s.db.Exec(`DELETE FROM blacklist_import_jobs`)
-
-	// Mark all emails as valid (if not bounced/unsubscribed)
 	s.db.Exec(`UPDATE emails SET valid = true WHERE bounced = false AND unsubscribed = false`)
 
 	return c.JSON(fiber.Map{
@@ -165,7 +245,7 @@ func (s *Server) clearBlacklist(c *fiber.Ctx) error {
 	})
 }
 
-// importBlacklist imports emails from file
+// importBlacklist imports emails from file (simple text file, one email per line)
 func (s *Server) importBlacklist(c *fiber.Ctx) error {
 	file, err := c.FormFile("file")
 	if err != nil {
@@ -180,18 +260,51 @@ func (s *Server) importBlacklist(c *fiber.Ctx) error {
 	}
 	defer f.Close()
 
+	// Collect emails first
+	var emails []string
 	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		email := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		if email != "" && emailRegex.MatchString(email) {
+			emails = append(emails, email)
+		}
+	}
+
+	if len(emails) == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "No valid emails found in file"})
+	}
+
 	imported := 0
 	duplicates := 0
 
+	// Use ClickHouse for bulk insert if available
+	if s.ch != nil {
+		ctx := context.Background()
+		ins, dups, err := s.ch.InsertBlacklistBatch(ctx, emails, reason)
+		if err != nil {
+			log.Printf("[Blacklist] ClickHouse bulk insert error: %v, falling back to PostgreSQL", err)
+		} else {
+			imported = int(ins)
+			duplicates = int(dups)
+
+			// Update emails table (still in PostgreSQL)
+			s.db.Exec(`
+				UPDATE emails SET valid = false
+				WHERE LOWER(email) IN (SELECT email FROM blacklist)
+			`)
+
+			return c.JSON(fiber.Map{
+				"message":    "Blacklist imported via ClickHouse",
+				"imported":   imported,
+				"duplicates": duplicates,
+			})
+		}
+	}
+
+	// Fallback to PostgreSQL
 	tx, _ := s.db.Begin()
 
-	for scanner.Scan() {
-		email := strings.ToLower(strings.TrimSpace(scanner.Text()))
-		if email == "" || !emailRegex.MatchString(email) {
-			continue
-		}
-
+	for _, email := range emails {
 		id := uuid.New().String()
 		result, err := tx.Exec(`
 			INSERT INTO blacklist (id, email, reason)

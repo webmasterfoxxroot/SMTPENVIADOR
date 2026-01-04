@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	"smtpenviador/internal/clickhouse"
 )
 
 type EmailListRequest struct {
@@ -345,9 +347,26 @@ func (s *Server) deleteEmailList(c *fiber.Ctx) error {
 func (s *Server) deleteListInBatches(listID string) {
 	log.Printf("Starting batch deletion for list %s", listID)
 
+	totalDeleted := 0
+
+	// Delete from ClickHouse if available
+	if s.ch != nil {
+		ctx := context.Background()
+		count, err := s.ch.GetEmailCountByList(ctx, listID)
+		if err == nil {
+			totalDeleted = int(count)
+			err = s.ch.DeleteEmailsByList(ctx, listID)
+			if err != nil {
+				log.Printf("ClickHouse delete failed for list %s: %v, falling back to PostgreSQL", listID, err)
+			} else {
+				log.Printf("List %s: deleted %d emails from ClickHouse", listID, totalDeleted)
+			}
+		}
+	}
+
+	// Also delete from PostgreSQL (for consistency)
 	// OPTIMIZED: Use direct DELETE with CTID for fast batch deletion
 	const batchSize = 50000
-	totalDeleted := 0
 
 	for {
 		// Delete a batch of emails using ctid (much faster than subquery)
@@ -367,14 +386,18 @@ func (s *Server) deleteListInBatches(listID string) {
 				break
 			}
 			deleted, _ := result.RowsAffected()
-			totalDeleted += int(deleted)
+			if totalDeleted == 0 {
+				totalDeleted = int(deleted)
+			}
 			break
 		}
 
 		deleted, _ := result.RowsAffected()
-		totalDeleted += int(deleted)
+		if totalDeleted == 0 {
+			totalDeleted += int(deleted)
+		}
 
-		log.Printf("List %s: deleted batch of %d emails (total: %d)", listID, deleted, totalDeleted)
+		log.Printf("List %s: deleted batch of %d emails from PostgreSQL", listID, deleted)
 
 		if deleted < int64(batchSize) {
 			// No more emails to delete
@@ -412,15 +435,35 @@ func (s *Server) forceDeleteEmailList(c *fiber.Ctx) error {
 
 	log.Printf("Force deleting list %s (status: %s)", id, status)
 
-	// Delete all emails directly (this may take a while for large lists)
+	var emailsDeleted int64
+
+	// Delete from ClickHouse first if available
+	if s.ch != nil {
+		ctx := context.Background()
+		count, err := s.ch.GetEmailCountByList(ctx, id)
+		if err == nil {
+			emailsDeleted = int64(count)
+			err = s.ch.DeleteEmailsByList(ctx, id)
+			if err != nil {
+				log.Printf("Force delete - ClickHouse delete failed for list %s: %v", id, err)
+			} else {
+				log.Printf("Force delete - deleted %d emails from ClickHouse for list %s", emailsDeleted, id)
+			}
+		}
+	}
+
+	// Also delete from PostgreSQL for consistency
 	result, err := s.db.Exec(`DELETE FROM emails WHERE list_id = $1`, id)
 	if err != nil {
-		log.Printf("Force delete - failed to delete emails for list %s: %v", id, err)
+		log.Printf("Force delete - failed to delete emails from PostgreSQL for list %s: %v", id, err)
 		return c.Status(500).JSON(fiber.Map{"error": "Falha ao deletar emails"})
 	}
 
-	emailsDeleted, _ := result.RowsAffected()
-	log.Printf("Force delete - deleted %d emails from list %s", emailsDeleted, id)
+	pgDeleted, _ := result.RowsAffected()
+	if emailsDeleted == 0 {
+		emailsDeleted = pgDeleted
+	}
+	log.Printf("Force delete - deleted %d emails from PostgreSQL for list %s", pgDeleted, id)
 
 	// Delete import jobs
 	s.db.Exec(`DELETE FROM import_jobs WHERE list_id = $1`, id)
@@ -434,7 +477,7 @@ func (s *Server) forceDeleteEmailList(c *fiber.Ctx) error {
 
 	log.Printf("Force delete - successfully deleted list %s with %d emails", id, emailsDeleted)
 	return c.JSON(fiber.Map{
-		"message": "Lista excluida com sucesso",
+		"message":        "Lista excluida com sucesso",
 		"emails_deleted": emailsDeleted,
 	})
 }
@@ -496,15 +539,28 @@ func (s *Server) uploadEmails(c *fiber.Ctx) error {
 	}
 	rows.Close()
 
-	// Also check blacklist
+	// Check blacklist - use ClickHouse if available
 	blacklisted := make(map[string]bool)
-	blRows, _ := s.db.Query(`SELECT email FROM blacklist`)
-	for blRows.Next() {
-		var email string
-		blRows.Scan(&email)
-		blacklisted[strings.ToLower(email)] = true
+	if s.ch != nil {
+		ctx := context.Background()
+		entries, _, err := s.ch.SearchBlacklist(ctx, "", 10000000, 0)
+		if err == nil {
+			for _, entry := range entries {
+				blacklisted[strings.ToLower(entry.Email)] = true
+			}
+			log.Printf("Loaded %d blacklisted emails from ClickHouse", len(blacklisted))
+		}
 	}
-	blRows.Close()
+	// Fallback to PostgreSQL if ClickHouse not available or failed
+	if len(blacklisted) == 0 {
+		blRows, _ := s.db.Query(`SELECT email FROM blacklist`)
+		for blRows.Next() {
+			var email string
+			blRows.Scan(&email)
+			blacklisted[strings.ToLower(email)] = true
+		}
+		blRows.Close()
+	}
 
 	// Parse column indexes
 	emailIdx := parseColIndex(emailCol)
@@ -832,19 +888,36 @@ func (s *Server) processImportJobDB(jobID string) {
 	// OPTIMIZED: No memory tracking - let database handle ALL duplicates
 	log.Printf("Import job %s: no memory tracking - database handles duplicates", jobID)
 
-	// Load blacklist (usually small, ~thousands not millions)
+	// Load blacklist - use ClickHouse if available for faster lookups
 	blacklisted := make(map[string]bool)
-	blRows, err := s.db.Query(`SELECT email FROM blacklist`)
-	if err != nil {
-		log.Printf("Import job %s: error querying blacklist: %v", jobID, err)
-	} else {
-		for blRows.Next() {
-			var email string
-			blRows.Scan(&email)
-			blacklisted[strings.ToLower(email)] = true
+	if s.ch != nil {
+		ctx := context.Background()
+		// Get all blacklisted emails from ClickHouse
+		entries, _, err := s.ch.SearchBlacklist(ctx, "", 10000000, 0) // Get all
+		if err != nil {
+			log.Printf("Import job %s: ClickHouse blacklist error: %v, falling back to PostgreSQL", jobID, err)
+		} else {
+			for _, entry := range entries {
+				blacklisted[strings.ToLower(entry.Email)] = true
+			}
+			log.Printf("Import job %s: loaded %d blacklisted emails from ClickHouse", jobID, len(blacklisted))
 		}
-		blRows.Close()
-		log.Printf("Import job %s: loaded %d blacklisted emails", jobID, len(blacklisted))
+	}
+
+	// Fallback to PostgreSQL blacklist if ClickHouse not available or failed
+	if len(blacklisted) == 0 {
+		blRows, err := s.db.Query(`SELECT email FROM blacklist`)
+		if err != nil {
+			log.Printf("Import job %s: error querying PostgreSQL blacklist: %v", jobID, err)
+		} else {
+			for blRows.Next() {
+				var email string
+				blRows.Scan(&email)
+				blacklisted[strings.ToLower(email)] = true
+			}
+			blRows.Close()
+			log.Printf("Import job %s: loaded %d blacklisted emails from PostgreSQL", jobID, len(blacklisted))
+		}
 	}
 
 	log.Printf("Import job %s: starting OPTIMIZED file processing", jobID)
@@ -874,14 +947,42 @@ func (s *Server) processImportJobDB(jobID string) {
 	}
 	batch := make([]emailRecord, 0, batchSize)
 
-	// Function to flush batch using PostgreSQL COPY (much faster than INSERT)
+	// Function to flush batch - uses ClickHouse if available, falls back to PostgreSQL
 	// Returns: (duplicates found in this batch, error)
 	flushBatch := func() (int, error) {
 		if len(batch) == 0 {
 			return 0, nil
 		}
 
-		// Start transaction
+		batchCount := len(batch)
+		var dupsInBatch int
+
+		// Try ClickHouse first if available
+		if s.ch != nil {
+			ctx := context.Background()
+			// Convert to ClickHouse EmailEntry format
+			chEntries := make([]clickhouse.EmailEntry, len(batch))
+			for i, record := range batch {
+				chEntries[i] = clickhouse.EmailEntry{
+					ID:     record.id,
+					ListID: listID,
+					Email:  record.email,
+					Name:   record.name,
+					Valid:  true,
+				}
+			}
+
+			inserted, err := s.ch.InsertEmailsBatch(ctx, listID, chEntries)
+			if err != nil {
+				log.Printf("Import job %s: ClickHouse batch insert error: %v, falling back to PostgreSQL", jobID, err)
+			} else {
+				log.Printf("Import job %s: inserted %d emails into ClickHouse", jobID, inserted)
+				batch = batch[:0] // Clear batch
+				return 0, nil     // ClickHouse doesn't return duplicate count, assume 0
+			}
+		}
+
+		// Fallback to PostgreSQL
 		tx, err := s.db.Begin()
 		if err != nil {
 			return 0, err
@@ -925,8 +1026,6 @@ func (s *Server) processImportJobDB(jobID string) {
 		}
 		stmt.Close()
 
-		batchCount := len(batch)
-
 		// Move from temp to real table with ON CONFLICT (cast to uuid)
 		result, err := tx.Exec(`INSERT INTO emails (id, list_id, email, name, valid)
 			SELECT id::uuid, list_id::uuid, email, name, valid FROM temp_import
@@ -937,7 +1036,7 @@ func (s *Server) processImportJobDB(jobID string) {
 		}
 
 		inserted, _ := result.RowsAffected()
-		dupsInBatch := batchCount - int(inserted)
+		dupsInBatch = batchCount - int(inserted)
 
 		err = tx.Commit()
 		if err != nil {
@@ -1468,7 +1567,38 @@ func (s *Server) getListEmails(c *fiber.Ctx) error {
 	limit := c.QueryInt("limit", 50)
 	offset := (page - 1) * limit
 
-	// Get total count
+	// Use ClickHouse if available
+	if s.ch != nil {
+		ctx := context.Background()
+		entries, total, err := s.ch.GetEmailsByList(ctx, id, limit, offset)
+		if err != nil {
+			log.Printf("[ListEmails] ClickHouse error: %v, falling back to PostgreSQL", err)
+		} else {
+			var emails []fiber.Map
+			for _, e := range entries {
+				emails = append(emails, fiber.Map{
+					"id":           e.ID,
+					"email":        e.Email,
+					"name":         e.Name,
+					"custom1":      e.Custom1,
+					"custom2":      e.Custom2,
+					"custom3":      e.Custom3,
+					"valid":        e.Valid,
+					"bounced":      e.Bounced,
+					"unsubscribed": e.Unsubscribed,
+					"created_at":   e.CreatedAt,
+				})
+			}
+			return c.JSON(fiber.Map{
+				"data":  emails,
+				"total": total,
+				"page":  page,
+				"limit": limit,
+			})
+		}
+	}
+
+	// Fallback to PostgreSQL
 	var total int
 	s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE list_id = $1`, id).Scan(&total)
 
