@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	"smtpenviador/internal/api"
+	"smtpenviador/internal/clickhouse"
 	"smtpenviador/internal/config"
 	"smtpenviador/internal/database"
 	"smtpenviador/internal/engine"
@@ -20,13 +21,22 @@ func main() {
 	cfg := config.Load()
 	log.Println("✅ Configuration loaded")
 
-	// Connect to database
+	// Connect to PostgreSQL (relational data)
 	db, err := database.Connect(cfg)
 	if err != nil {
-		log.Fatalf("❌ Database connection failed: %v", err)
+		log.Fatalf("❌ PostgreSQL connection failed: %v", err)
 	}
 	defer db.Close()
-	log.Println("✅ Database connected")
+	log.Println("✅ PostgreSQL connected")
+
+	// Connect to ClickHouse (bulk data)
+	ch, err := clickhouse.Connect(cfg)
+	if err != nil {
+		log.Printf("⚠️ ClickHouse connection failed: %v (will use PostgreSQL fallback)", err)
+		ch = nil
+	} else {
+		defer ch.Close()
+	}
 
 	// Connect to Redis
 	rdb, err := queue.Connect(cfg)
@@ -45,7 +55,7 @@ func main() {
 	log.Println("✅ Email engine started")
 
 	// Start API server
-	server := api.NewServer(cfg, db, queueManager, emailEngine)
+	server := api.NewServer(cfg, db, ch, queueManager, emailEngine)
 	go func() {
 		if err := server.Start(); err != nil {
 			log.Fatalf("❌ API server failed: %v", err)

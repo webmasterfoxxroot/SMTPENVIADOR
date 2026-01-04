@@ -6,12 +6,19 @@ import (
 )
 
 type Config struct {
-	// Database
+	// Database (PostgreSQL - relational data)
 	DBHost     string
 	DBPort     string
 	DBUser     string
 	DBPassword string
 	DBName     string
+
+	// ClickHouse (bulk data - emails, blacklist)
+	ClickHouseHost     string
+	ClickHousePort     string
+	ClickHouseUser     string
+	ClickHousePassword string
+	ClickHouseDB       string
 
 	// Redis
 	RedisHost     string
@@ -32,12 +39,19 @@ type Config struct {
 
 func Load() *Config {
 	return &Config{
-		// Database
+		// Database (PostgreSQL)
 		DBHost:     getEnv("DB_HOST", "localhost"),
 		DBPort:     getEnv("DB_PORT", "5432"),
 		DBUser:     getEnv("DB_USER", "smtpenviador"),
 		DBPassword: getEnv("DB_PASSWORD", "smtpenviador123"),
 		DBName:     getEnv("DB_NAME", "smtpenviador"),
+
+		// ClickHouse
+		ClickHouseHost:     getEnv("CLICKHOUSE_HOST", "localhost"),
+		ClickHousePort:     getEnv("CLICKHOUSE_PORT", "9000"),
+		ClickHouseUser:     getEnv("CLICKHOUSE_USER", "smtpenviador"),
+		ClickHousePassword: getEnv("CLICKHOUSE_PASSWORD", "smtpenviador123"),
+		ClickHouseDB:       getEnv("CLICKHOUSE_DB", "smtpenviador"),
 
 		// Redis
 		RedisHost:     getEnv("REDIS_HOST", "localhost"),

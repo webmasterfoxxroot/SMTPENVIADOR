@@ -11,6 +11,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/websocket/v2"
 
+	"smtpenviador/internal/clickhouse"
 	"smtpenviador/internal/config"
 	"smtpenviador/internal/engine"
 	"smtpenviador/internal/queue"
@@ -20,13 +21,14 @@ import (
 type Server struct {
 	app    *fiber.App
 	cfg    *config.Config
-	db     *sql.DB
+	db     *sql.DB          // PostgreSQL for relational data
+	ch     *clickhouse.Client // ClickHouse for bulk data (emails, blacklist)
 	queue  *queue.Manager
 	engine *engine.Engine
 }
 
 // NewServer creates a new API server
-func NewServer(cfg *config.Config, db *sql.DB, q *queue.Manager, eng *engine.Engine) *Server {
+func NewServer(cfg *config.Config, db *sql.DB, ch *clickhouse.Client, q *queue.Manager, eng *engine.Engine) *Server {
 	app := fiber.New(fiber.Config{
 		AppName:      "SMTPENVIADOR API",
 		ReadTimeout:  10 * time.Minute, // 10 min for large file uploads
@@ -38,6 +40,7 @@ func NewServer(cfg *config.Config, db *sql.DB, q *queue.Manager, eng *engine.Eng
 		app:    app,
 		cfg:    cfg,
 		db:     db,
+		ch:     ch,
 		queue:  q,
 		engine: eng,
 	}
