@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -147,19 +148,34 @@ func (s *Server) startScheduledCampaign(id string) {
 	// Get tracking domain from settings
 	trackingDomain := s.getTrackingDomain()
 
-	// Get emails from list
-	rows, err := s.db.Query(`
-		SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
-		FROM emails
-		WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
-	`, listID)
-	if err != nil {
-		return
-	}
-	defer rows.Close()
+	// Queue emails - try ClickHouse first, then PostgreSQL
+	listIDs := []string{listID}
+	count := 0
 
-	// Queue emails
-	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+	if s.ch != nil {
+		ctx := context.Background()
+		chEmails, err := s.ch.GetEmailsForCampaign(ctx, listIDs)
+		if err != nil {
+			fmt.Printf("[Scheduler] Error getting emails from ClickHouse: %v\n", err)
+		} else {
+			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+		}
+	}
+
+	// Fallback to PostgreSQL
+	if count == 0 {
+		rows, err := s.db.Query(`
+			SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
+			FROM emails
+			WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
+		`, listID)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
+		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+	}
+
 	fmt.Printf("[Scheduler] Queued %d emails for campaign %s\n", count, id)
 
 	// Update campaign status

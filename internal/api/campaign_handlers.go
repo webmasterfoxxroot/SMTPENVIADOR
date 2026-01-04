@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"smtpenviador/internal/clickhouse"
 	"smtpenviador/internal/queue"
 )
 
@@ -147,14 +149,26 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 	// Get email count from all selected lists
 	var totalEmails int
 	listIDsStr := strings.Join(listIDs, ",")
-	placeholders := make([]string, len(listIDs))
-	args := make([]interface{}, len(listIDs))
-	for i, id := range listIDs {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-		args[i] = id
+
+	// Try ClickHouse first for email count, fallback to PostgreSQL
+	if s.ch != nil {
+		ctx := context.Background()
+		count, err := s.ch.GetEmailCountForCampaign(ctx, listIDs)
+		if err == nil {
+			totalEmails = int(count)
+		}
 	}
-	query := fmt.Sprintf(`SELECT COUNT(*) FROM emails WHERE list_id IN (%s) AND valid = true AND bounced = false AND unsubscribed = false`, strings.Join(placeholders, ","))
-	s.db.QueryRow(query, args...).Scan(&totalEmails)
+	if totalEmails == 0 {
+		// Fallback to PostgreSQL
+		placeholders := make([]string, len(listIDs))
+		args := make([]interface{}, len(listIDs))
+		for i, id := range listIDs {
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+			args[i] = id
+		}
+		query := fmt.Sprintf(`SELECT COUNT(*) FROM emails WHERE list_id IN (%s) AND valid = true AND bounced = false AND unsubscribed = false`, strings.Join(placeholders, ","))
+		s.db.QueryRow(query, args...).Scan(&totalEmails)
+	}
 
 	id := uuid.New().String()
 
@@ -332,91 +346,45 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 		listIDs = []string{listID}
 	}
 
-	// Build query for multiple lists
-	placeholders := make([]string, len(listIDs))
-	args := make([]interface{}, len(listIDs))
-	for i, lid := range listIDs {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-		args[i] = strings.TrimSpace(lid)
+	// Trim whitespace from list IDs
+	for i := range listIDs {
+		listIDs[i] = strings.TrimSpace(listIDs[i])
 	}
 
-	// Get emails from all lists
-	query := fmt.Sprintf(`
-		SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
-		FROM emails
-		WHERE list_id IN (%s) AND valid = true AND bounced = false AND unsubscribed = false
-	`, strings.Join(placeholders, ","))
-	rows, err := s.db.Query(query, args...)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch emails"})
-	}
-	defer rows.Close()
-
-	// Queue emails
+	// Queue emails - try ClickHouse first, then PostgreSQL
 	count := 0
-	for rows.Next() {
-		var emailID, email string
-		var name, c1, c2, c3, c4, c5 *string
-		rows.Scan(&emailID, &email, &name, &c1, &c2, &c3, &c4, &c5)
-
-		// Create variables map
-		variables := make(map[string]string)
-		if c1 != nil {
-			variables["custom1"] = *c1
-		}
-		if c2 != nil {
-			variables["custom2"] = *c2
-		}
-		if c3 != nil {
-			variables["custom3"] = *c3
-		}
-		if c4 != nil {
-			variables["custom4"] = *c4
-		}
-		if c5 != nil {
-			variables["custom5"] = *c5
-		}
-
-		nameStr := ""
-		if name != nil {
-			nameStr = *name
-		}
-
-		job := &queue.EmailJob{
-			ID:             uuid.New().String(),
-			CampaignID:     id,
-			EmailID:        emailID,
-			To:             email,
-			ToName:         nameStr,
-			From:           fromEmail,
-			FromName:       fromName,
-			ReplyTo:        replyTo,
-			Subject:        subject,
-			HTMLContent:    htmlContent,
-			TextContent:    textContent,
-			Variables:      variables,
-			TrackOpens:     trackOpens,
-			TrackClicks:    trackClicks,
-			TrackingDomain: trackingDomain,
-			CreatedAt:      time.Now(),
-		}
-
-		// Insert campaign_email record
-		_, err = s.db.Exec(`
-			INSERT INTO campaign_emails (id, campaign_id, email_id, status)
-			VALUES ($1, $2, $3, 'queued')
-		`, job.ID, id, emailID)
+	if s.ch != nil {
+		// Use ClickHouse
+		ctx := context.Background()
+		chEmails, err := s.ch.GetEmailsForCampaign(ctx, listIDs)
 		if err != nil {
-			log.Printf("❌ Failed to insert campaign_email for %s: %v", email, err)
-			continue // Skip this email if we can't track it
+			log.Printf("❌ Failed to get emails from ClickHouse: %v", err)
+		} else {
+			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+		}
+	}
+
+	// Fallback to PostgreSQL if no emails from ClickHouse
+	if count == 0 {
+		placeholders := make([]string, len(listIDs))
+		args := make([]interface{}, len(listIDs))
+		for i, lid := range listIDs {
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+			args[i] = lid
 		}
 
-		// Push to queue
-		if err := s.queue.Push(job); err != nil {
-			log.Printf("❌ Failed to push job to queue for %s: %v", email, err)
-			continue
+		query := fmt.Sprintf(`
+			SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
+			FROM emails
+			WHERE list_id IN (%s) AND valid = true AND bounced = false AND unsubscribed = false
+		`, strings.Join(placeholders, ","))
+		rows, err := s.db.Query(query, args...)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch emails"})
 		}
-		count++
+		defer rows.Close()
+
+		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
 	}
 
 	// Update campaign status
@@ -600,20 +568,35 @@ func (s *Server) autoStartCampaignByID(id string) {
 	// Get tracking domain from settings
 	trackingDomain := s.getTrackingDomain()
 
-	// Get emails from list
-	rows, err := s.db.Query(`
-		SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
-		FROM emails
-		WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
-	`, listID)
-	if err != nil {
-		fmt.Printf("[AutoStart] Error getting emails for campaign %s: %v\n", id, err)
-		return
-	}
-	defer rows.Close()
+	// Queue emails - try ClickHouse first, then PostgreSQL
+	listIDs := []string{listID}
+	count := 0
 
-	// Queue emails
-	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+	if s.ch != nil {
+		ctx := context.Background()
+		chEmails, err := s.ch.GetEmailsForCampaign(ctx, listIDs)
+		if err != nil {
+			fmt.Printf("[AutoStart] Error getting emails from ClickHouse: %v\n", err)
+		} else {
+			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+		}
+	}
+
+	// Fallback to PostgreSQL
+	if count == 0 {
+		rows, err := s.db.Query(`
+			SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
+			FROM emails
+			WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
+		`, listID)
+		if err != nil {
+			fmt.Printf("[AutoStart] Error getting emails for campaign %s: %v\n", id, err)
+			return
+		}
+		defer rows.Close()
+		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+	}
+
 	fmt.Printf("[AutoStart] Queued %d emails for campaign %s\n", count, id)
 
 	// Update campaign status
@@ -683,9 +666,19 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
 	}
 
-	// Get email count from list
+	// Get email count from list - try ClickHouse first
 	var totalEmails int
-	s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false`, listID).Scan(&totalEmails)
+	listIDs := []string{listID}
+	if s.ch != nil {
+		ctx := context.Background()
+		count, err := s.ch.GetEmailCountForCampaign(ctx, listIDs)
+		if err == nil {
+			totalEmails = int(count)
+		}
+	}
+	if totalEmails == 0 {
+		s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false`, listID).Scan(&totalEmails)
+	}
 
 	// Create new campaign with "Copy of" prefix as draft with auto_start_at = NOW() + 60 seconds (UTC)
 	newID := uuid.New().String()
@@ -735,18 +728,33 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 	// Reset campaign counters
 	s.db.Exec(`UPDATE campaigns SET sent_count = 0, failed_count = 0, open_count = 0, click_count = 0, bounce_count = 0 WHERE id = $1`, id)
 
-	// Get all emails from list
-	rows, err := s.db.Query(`
-		SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
-		FROM emails
-		WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
-	`, listID)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch emails"})
-	}
-	defer rows.Close()
+	// Queue emails - try ClickHouse first, then PostgreSQL
+	listIDs := []string{listID}
+	count := 0
 
-	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+	if s.ch != nil {
+		ctx := context.Background()
+		chEmails, err := s.ch.GetEmailsForCampaign(ctx, listIDs)
+		if err != nil {
+			log.Printf("❌ Failed to get emails from ClickHouse: %v", err)
+		} else {
+			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+		}
+	}
+
+	// Fallback to PostgreSQL
+	if count == 0 {
+		rows, err := s.db.Query(`
+			SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
+			FROM emails
+			WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
+		`, listID)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch emails"})
+		}
+		defer rows.Close()
+		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+	}
 
 	// Update campaign status
 	s.db.Exec(`UPDATE campaigns SET status = 'running', started_at = NOW(), total_emails = $1 WHERE id = $2`, count, id)
@@ -912,6 +920,64 @@ func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, re
 
 		if err := s.queue.Push(job); err != nil {
 			log.Printf("❌ Failed to push job to queue for %s: %v", email, err)
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// queueClickHouseEmails is a helper to queue emails from ClickHouse results
+func (s *Server) queueClickHouseEmails(emails []clickhouse.CampaignEmail, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string, trackOpens, trackClicks bool, trackingDomain string) int {
+	count := 0
+	for _, e := range emails {
+		variables := make(map[string]string)
+		if e.Custom1 != "" {
+			variables["custom1"] = e.Custom1
+		}
+		if e.Custom2 != "" {
+			variables["custom2"] = e.Custom2
+		}
+		if e.Custom3 != "" {
+			variables["custom3"] = e.Custom3
+		}
+		if e.Custom4 != "" {
+			variables["custom4"] = e.Custom4
+		}
+		if e.Custom5 != "" {
+			variables["custom5"] = e.Custom5
+		}
+
+		job := &queue.EmailJob{
+			ID:             uuid.New().String(),
+			CampaignID:     campaignID,
+			EmailID:        e.ID,
+			To:             e.Email,
+			ToName:         e.Name,
+			From:           fromEmail,
+			FromName:       fromName,
+			ReplyTo:        replyTo,
+			Subject:        subject,
+			HTMLContent:    htmlContent,
+			TextContent:    textContent,
+			Variables:      variables,
+			TrackOpens:     trackOpens,
+			TrackClicks:    trackClicks,
+			TrackingDomain: trackingDomain,
+			CreatedAt:      time.Now(),
+		}
+
+		_, err := s.db.Exec(`
+			INSERT INTO campaign_emails (id, campaign_id, email_id, status)
+			VALUES ($1, $2, $3, 'queued')
+		`, job.ID, campaignID, e.ID)
+		if err != nil {
+			log.Printf("❌ Failed to insert campaign_email for %s: %v", e.Email, err)
+			continue
+		}
+
+		if err := s.queue.Push(job); err != nil {
+			log.Printf("❌ Failed to push job to queue for %s: %v", e.Email, err)
 			continue
 		}
 		count++
