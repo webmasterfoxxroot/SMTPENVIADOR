@@ -1,7 +1,300 @@
 import { useState, useEffect, useRef } from 'react'
-import { Plus, Edit, Trash2, Upload, Users, Loader2, Mail, CheckCircle, XCircle, AlertTriangle, X, Split, Download, FolderOpen, ChevronDown, ChevronRight, Folder, FolderPlus } from 'lucide-react'
+import { Plus, Edit, Trash2, Upload, Users, Loader2, Mail, CheckCircle, XCircle, AlertTriangle, X, Split, Download, FolderOpen, ChevronDown, ChevronRight, Folder, FolderPlus, Eye, UserPlus, Search } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
+
+// Modal para visualizar/editar/adicionar emails de uma lista
+function EmailsModal({ list, onClose, onRefresh }) {
+  const [emails, setEmails] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
+  const [editingEmail, setEditingEmail] = useState(null)
+  const [addingEmail, setAddingEmail] = useState(false)
+  const [form, setForm] = useState({ email: '', name: '', custom1: '', custom2: '', custom3: '', custom4: '', custom5: '' })
+  const [saving, setSaving] = useState(false)
+  const limit = 50
+
+  useEffect(() => {
+    fetchEmails()
+  }, [page, search])
+
+  const fetchEmails = async () => {
+    setLoading(true)
+    try {
+      const response = await api.get(`/lists/${list.id}/emails`, {
+        params: { page, limit, search }
+      })
+      setEmails(response.data.data || [])
+      setTotal(response.data.total || 0)
+    } catch (error) {
+      toast.error('Erro ao carregar emails')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleDelete = async (emailId) => {
+    if (!confirm('Tem certeza que deseja excluir este email?')) return
+    try {
+      await api.delete(`/lists/${list.id}/emails/${emailId}`)
+      toast.success('Email excluído')
+      fetchEmails()
+      onRefresh()
+    } catch (error) {
+      toast.error('Erro ao excluir email')
+    }
+  }
+
+  const handleEdit = (email) => {
+    setEditingEmail(email)
+    setForm({
+      email: email.email,
+      name: email.name || '',
+      custom1: email.custom1 || '',
+      custom2: email.custom2 || '',
+      custom3: email.custom3 || '',
+      custom4: email.custom4 || '',
+      custom5: email.custom5 || ''
+    })
+    setAddingEmail(false)
+  }
+
+  const handleAdd = () => {
+    setEditingEmail(null)
+    setForm({ email: '', name: '', custom1: '', custom2: '', custom3: '', custom4: '', custom5: '' })
+    setAddingEmail(true)
+  }
+
+  const handleSave = async (e) => {
+    e.preventDefault()
+    setSaving(true)
+    try {
+      if (addingEmail) {
+        await api.post(`/lists/${list.id}/emails`, form)
+        toast.success('Email adicionado!')
+      } else {
+        await api.put(`/lists/${list.id}/emails/${editingEmail.id}`, form)
+        toast.success('Email atualizado!')
+      }
+      setEditingEmail(null)
+      setAddingEmail(false)
+      setForm({ email: '', name: '', custom1: '', custom2: '', custom3: '', custom4: '', custom5: '' })
+      fetchEmails()
+      onRefresh()
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Erro ao salvar')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const totalPages = Math.ceil(total / limit)
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl w-full max-w-5xl max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b">
+          <div>
+            <h2 className="text-xl font-bold">Emails da Lista</h2>
+            <p className="text-sm text-gray-500">{list.name} - {total.toLocaleString()} emails</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Search & Add */}
+        <div className="flex items-center gap-3 p-4 border-b">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPage(1) }}
+              placeholder="Buscar email..."
+              className="input pl-10"
+            />
+          </div>
+          <button onClick={handleAdd} className="btn btn-primary flex items-center gap-2">
+            <UserPlus className="w-4 h-4" />
+            Adicionar Email
+          </button>
+        </div>
+
+        {/* Form for Add/Edit */}
+        {(addingEmail || editingEmail) && (
+          <div className="p-4 bg-blue-50 border-b">
+            <form onSubmit={handleSave} className="space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div>
+                  <label className="label text-xs">Email *</label>
+                  <input
+                    type="email"
+                    value={form.email}
+                    onChange={(e) => setForm({ ...form, email: e.target.value })}
+                    className="input"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="label text-xs">Nome</label>
+                  <input
+                    type="text"
+                    value={form.name}
+                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                    className="input"
+                  />
+                </div>
+                <div>
+                  <label className="label text-xs">Custom 1</label>
+                  <input
+                    type="text"
+                    value={form.custom1}
+                    onChange={(e) => setForm({ ...form, custom1: e.target.value })}
+                    className="input"
+                  />
+                </div>
+                <div>
+                  <label className="label text-xs">Custom 2</label>
+                  <input
+                    type="text"
+                    value={form.custom2}
+                    onChange={(e) => setForm({ ...form, custom2: e.target.value })}
+                    className="input"
+                  />
+                </div>
+                <div>
+                  <label className="label text-xs">Custom 3</label>
+                  <input
+                    type="text"
+                    value={form.custom3}
+                    onChange={(e) => setForm({ ...form, custom3: e.target.value })}
+                    className="input"
+                  />
+                </div>
+                <div>
+                  <label className="label text-xs">Custom 4</label>
+                  <input
+                    type="text"
+                    value={form.custom4}
+                    onChange={(e) => setForm({ ...form, custom4: e.target.value })}
+                    className="input"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setEditingEmail(null); setAddingEmail(false) }}
+                  className="btn btn-secondary"
+                >
+                  Cancelar
+                </button>
+                <button type="submit" disabled={saving} className="btn btn-primary">
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : (addingEmail ? 'Adicionar' : 'Salvar')}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* Email List */}
+        <div className="flex-1 overflow-auto">
+          {loading ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+            </div>
+          ) : emails.length === 0 ? (
+            <div className="text-center py-12 text-gray-500">
+              <Mail className="w-12 h-12 mx-auto mb-4 opacity-50" />
+              <p>Nenhum email encontrado</p>
+            </div>
+          ) : (
+            <table className="w-full">
+              <thead className="bg-gray-50 sticky top-0">
+                <tr>
+                  <th className="text-left p-3 text-xs font-semibold text-gray-600">EMAIL</th>
+                  <th className="text-left p-3 text-xs font-semibold text-gray-600">NOME</th>
+                  <th className="text-left p-3 text-xs font-semibold text-gray-600 hidden md:table-cell">CUSTOM1</th>
+                  <th className="text-left p-3 text-xs font-semibold text-gray-600 hidden lg:table-cell">CUSTOM2</th>
+                  <th className="text-center p-3 text-xs font-semibold text-gray-600">STATUS</th>
+                  <th className="text-center p-3 text-xs font-semibold text-gray-600">AÇÕES</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {emails.map(email => (
+                  <tr key={email.id} className="hover:bg-gray-50">
+                    <td className="p-3 text-sm">{email.email}</td>
+                    <td className="p-3 text-sm text-gray-600">{email.name || '-'}</td>
+                    <td className="p-3 text-sm text-gray-500 hidden md:table-cell">{email.custom1 || '-'}</td>
+                    <td className="p-3 text-sm text-gray-500 hidden lg:table-cell">{email.custom2 || '-'}</td>
+                    <td className="p-3 text-center">
+                      {email.valid ? (
+                        <span className="inline-flex items-center gap-1 text-green-600 text-xs">
+                          <CheckCircle className="w-3 h-3" /> Válido
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-red-500 text-xs">
+                          <XCircle className="w-3 h-3" /> Inválido
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-3 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        <button
+                          onClick={() => handleEdit(email)}
+                          className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded"
+                          title="Editar"
+                        >
+                          <Edit className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(email.id)}
+                          className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded"
+                          title="Excluir"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between p-4 border-t">
+            <span className="text-sm text-gray-500">
+              Página {page} de {totalPages}
+            </span>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="btn btn-secondary text-sm"
+              >
+                Anterior
+              </button>
+              <button
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                className="btn btn-secondary text-sm"
+              >
+                Próxima
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 // Modal para criar/editar grupo
 function GroupModal({ group, onClose, onSave }) {
@@ -552,7 +845,7 @@ function ListModal({ list, groups, onClose, onSave, onCreateGroup }) {
 }
 
 // List Row - Horizontal compact layout
-function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, onDownload, onMoveToGroup }) {
+function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, onDownload, onMoveToGroup, onViewEmails }) {
   const isImporting = importJob && (importJob.status === 'pending' || importJob.status === 'processing')
   const isDeleting = list.status === 'deleting'
 
@@ -646,10 +939,18 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, 
         {/* Actions */}
         <div className="flex items-center gap-1">
           <button
+            onClick={onViewEmails}
+            className="p-2 text-gray-500 hover:text-cyan-600 hover:bg-cyan-50 rounded-lg transition-colors"
+            disabled={isImporting || isDeleting}
+            title="Ver/Editar Emails"
+          >
+            <Eye className="w-4 h-4" />
+          </button>
+          <button
             onClick={onEdit}
             className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
             disabled={isImporting || isDeleting}
-            title="Editar"
+            title="Editar Lista"
           >
             <Edit className="w-4 h-4" />
           </button>
@@ -733,6 +1034,7 @@ function EmailLists() {
   const [splitModal, setSplitModal] = useState(false)
   const [groupModal, setGroupModal] = useState({ open: false, group: null })
   const [moveModal, setMoveModal] = useState({ open: false, list: null })
+  const [emailsModal, setEmailsModal] = useState({ open: false, list: null })
   const [expandedGroups, setExpandedGroups] = useState({}) // { groupId: true/false }
   const [importJobs, setImportJobs] = useState({}) // { listId: jobStatus }
   const pollIntervals = useRef({})
@@ -991,6 +1293,7 @@ function EmailLists() {
       onCancelImport={(jobId) => cancelImport(list.id, jobId)}
       onDownload={() => downloadList(list.id, list.name)}
       onMoveToGroup={() => setMoveModal({ open: true, list })}
+      onViewEmails={() => setEmailsModal({ open: true, list })}
     />
   )
 
@@ -1190,6 +1493,14 @@ function EmailLists() {
             setMoveModal({ open: false, list: null })
             fetchLists()
           }}
+        />
+      )}
+
+      {emailsModal.open && (
+        <EmailsModal
+          list={emailsModal.list}
+          onClose={() => setEmailsModal({ open: false, list: null })}
+          onRefresh={fetchLists}
         />
       )}
     </div>

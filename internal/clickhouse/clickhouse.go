@@ -402,6 +402,38 @@ func (c *Client) MarkEmailBounced(ctx context.Context, emailID string) error {
 	`, emailID)
 }
 
+// DeleteEmail deletes an email by ID
+func (c *Client) DeleteEmail(ctx context.Context, emailID string) error {
+	return c.conn.Exec(ctx, `
+		ALTER TABLE emails DELETE WHERE id = $1
+	`, emailID)
+}
+
+// InsertEmail inserts a single email
+func (c *Client) InsertEmail(ctx context.Context, email EmailEntry) error {
+	return c.conn.Exec(ctx, `
+		INSERT INTO emails (id, list_id, email, name, custom1, custom2, custom3, custom4, custom5, valid, bounced, unsubscribed, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, 0, now())
+	`, email.ID, email.ListID, email.Email, email.Name, email.Custom1, email.Custom2, email.Custom3, email.Custom4, email.Custom5, boolToUInt8(email.Valid))
+}
+
+// UpdateEmail updates an existing email
+func (c *Client) UpdateEmail(ctx context.Context, emailID, email, name, custom1, custom2, custom3, custom4, custom5 string) error {
+	return c.conn.Exec(ctx, `
+		ALTER TABLE emails UPDATE
+			email = $2, name = $3, custom1 = $4, custom2 = $5, custom3 = $6, custom4 = $7, custom5 = $8
+		WHERE id = $1
+	`, emailID, email, name, custom1, custom2, custom3, custom4, custom5)
+}
+
+// boolToUInt8 converts bool to uint8 for ClickHouse
+func boolToUInt8(b bool) uint8 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // ===========================================
 // TYPES
 // ===========================================
