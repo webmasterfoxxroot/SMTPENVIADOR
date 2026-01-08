@@ -418,12 +418,43 @@ func (c *Client) InsertEmail(ctx context.Context, email EmailEntry) error {
 }
 
 // UpdateEmail updates an existing email
-func (c *Client) UpdateEmail(ctx context.Context, emailID, email, name, custom1, custom2, custom3, custom4, custom5 string) error {
+// Note: If email address changes, we delete and re-insert because email_hash is a key column
+func (c *Client) UpdateEmail(ctx context.Context, emailID, newEmail, name, custom1, custom2, custom3, custom4, custom5 string) error {
+	// First, get the current email record
+	var listID, currentEmail string
+	var valid, bounced, unsubscribed uint8
+	err := c.conn.QueryRow(ctx, `
+		SELECT list_id, email, valid, bounced, unsubscribed FROM emails WHERE id = $1
+	`, emailID).Scan(&listID, &currentEmail, &valid, &bounced, &unsubscribed)
+	if err != nil {
+		return fmt.Errorf("email not found: %w", err)
+	}
+
+	// If email address changed, we need to delete and re-insert
+	if currentEmail != newEmail {
+		// Delete old record
+		err = c.conn.Exec(ctx, `ALTER TABLE emails DELETE WHERE id = $1`, emailID)
+		if err != nil {
+			return fmt.Errorf("failed to delete old email: %w", err)
+		}
+
+		// Insert new record with same ID
+		err = c.conn.Exec(ctx, `
+			INSERT INTO emails (id, list_id, email, name, custom1, custom2, custom3, custom4, custom5, valid, bounced, unsubscribed, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
+		`, emailID, listID, newEmail, name, custom1, custom2, custom3, custom4, custom5, valid, bounced, unsubscribed)
+		if err != nil {
+			return fmt.Errorf("failed to insert updated email: %w", err)
+		}
+		return nil
+	}
+
+	// If only other fields changed, update without touching email
 	return c.conn.Exec(ctx, `
 		ALTER TABLE emails UPDATE
-			email = $2, name = $3, custom1 = $4, custom2 = $5, custom3 = $6, custom4 = $7, custom5 = $8
+			name = $2, custom1 = $3, custom2 = $4, custom3 = $5, custom4 = $6, custom5 = $7
 		WHERE id = $1
-	`, emailID, email, name, custom1, custom2, custom3, custom4, custom5)
+	`, emailID, name, custom1, custom2, custom3, custom4, custom5)
 }
 
 // boolToUInt8 converts bool to uint8 for ClickHouse
