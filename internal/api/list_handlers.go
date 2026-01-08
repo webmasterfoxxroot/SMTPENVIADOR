@@ -1728,20 +1728,172 @@ func (s *Server) deleteEmail(c *fiber.Ctx) error {
 	listID := c.Params("id")
 	emailID := c.Params("emailId")
 
+	// Try to delete from ClickHouse first
+	if s.ch != nil {
+		ctx := context.Background()
+		s.ch.DeleteEmail(ctx, emailID)
+	}
+
+	// Also delete from PostgreSQL (for fallback/legacy)
 	result, err := s.db.Exec(`DELETE FROM emails WHERE id = $1 AND list_id = $2`, emailID, listID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete email"})
 	}
 
 	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return c.Status(404).JSON(fiber.Map{"error": "Email not found"})
-	}
 
-	// Update list count
+	// Update list count (decrement)
 	s.db.Exec(`UPDATE email_lists SET total_emails = total_emails - 1, valid_emails = valid_emails - 1 WHERE id = $1`, listID)
 
+	// Refresh count from ClickHouse if available
+	if s.ch != nil {
+		ctx := context.Background()
+		count, err := s.ch.GetEmailCountByList(ctx, listID)
+		if err == nil {
+			s.db.Exec(`UPDATE email_lists SET total_emails = $1, valid_emails = $1 WHERE id = $2`, count, listID)
+		}
+	}
+
+	if rows == 0 {
+		return c.JSON(fiber.Map{"message": "Email deleted from ClickHouse"})
+	}
+
 	return c.JSON(fiber.Map{"message": "Email deleted"})
+}
+
+// addEmailManually adds a single email to a list
+func (s *Server) addEmailManually(c *fiber.Ctx) error {
+	listID := c.Params("id")
+
+	var req struct {
+		Email   string `json:"email"`
+		Name    string `json:"name"`
+		Custom1 string `json:"custom1"`
+		Custom2 string `json:"custom2"`
+		Custom3 string `json:"custom3"`
+		Custom4 string `json:"custom4"`
+		Custom5 string `json:"custom5"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	// Validate email format
+	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+	if !emailRegex.MatchString(req.Email) {
+		return c.Status(400).JSON(fiber.Map{"error": "Email inválido"})
+	}
+
+	// Check if list exists
+	var exists bool
+	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_lists WHERE id = $1)`, listID).Scan(&exists)
+	if err != nil || !exists {
+		return c.Status(404).JSON(fiber.Map{"error": "Lista não encontrada"})
+	}
+
+	emailID := uuid.New().String()
+
+	// Insert into ClickHouse if available
+	if s.ch != nil {
+		ctx := context.Background()
+		email := clickhouse.EmailEntry{
+			ID:      emailID,
+			ListID:  listID,
+			Email:   req.Email,
+			Name:    req.Name,
+			Custom1: req.Custom1,
+			Custom2: req.Custom2,
+			Custom3: req.Custom3,
+			Custom4: req.Custom4,
+			Custom5: req.Custom5,
+			Valid:   true,
+		}
+		err = s.ch.InsertEmail(ctx, email)
+		if err != nil {
+			// Check for duplicate
+			if strings.Contains(err.Error(), "duplicate") {
+				return c.Status(400).JSON(fiber.Map{"error": "Email já existe nesta lista"})
+			}
+			log.Printf("Failed to insert email to ClickHouse: %v", err)
+		}
+	}
+
+	// Also insert into PostgreSQL (for fallback/legacy)
+	_, err = s.db.Exec(`
+		INSERT INTO emails (id, list_id, email, name, custom1, custom2, custom3, custom4, custom5, valid)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true)
+		ON CONFLICT (list_id, email) DO NOTHING
+	`, emailID, listID, req.Email, req.Name, req.Custom1, req.Custom2, req.Custom3, req.Custom4, req.Custom5)
+
+	// Update list count
+	s.db.Exec(`UPDATE email_lists SET total_emails = total_emails + 1, valid_emails = valid_emails + 1 WHERE id = $1`, listID)
+
+	// Refresh count from ClickHouse if available
+	if s.ch != nil {
+		ctx := context.Background()
+		count, err := s.ch.GetEmailCountByList(ctx, listID)
+		if err == nil {
+			s.db.Exec(`UPDATE email_lists SET total_emails = $1, valid_emails = $1 WHERE id = $2`, count, listID)
+		}
+	}
+
+	return c.Status(201).JSON(fiber.Map{
+		"message": "Email adicionado com sucesso",
+		"id":      emailID,
+	})
+}
+
+// updateEmail updates an existing email in a list
+func (s *Server) updateEmail(c *fiber.Ctx) error {
+	listID := c.Params("id")
+	emailID := c.Params("emailId")
+
+	var req struct {
+		Email   string `json:"email"`
+		Name    string `json:"name"`
+		Custom1 string `json:"custom1"`
+		Custom2 string `json:"custom2"`
+		Custom3 string `json:"custom3"`
+		Custom4 string `json:"custom4"`
+		Custom5 string `json:"custom5"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	// Validate email format
+	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+	if !emailRegex.MatchString(req.Email) {
+		return c.Status(400).JSON(fiber.Map{"error": "Email inválido"})
+	}
+
+	// Update in ClickHouse if available
+	if s.ch != nil {
+		ctx := context.Background()
+		err := s.ch.UpdateEmail(ctx, emailID, req.Email, req.Name, req.Custom1, req.Custom2, req.Custom3, req.Custom4, req.Custom5)
+		if err != nil {
+			log.Printf("Failed to update email in ClickHouse: %v", err)
+		}
+	}
+
+	// Also update in PostgreSQL (for fallback/legacy)
+	result, err := s.db.Exec(`
+		UPDATE emails SET email = $1, name = $2, custom1 = $3, custom2 = $4, custom3 = $5, custom4 = $6, custom5 = $7
+		WHERE id = $8 AND list_id = $9
+	`, req.Email, req.Name, req.Custom1, req.Custom2, req.Custom3, req.Custom4, req.Custom5, emailID, listID)
+
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao atualizar email"})
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 && s.ch == nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Email não encontrado"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Email atualizado com sucesso"})
 }
 
 // parseColIndex parses column index from string

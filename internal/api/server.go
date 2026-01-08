@@ -251,6 +251,8 @@ func (s *Server) setupRoutes() {
 	lists.Post("/upload-split", s.uploadEmailsSplit)
 	lists.Get("/:id/import-jobs", s.getListImportJobs)
 	lists.Get("/:id/emails", s.getListEmails)
+	lists.Post("/:id/emails", s.addEmailManually)
+	lists.Put("/:id/emails/:emailId", s.updateEmail)
 	lists.Delete("/:id/emails/:emailId", s.deleteEmail)
 	lists.Get("/:id/download", s.downloadList)
 	lists.Put("/:id/group", s.moveListToGroup)
