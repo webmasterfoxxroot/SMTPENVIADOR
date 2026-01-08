@@ -381,6 +381,27 @@ func placeholderList(n int) string {
 	return strings.Join(placeholders, ", ")
 }
 
+// GetEmailByID returns email address by ID
+func (c *Client) GetEmailByID(ctx context.Context, emailID string) (string, error) {
+	var email string
+	err := c.conn.QueryRow(ctx, `SELECT email FROM emails WHERE id = $1`, emailID).Scan(&email)
+	return email, err
+}
+
+// MarkEmailUnsubscribed marks an email as unsubscribed
+func (c *Client) MarkEmailUnsubscribed(ctx context.Context, emailID string) error {
+	return c.conn.Exec(ctx, `
+		ALTER TABLE emails UPDATE unsubscribed = 1 WHERE id = $1
+	`, emailID)
+}
+
+// MarkEmailBounced marks an email as bounced
+func (c *Client) MarkEmailBounced(ctx context.Context, emailID string) error {
+	return c.conn.Exec(ctx, `
+		ALTER TABLE emails UPDATE bounced = 1 WHERE id = $1
+	`, emailID)
+}
+
 // ===========================================
 // TYPES
 // ===========================================

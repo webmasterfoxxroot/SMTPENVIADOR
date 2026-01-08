@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/url"
 
 	"github.com/gofiber/fiber/v2"
@@ -122,22 +123,43 @@ func (s *Server) unsubscribe(c *fiber.Ctx) error {
 	campaignID := c.Params("campaignId")
 	emailID := c.Params("emailId")
 
-	// Get email address
+	// Get email address - try ClickHouse first, then PostgreSQL
 	var email string
-	err := s.db.QueryRow(`SELECT email FROM emails WHERE id = $1`, emailID).Scan(&email)
-	if err != nil {
-		return c.Status(404).SendString("Email not found")
+	var found bool
+
+	if s.ch != nil {
+		ctx := context.Background()
+		chEmail, err := s.ch.GetEmailByID(ctx, emailID)
+		if err == nil && chEmail != "" {
+			email = chEmail
+			found = true
+			// Mark as unsubscribed in ClickHouse
+			s.ch.MarkEmailUnsubscribed(ctx, emailID)
+		}
 	}
 
-	// Mark as unsubscribed
-	s.db.Exec(`UPDATE emails SET unsubscribed = true WHERE id = $1`, emailID)
+	// Fallback to PostgreSQL
+	if !found {
+		err := s.db.QueryRow(`SELECT email FROM emails WHERE id = $1`, emailID).Scan(&email)
+		if err != nil {
+			return c.Status(404).SendString("Email not found")
+		}
+		// Mark as unsubscribed in PostgreSQL
+		s.db.Exec(`UPDATE emails SET unsubscribed = true WHERE id = $1`, emailID)
+	}
 
-	// Add to blacklist
+	// Add to blacklist (PostgreSQL for quick lookups, also to ClickHouse if available)
 	s.db.Exec(`
 		INSERT INTO blacklist (id, email, reason)
 		VALUES ($1, $2, 'unsubscribe')
 		ON CONFLICT (email) DO NOTHING
 	`, uuid.New().String(), email)
+
+	// Also add to ClickHouse blacklist if available
+	if s.ch != nil {
+		ctx := context.Background()
+		s.ch.InsertBlacklistBatch(ctx, []string{email}, "unsubscribe")
+	}
 
 	// Record event
 	go s.recordEvent(campaignID, emailID, "unsubscribe", "", c.IP(), c.Get("User-Agent"))
@@ -152,7 +174,7 @@ func (s *Server) unsubscribe(c *fiber.Ctx) error {
 		<!DOCTYPE html>
 		<html>
 		<head>
-			<title>Unsubscribed</title>
+			<title>Descadastrado</title>
 			<style>
 				body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
 				h1 { color: #333; }
@@ -160,9 +182,9 @@ func (s *Server) unsubscribe(c *fiber.Ctx) error {
 			</style>
 		</head>
 		<body>
-			<h1>Unsubscribed Successfully</h1>
-			<p>You have been removed from our mailing list.</p>
-			<p>You will no longer receive emails from us.</p>
+			<h1>Descadastrado com Sucesso</h1>
+			<p>Você foi removido da nossa lista de emails.</p>
+			<p>Você não receberá mais emails nossos.</p>
 		</body>
 		</html>
 	`)
