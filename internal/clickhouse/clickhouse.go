@@ -273,6 +273,13 @@ func (c *Client) GetEmailCountByList(ctx context.Context, listID string) (uint64
 	return count, err
 }
 
+// GetTotalEmailCount returns total count of all emails
+func (c *Client) GetTotalEmailCount(ctx context.Context) (uint64, error) {
+	var count uint64
+	err := c.conn.QueryRow(ctx, `SELECT count() FROM emails`).Scan(&count)
+	return count, err
+}
+
 // GetEmailsByList returns emails from a list with pagination
 func (c *Client) GetEmailsByList(ctx context.Context, listID string, limit, offset int) ([]EmailEntry, uint64, error) {
 	total, err := c.GetEmailCountByList(ctx, listID)

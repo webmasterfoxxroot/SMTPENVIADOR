@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"time"
@@ -75,10 +76,26 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 	stats["active_campaigns"] = activeCampaigns
 
 	// Get total counts
-	var totalSMTPs, totalLists, totalEmails int
+	var totalSMTPs, totalLists int
+	var totalEmails int64
 	s.db.QueryRow(`SELECT COUNT(*) FROM smtp_servers WHERE active = true`).Scan(&totalSMTPs)
 	s.db.QueryRow(`SELECT COUNT(*) FROM email_lists`).Scan(&totalLists)
-	s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE valid = true`).Scan(&totalEmails)
+
+	// Try ClickHouse first for email count (where bulk emails are stored)
+	if s.ch != nil {
+		ctx := context.Background()
+		chCount, err := s.ch.GetTotalEmailCount(ctx)
+		if err == nil && chCount > 0 {
+			totalEmails = int64(chCount)
+		}
+	}
+
+	// Fallback to PostgreSQL if ClickHouse count is 0
+	if totalEmails == 0 {
+		var pgCount int
+		s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE valid = true`).Scan(&pgCount)
+		totalEmails = int64(pgCount)
+	}
 
 	stats["total_smtps"] = totalSMTPs
 	stats["total_lists"] = totalLists

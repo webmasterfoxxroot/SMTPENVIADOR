@@ -158,6 +158,8 @@ func (s *Server) listEmailLists(c *fiber.Ctx) error {
 	defer rows.Close()
 
 	var lists []fiber.Map
+	var listIDs []string
+
 	for rows.Next() {
 		var id, name, status string
 		var description, groupID *string
@@ -170,6 +172,7 @@ func (s *Server) listEmailLists(c *fiber.Ctx) error {
 			continue
 		}
 
+		listIDs = append(listIDs, id)
 		lists = append(lists, fiber.Map{
 			"id":             id,
 			"name":           name,
@@ -182,6 +185,34 @@ func (s *Server) listEmailLists(c *fiber.Ctx) error {
 			"created_at":     createdAt,
 			"updated_at":     updatedAt,
 		})
+	}
+
+	// Update counts from ClickHouse if available (async, non-blocking)
+	if s.ch != nil && len(listIDs) > 0 {
+		go func() {
+			ctx := context.Background()
+			for i, listID := range listIDs {
+				count, err := s.ch.GetEmailCountByList(ctx, listID)
+				if err == nil && count > 0 {
+					s.db.Exec(`UPDATE email_lists SET total_emails = $1, valid_emails = $1 WHERE id = $2`, count, listID)
+					// Update the response data if we have it
+					if i < len(lists) {
+						lists[i]["total_emails"] = count
+						lists[i]["valid_emails"] = count
+					}
+				}
+			}
+		}()
+
+		// Also get counts synchronously for the response
+		ctx := context.Background()
+		for i, listID := range listIDs {
+			count, err := s.ch.GetEmailCountByList(ctx, listID)
+			if err == nil && count > 0 {
+				lists[i]["total_emails"] = count
+				lists[i]["valid_emails"] = count
+			}
+		}
 	}
 
 	return c.JSON(fiber.Map{
