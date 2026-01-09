@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -15,8 +16,20 @@ type TemplateRequest struct {
 	TextContent string `json:"text_content"`
 }
 
+// ensureTemplatesTableUpdated adds missing columns to templates table
+func (s *Server) ensureTemplatesTableUpdated() {
+	// Add from_name column if it doesn't exist
+	_, err := s.db.Exec(`ALTER TABLE templates ADD COLUMN IF NOT EXISTS from_name VARCHAR(255)`)
+	if err != nil {
+		log.Printf("[Templates] Warning: could not add from_name column: %v", err)
+	}
+}
+
 // listTemplates returns all templates
 func (s *Server) listTemplates(c *fiber.Ctx) error {
+	// Ensure table has all columns
+	s.ensureTemplatesTableUpdated()
+
 	rows, err := s.db.Query(`
 		SELECT id, name, COALESCE(from_name, ''), subject, created_at, updated_at
 		FROM templates
