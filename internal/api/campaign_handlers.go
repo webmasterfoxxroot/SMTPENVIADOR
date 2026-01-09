@@ -24,6 +24,30 @@ func (s *Server) getTrackingDomain() string {
 	return domain
 }
 
+// ensureCampaignEmailsUpdated ensures the campaign_emails table has the email column
+func (s *Server) ensureCampaignEmailsUpdated() {
+	// Check if email column exists
+	var exists bool
+	s.db.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'campaign_emails' AND column_name = 'email'
+		)
+	`).Scan(&exists)
+
+	if !exists {
+		log.Println("[Migration] Adding email column to campaign_emails table...")
+		_, err := s.db.Exec(`ALTER TABLE campaign_emails ADD COLUMN email VARCHAR(255)`)
+		if err != nil {
+			log.Printf("[Migration] Warning: Could not add email column: %v", err)
+		} else {
+			// Also add name column for display
+			s.db.Exec(`ALTER TABLE campaign_emails ADD COLUMN IF NOT EXISTS recipient_name VARCHAR(255)`)
+			log.Println("[Migration] Added email and recipient_name columns to campaign_emails")
+		}
+	}
+}
+
 type CampaignRequest struct {
 	Name        string     `json:"name"`
 	Subject     string     `json:"subject"`
@@ -941,6 +965,9 @@ func (s *Server) processBatch(batch []*queue.EmailJob, campaignID string) {
 		return
 	}
 
+	// Ensure campaign_emails table has email column
+	s.ensureCampaignEmailsUpdated()
+
 	// Batch insert into campaign_emails using transaction
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -948,7 +975,8 @@ func (s *Server) processBatch(batch []*queue.EmailJob, campaignID string) {
 		return
 	}
 
-	stmt, err := tx.Prepare(`INSERT INTO campaign_emails (id, campaign_id, email_id, status) VALUES ($1, $2, $3, 'queued')`)
+	// Include email and recipient_name in the insert
+	stmt, err := tx.Prepare(`INSERT INTO campaign_emails (id, campaign_id, email_id, email, recipient_name, status) VALUES ($1, $2, $3, $4, $5, 'queued')`)
 	if err != nil {
 		tx.Rollback()
 		log.Printf("❌ Failed to prepare statement: %v", err)
@@ -957,7 +985,7 @@ func (s *Server) processBatch(batch []*queue.EmailJob, campaignID string) {
 	defer stmt.Close()
 
 	for _, job := range batch {
-		_, err = stmt.Exec(job.ID, campaignID, job.EmailID)
+		_, err = stmt.Exec(job.ID, campaignID, job.EmailID, job.To, job.ToName)
 		if err != nil {
 			log.Printf("❌ Failed to insert campaign_email for %s: %v", job.To, err)
 			continue
@@ -1043,13 +1071,12 @@ func (s *Server) exportCampaignCSV(c *fiber.Ctx) error {
 	var campaignName string
 	s.db.QueryRow(`SELECT name FROM campaigns WHERE id = $1`, id).Scan(&campaignName)
 
-	// Get all campaign emails with details
+	// Get all campaign emails with details - use stored email directly
 	rows, err := s.db.Query(`
-		SELECT e.email, e.name, ce.status, ce.sent_at, ce.opened_at, ce.clicked_at, ce.error_message
+		SELECT ce.email, ce.recipient_name, ce.status, ce.sent_at, ce.opened_at, ce.clicked_at, ce.error_message
 		FROM campaign_emails ce
-		INNER JOIN emails e ON e.id = ce.email_id
 		WHERE ce.campaign_id = $1
-		ORDER BY ce.sent_at DESC
+		ORDER BY ce.sent_at DESC NULLS LAST
 	`, id)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch campaign data"})
@@ -1105,11 +1132,11 @@ func (s *Server) getCampaignDetails(c *fiber.Ctx) error {
 	limit := c.QueryInt("limit", 50)
 	offset := (page - 1) * limit
 
-	// Build query
+	// Build query - use stored email directly instead of JOIN
+	// This supports both ClickHouse and PostgreSQL emails
 	query := `
-		SELECT e.email, e.name, ce.status, ce.sent_at, ce.opened_at, ce.clicked_at, ce.error_message
+		SELECT ce.email, ce.recipient_name, ce.status, ce.sent_at, ce.opened_at, ce.clicked_at, ce.error_message
 		FROM campaign_emails ce
-		INNER JOIN emails e ON e.id = ce.email_id
 		WHERE ce.campaign_id = $1
 	`
 	args := []interface{}{id}
@@ -1124,25 +1151,31 @@ func (s *Server) getCampaignDetails(c *fiber.Ctx) error {
 		args = append(args, status)
 	}
 
-	query += " ORDER BY ce.sent_at DESC LIMIT $" + fmt.Sprintf("%d", len(args)+1) + " OFFSET $" + fmt.Sprintf("%d", len(args)+2)
+	query += " ORDER BY ce.sent_at DESC NULLS LAST LIMIT $" + fmt.Sprintf("%d", len(args)+1) + " OFFSET $" + fmt.Sprintf("%d", len(args)+2)
 	args = append(args, limit, offset)
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
+		log.Printf("[Campaign] Error fetching details: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch details"})
 	}
 	defer rows.Close()
 
 	var emails []fiber.Map
 	for rows.Next() {
-		var email, emailStatus string
-		var name, errorMsg *string
+		var emailStatus string
+		var email, name, errorMsg *string
 		var sentAt, openedAt, clickedAt *time.Time
 
 		rows.Scan(&email, &name, &emailStatus, &sentAt, &openedAt, &clickedAt, &errorMsg)
 
+		emailStr := ""
+		if email != nil {
+			emailStr = *email
+		}
+
 		emails = append(emails, fiber.Map{
-			"email":      email,
+			"email":      emailStr,
 			"name":       name,
 			"status":     emailStatus,
 			"sent_at":    sentAt,
@@ -1188,29 +1221,27 @@ func (s *Server) exportCampaignEmails(c *fiber.Ctx) error {
 
 	// Build query based on export type - only select email
 	var query string
+	// Use stored email directly - works with both ClickHouse and PostgreSQL emails
 	switch exportType {
 	case "opened":
 		query = `
-			SELECT e.email
+			SELECT ce.email
 			FROM campaign_emails ce
-			JOIN emails e ON ce.email_id = e.id
-			WHERE ce.campaign_id = $1 AND ce.opened_at IS NOT NULL
+			WHERE ce.campaign_id = $1 AND ce.opened_at IS NOT NULL AND ce.email IS NOT NULL
 			ORDER BY ce.opened_at DESC
 		`
 	case "clicked":
 		query = `
-			SELECT e.email
+			SELECT ce.email
 			FROM campaign_emails ce
-			JOIN emails e ON ce.email_id = e.id
-			WHERE ce.campaign_id = $1 AND ce.clicked_at IS NOT NULL
+			WHERE ce.campaign_id = $1 AND ce.clicked_at IS NOT NULL AND ce.email IS NOT NULL
 			ORDER BY ce.clicked_at DESC
 		`
 	default:
 		query = `
-			SELECT e.email
+			SELECT ce.email
 			FROM campaign_emails ce
-			JOIN emails e ON ce.email_id = e.id
-			WHERE ce.campaign_id = $1
+			WHERE ce.campaign_id = $1 AND ce.email IS NOT NULL
 			ORDER BY ce.created_at DESC
 		`
 	}
