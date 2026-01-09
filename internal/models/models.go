@@ -158,3 +158,102 @@ type Stats struct {
 	ActiveSMTPs    int     `json:"active_smtps"`
 	ActiveCampaigns int    `json:"active_campaigns"`
 }
+
+// ============================================
+// WARMUP SYSTEM MODELS
+// ============================================
+
+// WarmupSMTP represents an SMTP server enrolled in warmup
+type WarmupSMTP struct {
+	ID              string     `json:"id"`
+	SMTPID          string     `json:"smtp_id"`
+	SMTPName        string     `json:"smtp_name,omitempty"`
+	Status          string     `json:"status"` // active, paused, completed
+	RecipeType      string     `json:"recipe_type"` // progressive, flat, randomized, custom
+	StartDate       time.Time  `json:"start_date"`
+	EndDate         *time.Time `json:"end_date,omitempty"`
+	CurrentDay      int        `json:"current_day"`
+	MinEmailsPerDay int        `json:"min_emails_per_day"`
+	MaxEmailsPerDay int        `json:"max_emails_per_day"`
+	ReplyRate       int        `json:"reply_rate"` // percentage 0-100
+	StartHour       int        `json:"start_hour"` // 0-23
+	EndHour         int        `json:"end_hour"`   // 0-23
+	TotalSent       int        `json:"total_sent"`
+	TotalInbox      int        `json:"total_inbox"`
+	TotalSpam       int        `json:"total_spam"`
+	TotalReplies    int        `json:"total_replies"`
+	CustomSchedule  string     `json:"custom_schedule,omitempty"` // JSON array of daily limits
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+// WarmupSeed represents an email account used for warmup (IMAP)
+type WarmupSeed struct {
+	ID           string    `json:"id"`
+	Email        string    `json:"email"`
+	Password     string    `json:"password,omitempty"`
+	Provider     string    `json:"provider"` // gmail, yahoo, outlook, other
+	IMAPHost     string    `json:"imap_host"`
+	IMAPPort     int       `json:"imap_port"`
+	SMTPHost     string    `json:"smtp_host"`
+	SMTPPort     int       `json:"smtp_port"`
+	UseTLS       bool      `json:"use_tls"`
+	Status       string    `json:"status"` // active, error, disabled
+	LastCheck    time.Time `json:"last_check"`
+	ErrorMessage string    `json:"error_message,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// WarmupEmail represents an email sent during warmup
+type WarmupEmail struct {
+	ID            string     `json:"id"`
+	WarmupSMTPID  string     `json:"warmup_smtp_id"`
+	SeedID        string     `json:"seed_id"`
+	SeedEmail     string     `json:"seed_email,omitempty"`
+	Subject       string     `json:"subject"`
+	MessageID     string     `json:"message_id"`
+	Status        string     `json:"status"` // sent, opened, replied, spam
+	LandedInSpam  bool       `json:"landed_in_spam"`
+	MovedToInbox  bool       `json:"moved_to_inbox"`
+	SentAt        time.Time  `json:"sent_at"`
+	OpenedAt      *time.Time `json:"opened_at,omitempty"`
+	RepliedAt     *time.Time `json:"replied_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+}
+
+// WarmupTemplate represents a template for warmup emails
+type WarmupTemplate struct {
+	ID        string    `json:"id"`
+	Subject   string    `json:"subject"`
+	Body      string    `json:"body"`
+	Category  string    `json:"category"` // business, casual, newsletter
+	Active    bool      `json:"active"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// WarmupDailyStats represents daily statistics for warmup
+type WarmupDailyStats struct {
+	ID           string    `json:"id"`
+	WarmupSMTPID string    `json:"warmup_smtp_id"`
+	Date         time.Time `json:"date"`
+	Scheduled    int       `json:"scheduled"`
+	Sent         int       `json:"sent"`
+	Inbox        int       `json:"inbox"`
+	Spam         int       `json:"spam"`
+	Replies      int       `json:"replies"`
+	ReplyPercent float64   `json:"reply_percent"`
+}
+
+// WarmupStats represents overall warmup statistics
+type WarmupStats struct {
+	TotalSMTPs      int     `json:"total_smtps"`
+	ActiveSMTPs     int     `json:"active_smtps"`
+	TotalSeeds      int     `json:"total_seeds"`
+	ActiveSeeds     int     `json:"active_seeds"`
+	TotalSent       int     `json:"total_sent"`
+	TotalInteractions int   `json:"total_interactions"`
+	TotalReplies    int     `json:"total_replies"`
+	SpamRate        float64 `json:"spam_rate"`
+	InboxRate       float64 `json:"inbox_rate"`
+}

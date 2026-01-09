@@ -8,7 +8,8 @@ import {
   Ban,
   LogOut,
   Zap,
-  Settings
+  Settings,
+  Flame
 } from 'lucide-react'
 import { removeToken, getUser } from '../services/auth'
 
@@ -25,6 +26,7 @@ function Layout({ onLogout }) {
   const menuItems = [
     { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { path: '/smtp', icon: Server, label: 'Servidores SMTP' },
+    { path: '/warmup', icon: Flame, label: 'Warmup' },
     { path: '/lists', icon: Mail, label: 'Listas de Emails' },
     { path: '/campaigns', icon: Send, label: 'Campanhas' },
     { path: '/templates', icon: FileText, label: 'Templates' },

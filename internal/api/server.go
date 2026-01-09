@@ -55,6 +55,10 @@ func NewServer(cfg *config.Config, db *sql.DB, ch *clickhouse.Client, q *queue.M
 	// Resume any pending/orphaned import jobs from before restart
 	go server.resumeOrphanedImportJobs()
 
+	// Initialize warmup tables and start warmup engine
+	server.initWarmupTables()
+	go server.startWarmupEngine()
+
 	return server
 }
 
@@ -329,6 +333,28 @@ func (s *Server) setupRoutes() {
 	settings.Get("/:key", s.getSetting)
 	settings.Put("/:key", s.updateSetting)
 	settings.Put("/", s.updateSettings)
+
+	// Warmup System
+	warmup := protected.Group("/warmup")
+	warmup.Get("/stats", s.getWarmupStats)
+	warmup.Get("/activity", s.getWarmupActivity)
+	// Warmup SMTPs
+	warmup.Get("/smtps", s.listWarmupSMTPs)
+	warmup.Post("/smtps", s.createWarmupSMTP)
+	warmup.Put("/smtps/:id", s.updateWarmupSMTP)
+	warmup.Delete("/smtps/:id", s.deleteWarmupSMTP)
+	warmup.Post("/smtps/:id/toggle", s.toggleWarmupSMTP)
+	warmup.Get("/smtps/:id/stats", s.getWarmupSMTPStats)
+	warmup.Put("/smtps/:id/schedule", s.updateWarmupSchedule)
+	// Warmup Seeds
+	warmup.Get("/seeds", s.listWarmupSeeds)
+	warmup.Post("/seeds", s.createWarmupSeed)
+	warmup.Delete("/seeds/:id", s.deleteWarmupSeed)
+	warmup.Post("/seeds/:id/test", s.testWarmupSeed)
+	// Warmup Templates
+	warmup.Get("/templates", s.listWarmupTemplates)
+	warmup.Post("/templates", s.createWarmupTemplate)
+	warmup.Delete("/templates/:id", s.deleteWarmupTemplate)
 }
 
 // Start starts the API server
