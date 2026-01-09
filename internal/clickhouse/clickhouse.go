@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log"
 	"strings"
@@ -77,14 +78,15 @@ func (c *Client) InsertBlacklistBatch(ctx context.Context, emails []string, reas
 	}
 
 	batch, err := c.conn.PrepareBatch(ctx, `
-		INSERT INTO blacklist (email, reason, created_at)
+		INSERT INTO blacklist (id, email, reason, created_at)
 	`)
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to prepare batch: %w", err)
 	}
 
 	for _, email := range emails {
-		if err := batch.Append(email, reason, time.Now()); err != nil {
+		id := generateUUID()
+		if err := batch.Append(id, email, reason, time.Now()); err != nil {
 			log.Printf("Failed to append email %s: %v", email, err)
 			continue
 		}
@@ -96,6 +98,16 @@ func (c *Client) InsertBlacklistBatch(ctx context.Context, emails []string, reas
 	}
 
 	return inserted, 0, nil
+}
+
+// generateUUID generates a UUID v4 string
+func generateUUID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // IsBlacklisted checks if an email is in the blacklist
@@ -306,6 +318,7 @@ func (c *Client) MarkEmailsAsInvalid(ctx context.Context, listID string) error {
 }
 
 // GetEmailsForCampaign returns emails for a campaign from specified lists
+// Excludes blacklisted emails directly
 func (c *Client) GetEmailsForCampaign(ctx context.Context, listIDs []string) ([]CampaignEmail, error) {
 	if len(listIDs) == 0 {
 		return nil, nil
@@ -317,10 +330,15 @@ func (c *Client) GetEmailsForCampaign(ctx context.Context, listIDs []string) ([]
 		placeholders[i] = fmt.Sprintf("$%d", i+1)
 	}
 
+	// Query excludes emails that are in the blacklist
 	query := fmt.Sprintf(`
 		SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
 		FROM emails
-		WHERE list_id IN (%s) AND valid = 1 AND bounced = 0 AND unsubscribed = 0
+		WHERE list_id IN (%s)
+		  AND valid = 1
+		  AND bounced = 0
+		  AND unsubscribed = 0
+		  AND lower(email) NOT IN (SELECT lower(email) FROM blacklist)
 	`, placeholderList(len(listIDs)))
 
 	// Convert listIDs to interface slice for query
@@ -349,14 +367,20 @@ func (c *Client) GetEmailsForCampaign(ctx context.Context, listIDs []string) ([]
 }
 
 // GetEmailCountForCampaign returns count of valid emails for a campaign from specified lists
+// Excludes blacklisted emails directly
 func (c *Client) GetEmailCountForCampaign(ctx context.Context, listIDs []string) (uint64, error) {
 	if len(listIDs) == 0 {
 		return 0, nil
 	}
 
+	// Query excludes emails that are in the blacklist
 	query := fmt.Sprintf(`
 		SELECT count() FROM emails
-		WHERE list_id IN (%s) AND valid = 1 AND bounced = 0 AND unsubscribed = 0
+		WHERE list_id IN (%s)
+		  AND valid = 1
+		  AND bounced = 0
+		  AND unsubscribed = 0
+		  AND lower(email) NOT IN (SELECT lower(email) FROM blacklist)
 	`, placeholderList(len(listIDs)))
 
 	args := make([]interface{}, len(listIDs))
