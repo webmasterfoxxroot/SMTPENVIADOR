@@ -107,6 +107,7 @@ CREATE INDEX idx_emails_valid ON emails(valid);
 CREATE TABLE templates (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(255) NOT NULL,
+    from_name VARCHAR(255),
     subject VARCHAR(500) NOT NULL,
     html_content TEXT NOT NULL,
     text_content TEXT,

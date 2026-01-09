@@ -9,6 +9,7 @@ import (
 
 type TemplateRequest struct {
 	Name        string `json:"name"`
+	FromName    string `json:"from_name"`
 	Subject     string `json:"subject"`
 	HTMLContent string `json:"html_content"`
 	TextContent string `json:"text_content"`
@@ -17,7 +18,7 @@ type TemplateRequest struct {
 // listTemplates returns all templates
 func (s *Server) listTemplates(c *fiber.Ctx) error {
 	rows, err := s.db.Query(`
-		SELECT id, name, subject, created_at, updated_at
+		SELECT id, name, COALESCE(from_name, ''), subject, created_at, updated_at
 		FROM templates
 		ORDER BY created_at DESC
 	`)
@@ -28,13 +29,14 @@ func (s *Server) listTemplates(c *fiber.Ctx) error {
 
 	var templates []fiber.Map
 	for rows.Next() {
-		var id, name, subject string
+		var id, name, fromName, subject string
 		var createdAt, updatedAt time.Time
 
-		rows.Scan(&id, &name, &subject, &createdAt, &updatedAt)
+		rows.Scan(&id, &name, &fromName, &subject, &createdAt, &updatedAt)
 		templates = append(templates, fiber.Map{
 			"id":         id,
 			"name":       name,
+			"from_name":  fromName,
 			"subject":    subject,
 			"created_at": createdAt,
 			"updated_at": updatedAt,
@@ -61,9 +63,9 @@ func (s *Server) createTemplate(c *fiber.Ctx) error {
 	id := uuid.New().String()
 
 	_, err := s.db.Exec(`
-		INSERT INTO templates (id, name, subject, html_content, text_content)
-		VALUES ($1, $2, $3, $4, $5)
-	`, id, req.Name, req.Subject, req.HTMLContent, req.TextContent)
+		INSERT INTO templates (id, name, from_name, subject, html_content, text_content)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, id, req.Name, req.FromName, req.Subject, req.HTMLContent, req.TextContent)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to create template"})
@@ -79,13 +81,13 @@ func (s *Server) createTemplate(c *fiber.Ctx) error {
 func (s *Server) getTemplate(c *fiber.Ctx) error {
 	id := c.Params("id")
 
-	var name, subject, htmlContent, textContent string
+	var name, fromName, subject, htmlContent, textContent string
 	var createdAt, updatedAt time.Time
 
 	err := s.db.QueryRow(`
-		SELECT name, subject, html_content, text_content, created_at, updated_at
+		SELECT name, COALESCE(from_name, ''), subject, html_content, text_content, created_at, updated_at
 		FROM templates WHERE id = $1
-	`, id).Scan(&name, &subject, &htmlContent, &textContent, &createdAt, &updatedAt)
+	`, id).Scan(&name, &fromName, &subject, &htmlContent, &textContent, &createdAt, &updatedAt)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Template not found"})
@@ -94,6 +96,7 @@ func (s *Server) getTemplate(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"id":           id,
 		"name":         name,
+		"from_name":    fromName,
 		"subject":      subject,
 		"html_content": htmlContent,
 		"text_content": textContent,
@@ -112,9 +115,9 @@ func (s *Server) updateTemplate(c *fiber.Ctx) error {
 	}
 
 	result, err := s.db.Exec(`
-		UPDATE templates SET name = $1, subject = $2, html_content = $3, text_content = $4
-		WHERE id = $5
-	`, req.Name, req.Subject, req.HTMLContent, req.TextContent, id)
+		UPDATE templates SET name = $1, from_name = $2, subject = $3, html_content = $4, text_content = $5
+		WHERE id = $6
+	`, req.Name, req.FromName, req.Subject, req.HTMLContent, req.TextContent, id)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update template"})

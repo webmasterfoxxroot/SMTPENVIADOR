@@ -6,6 +6,7 @@ import api from '../services/api'
 function TemplateModal({ template, onClose, onSave }) {
   const [form, setForm] = useState({
     name: '',
+    from_name: '',
     subject: '',
     html_content: '',
     text_content: '',
@@ -42,7 +43,7 @@ function TemplateModal({ template, onClose, onSave }) {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="label">Nome</label>
+              <label className="label">Nome do Template</label>
               <input
                 type="text"
                 value={form.name}
@@ -53,16 +54,28 @@ function TemplateModal({ template, onClose, onSave }) {
               />
             </div>
             <div>
-              <label className="label">Assunto Padrão</label>
+              <label className="label">Nome do Remetente</label>
               <input
                 type="text"
-                value={form.subject}
-                onChange={(e) => setForm({ ...form, subject: e.target.value })}
+                value={form.from_name}
+                onChange={(e) => setForm({ ...form, from_name: e.target.value })}
                 className="input"
-                placeholder="Olá {{nome}}!"
-                required
+                placeholder="Empresa XYZ"
               />
+              <p className="text-xs text-gray-500 mt-1">Nome que aparece no "De:"</p>
             </div>
+          </div>
+
+          <div>
+            <label className="label">Assunto</label>
+            <input
+              type="text"
+              value={form.subject}
+              onChange={(e) => setForm({ ...form, subject: e.target.value })}
+              className="input"
+              placeholder="Olá {{nome}}!"
+              required
+            />
           </div>
 
           <div>
@@ -146,6 +159,7 @@ function Templates() {
     try {
       await api.post('/templates', {
         name: template.name + ' (cópia)',
+        from_name: template.from_name,
         subject: template.subject,
         html_content: template.html_content,
         text_content: template.text_content
