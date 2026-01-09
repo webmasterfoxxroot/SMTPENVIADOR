@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log"
 	"net/url"
 
 	"github.com/gofiber/fiber/v2"
@@ -23,26 +24,55 @@ func (s *Server) trackOpen(c *fiber.Ctx) error {
 	campaignID := c.Params("campaignId")
 	emailID := c.Params("emailId")
 
+	log.Printf("[Tracking] Open request: campaign=%s, email=%s, IP=%s", campaignID, emailID, c.IP())
+
 	// Check if this is the first open for this email
 	var alreadyOpened bool
-	s.db.QueryRow(`
+	var exists bool
+	err := s.db.QueryRow(`
 		SELECT opened_at IS NOT NULL FROM campaign_emails
 		WHERE campaign_id = $1 AND email_id = $2
 	`, campaignID, emailID).Scan(&alreadyOpened)
 
+	if err != nil {
+		log.Printf("[Tracking] No campaign_emails record found for campaign=%s, email=%s: %v", campaignID, emailID, err)
+		// Try to find by campaign_emails.id instead (maybe emailID is actually the campaign_email ID)
+		err = s.db.QueryRow(`
+			SELECT opened_at IS NOT NULL FROM campaign_emails
+			WHERE campaign_id = $1 AND id = $2
+		`, campaignID, emailID).Scan(&alreadyOpened)
+		if err != nil {
+			log.Printf("[Tracking] Also no record by id: %v", err)
+		} else {
+			exists = true
+			log.Printf("[Tracking] Found record by campaign_emails.id")
+		}
+	} else {
+		exists = true
+	}
+
 	// Record open event (for analytics)
 	go s.recordEvent(campaignID, emailID, "open", "", c.IP(), c.Get("User-Agent"))
 
-	// Only count if first open
-	if !alreadyOpened {
+	// Only count if first open and record exists
+	if exists && !alreadyOpened {
+		log.Printf("[Tracking] Recording first open for campaign=%s, email=%s", campaignID, emailID)
+
 		// Update campaign_emails - also set status to 'sent' if still queued (tracking proves delivery)
-		s.db.Exec(`
+		result, err := s.db.Exec(`
 			UPDATE campaign_emails
 			SET opened_at = NOW(),
 			    status = CASE WHEN status = 'queued' THEN 'sent' ELSE status END,
 			    sent_at = CASE WHEN sent_at IS NULL THEN NOW() ELSE sent_at END
 			WHERE campaign_id = $1 AND email_id = $2 AND opened_at IS NULL
 		`, campaignID, emailID)
+
+		if err != nil {
+			log.Printf("[Tracking] Failed to update campaign_emails: %v", err)
+		} else {
+			rowsAffected, _ := result.RowsAffected()
+			log.Printf("[Tracking] Updated %d rows in campaign_emails", rowsAffected)
+		}
 
 		// Update campaign open count (only once per email)
 		s.db.Exec(`
@@ -60,6 +90,8 @@ func (s *Server) trackOpen(c *fiber.Ctx) error {
 
 		// Increment Redis stat
 		go s.queue.IncrementStat("opened", 1)
+	} else if alreadyOpened {
+		log.Printf("[Tracking] Email already opened, not counting again")
 	}
 
 	// Return tracking pixel
@@ -74,6 +106,8 @@ func (s *Server) trackClick(c *fiber.Ctx) error {
 	emailID := c.Params("emailId")
 	targetURL := c.Query("url")
 
+	log.Printf("[Tracking] Click request: campaign=%s, email=%s, url=%s, IP=%s", campaignID, emailID, targetURL, c.IP())
+
 	if targetURL == "" {
 		return c.Status(400).SendString("Missing URL")
 	}
@@ -86,24 +120,50 @@ func (s *Server) trackClick(c *fiber.Ctx) error {
 
 	// Check if this is the first click for this email
 	var alreadyClicked bool
-	s.db.QueryRow(`
+	var exists bool
+	err = s.db.QueryRow(`
 		SELECT clicked_at IS NOT NULL FROM campaign_emails
 		WHERE campaign_id = $1 AND email_id = $2
 	`, campaignID, emailID).Scan(&alreadyClicked)
 
+	if err != nil {
+		log.Printf("[Tracking] No campaign_emails record found for click: campaign=%s, email=%s: %v", campaignID, emailID, err)
+		// Try to find by campaign_emails.id instead
+		err = s.db.QueryRow(`
+			SELECT clicked_at IS NOT NULL FROM campaign_emails
+			WHERE campaign_id = $1 AND id = $2
+		`, campaignID, emailID).Scan(&alreadyClicked)
+		if err != nil {
+			log.Printf("[Tracking] Also no record by id: %v", err)
+		} else {
+			exists = true
+		}
+	} else {
+		exists = true
+	}
+
 	// Record click event (for analytics - all clicks)
 	go s.recordEvent(campaignID, emailID, "click", decodedURL, c.IP(), c.Get("User-Agent"))
 
-	// Only count if first click
-	if !alreadyClicked {
+	// Only count if first click and record exists
+	if exists && !alreadyClicked {
+		log.Printf("[Tracking] Recording first click for campaign=%s, email=%s", campaignID, emailID)
+
 		// Update campaign_emails - also set status to 'sent' if still queued (tracking proves delivery)
-		s.db.Exec(`
+		result, err := s.db.Exec(`
 			UPDATE campaign_emails
 			SET clicked_at = NOW(),
 			    status = CASE WHEN status = 'queued' THEN 'sent' ELSE status END,
 			    sent_at = CASE WHEN sent_at IS NULL THEN NOW() ELSE sent_at END
 			WHERE campaign_id = $1 AND email_id = $2 AND clicked_at IS NULL
 		`, campaignID, emailID)
+
+		if err != nil {
+			log.Printf("[Tracking] Failed to update campaign_emails for click: %v", err)
+		} else {
+			rowsAffected, _ := result.RowsAffected()
+			log.Printf("[Tracking] Updated %d rows for click", rowsAffected)
+		}
 
 		// Update campaign click count (only once per email)
 		s.db.Exec(`
@@ -112,6 +172,8 @@ func (s *Server) trackClick(c *fiber.Ctx) error {
 
 		// Increment Redis stat
 		go s.queue.IncrementStat("clicked", 1)
+	} else if alreadyClicked {
+		log.Printf("[Tracking] Email already clicked, not counting again")
 	}
 
 	// Redirect to target URL

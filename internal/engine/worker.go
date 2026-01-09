@@ -3,6 +3,8 @@ package engine
 import (
 	"database/sql"
 	"log"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -240,18 +242,42 @@ func (w *Worker) processVariables(content string, variables map[string]string, e
 
 // generateTrackingPixel generates a tracking pixel for opens
 func (w *Worker) generateTrackingPixel(trackingDomain, campaignID, emailID string) string {
-	return `<img src="` + trackingDomain + `/track/open/` + campaignID + `/` + emailID + `" width="1" height="1" style="display:none" />`
+	pixelURL := trackingDomain + `/track/open/` + campaignID + `/` + emailID
+	log.Printf("[Worker %d] Generated tracking pixel: %s", w.id, pixelURL)
+	return `<img src="` + pixelURL + `" width="1" height="1" style="display:none" />`
 }
 
 // processLinks replaces links with tracking URLs
 func (w *Worker) processLinks(trackingDomain, content, campaignID, emailID string) string {
-	// Simple link replacement - in production use proper HTML parsing
-	// This replaces href="http..." with tracking URLs
 	trackBase := trackingDomain + "/track/click/" + campaignID + "/" + emailID + "?url="
+	log.Printf("[Worker %d] Processing links with tracking base: %s", w.id, trackBase)
 
-	// Replace http:// links
-	content = strings.ReplaceAll(content, `href="http://`, `href="`+trackBase+`http://`)
-	content = strings.ReplaceAll(content, `href="https://`, `href="`+trackBase+`https://`)
+	// Use regex to find and replace href URLs properly
+	// This captures the full URL including any query parameters
+	linkRegex := regexp.MustCompile(`href="(https?://[^"]+)"`)
+
+	content = linkRegex.ReplaceAllStringFunc(content, func(match string) string {
+		// Extract the URL from href="URL"
+		urlMatch := linkRegex.FindStringSubmatch(match)
+		if len(urlMatch) < 2 {
+			return match
+		}
+		originalURL := urlMatch[1]
+
+		// Skip tracking links (don't double-track)
+		if strings.Contains(originalURL, "/track/") {
+			return match
+		}
+
+		// Skip unsubscribe links
+		if strings.Contains(originalURL, "/unsubscribe/") {
+			return match
+		}
+
+		// URL-encode the original URL so it's safely passed as a query parameter
+		encodedURL := url.QueryEscape(originalURL)
+		return `href="` + trackBase + encodedURL + `"`
+	})
 
 	return content
 }
