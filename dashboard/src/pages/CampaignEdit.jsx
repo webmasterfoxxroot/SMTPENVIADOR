@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Save, Loader2, ChevronDown, ChevronRight, Folder, Users, CheckCircle } from 'lucide-react'
+import { ArrowLeft, Save, Loader2, ChevronDown, ChevronRight, Folder, Users, CheckCircle, FileText } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
 
@@ -12,6 +12,8 @@ function CampaignEdit() {
   const [lists, setLists] = useState([])
   const [groups, setGroups] = useState([])
   const [expandedGroups, setExpandedGroups] = useState({})
+  const [templates, setTemplates] = useState([])
+  const [selectedTemplate, setSelectedTemplate] = useState('')
 
   const [form, setForm] = useState({
     name: '',
@@ -28,6 +30,7 @@ function CampaignEdit() {
   useEffect(() => {
     fetchLists()
     fetchGroups()
+    fetchTemplates()
     if (id) {
       fetchCampaign()
     }
@@ -53,6 +56,41 @@ function CampaignEdit() {
       setExpandedGroups(expanded)
     } catch (error) {
       console.log('No groups:', error)
+    }
+  }
+
+  const fetchTemplates = async () => {
+    try {
+      const response = await api.get('/templates')
+      setTemplates(response.data.data || [])
+    } catch (error) {
+      console.log('No templates:', error)
+    }
+  }
+
+  const handleTemplateSelect = async (templateId) => {
+    if (!templateId) {
+      setSelectedTemplate('')
+      return
+    }
+
+    try {
+      const response = await api.get(`/templates/${templateId}`)
+      const template = response.data
+      setSelectedTemplate(templateId)
+
+      // Fill in the form with template data
+      setForm(prev => ({
+        ...prev,
+        from_name: template.from_name || prev.from_name,
+        subject: template.subject || prev.subject,
+        html_content: template.html_content || prev.html_content,
+        text_content: template.text_content || prev.text_content
+      }))
+
+      toast.success(`Template "${template.name}" aplicado!`)
+    } catch (error) {
+      toast.error('Erro ao carregar template')
     }
   }
 
@@ -186,6 +224,31 @@ function CampaignEdit() {
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="card">
           <h2 className="text-lg font-semibold mb-4">Informacoes Basicas</h2>
+
+          {/* Template Selector - only show for new campaigns */}
+          {!id && templates.length > 0 && (
+            <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <FileText className="w-5 h-5 text-blue-600" />
+                <label className="font-medium text-blue-800">Usar Template</label>
+              </div>
+              <select
+                value={selectedTemplate}
+                onChange={(e) => handleTemplateSelect(e.target.value)}
+                className="input"
+              >
+                <option value="">-- Selecione um template (opcional) --</option>
+                {templates.map(template => (
+                  <option key={template.id} value={template.id}>
+                    {template.name} - {template.subject}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-blue-600 mt-1">
+                Ao selecionar um template, os campos Nome do Remetente, Assunto e Conteúdo serão preenchidos automaticamente.
+              </p>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
