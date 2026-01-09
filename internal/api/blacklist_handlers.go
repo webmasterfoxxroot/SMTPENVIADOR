@@ -24,13 +24,15 @@ func (s *Server) listBlacklist(c *fiber.Ctx) error {
 	search := c.Query("search", "")
 	offset := (page - 1) * limit
 
-	// Use ClickHouse if available
+	// Use ClickHouse if available and has data
 	if s.ch != nil {
 		ctx := context.Background()
 		entries, total, err := s.ch.SearchBlacklist(ctx, search, limit, offset)
 		if err != nil {
 			log.Printf("[Blacklist] ClickHouse error: %v, falling back to PostgreSQL", err)
-		} else {
+		} else if total > 0 || (page == 1 && search == "") {
+			// Return ClickHouse data if we have results, or if it's the first page with no search
+			// (to handle the case where ClickHouse is empty but PostgreSQL has data, we check PostgreSQL below)
 			var blacklist []fiber.Map
 			for _, entry := range entries {
 				blacklist = append(blacklist, fiber.Map{
@@ -40,6 +42,17 @@ func (s *Server) listBlacklist(c *fiber.Ctx) error {
 					"created_at": entry.CreatedAt,
 				})
 			}
+
+			// If ClickHouse returned 0 total on first page, check PostgreSQL as well
+			if total == 0 && page == 1 && search == "" {
+				var pgTotal int
+				s.db.QueryRow(`SELECT COUNT(*) FROM blacklist`).Scan(&pgTotal)
+				if pgTotal > 0 {
+					log.Printf("[Blacklist] ClickHouse empty but PostgreSQL has %d entries, using PostgreSQL", pgTotal)
+					goto usePostgres
+				}
+			}
+
 			return c.JSON(fiber.Map{
 				"data":  blacklist,
 				"total": total,
@@ -48,6 +61,8 @@ func (s *Server) listBlacklist(c *fiber.Ctx) error {
 			})
 		}
 	}
+
+usePostgres:
 
 	// Fallback to PostgreSQL
 	var total int
@@ -127,18 +142,11 @@ func (s *Server) addToBlacklist(c *fiber.Ctx) error {
 		ctx := context.Background()
 		_, _, err := s.ch.InsertBlacklistBatch(ctx, []string{email}, req.Reason)
 		if err != nil {
-			log.Printf("[Blacklist] ClickHouse insert error: %v, falling back to PostgreSQL", err)
-		} else {
-			// Mark email as invalid in all lists (still in PostgreSQL for now)
-			s.db.Exec(`UPDATE emails SET valid = false WHERE LOWER(email) = $1`, email)
-			return c.Status(201).JSON(fiber.Map{
-				"message": "Email added to blacklist",
-				"id":      id,
-			})
+			log.Printf("[Blacklist] ClickHouse insert error: %v", err)
 		}
 	}
 
-	// Fallback to PostgreSQL
+	// ALWAYS also insert into PostgreSQL as backup
 	_, err := s.db.Exec(`
 		INSERT INTO blacklist (id, email, reason)
 		VALUES ($1, $2, $3)
@@ -162,27 +170,20 @@ func (s *Server) addToBlacklist(c *fiber.Ctx) error {
 func (s *Server) removeFromBlacklist(c *fiber.Ctx) error {
 	id := c.Params("id")
 
-	// For ClickHouse, we need to get the email first
+	// Get the email from PostgreSQL first
 	var email string
+	s.db.QueryRow(`SELECT email FROM blacklist WHERE id = $1`, id).Scan(&email)
 
+	// Delete from ClickHouse if available
 	if s.ch != nil {
 		ctx := context.Background()
-		// Delete from ClickHouse
 		err := s.ch.DeleteFromBlacklist(ctx, id)
 		if err != nil {
-			log.Printf("[Blacklist] ClickHouse delete error: %v, falling back to PostgreSQL", err)
-		} else {
-			// Mark email as valid in all lists (if not bounced/unsubscribed)
-			if email != "" {
-				s.db.Exec(`UPDATE emails SET valid = true WHERE LOWER(email) = $1 AND bounced = false AND unsubscribed = false`, strings.ToLower(email))
-			}
-			return c.JSON(fiber.Map{"message": "Email removed from blacklist"})
+			log.Printf("[Blacklist] ClickHouse delete error: %v", err)
 		}
 	}
 
-	// Fallback to PostgreSQL
-	s.db.QueryRow(`SELECT email FROM blacklist WHERE id = $1`, id).Scan(&email)
-
+	// ALWAYS also delete from PostgreSQL
 	result, err := s.db.Exec(`DELETE FROM blacklist WHERE id = $1`, id)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to remove from blacklist"})
@@ -276,32 +277,21 @@ func (s *Server) importBlacklist(c *fiber.Ctx) error {
 
 	imported := 0
 	duplicates := 0
+	chInserted := 0
 
-	// Use ClickHouse for bulk insert if available
+	// Insert into ClickHouse if available (primary storage for bulk data)
 	if s.ch != nil {
 		ctx := context.Background()
-		ins, dups, err := s.ch.InsertBlacklistBatch(ctx, emails, reason)
+		ins, _, err := s.ch.InsertBlacklistBatch(ctx, emails, reason)
 		if err != nil {
-			log.Printf("[Blacklist] ClickHouse bulk insert error: %v, falling back to PostgreSQL", err)
+			log.Printf("[Blacklist] ClickHouse bulk insert error: %v", err)
 		} else {
-			imported = int(ins)
-			duplicates = int(dups)
-
-			// Update emails table (still in PostgreSQL)
-			s.db.Exec(`
-				UPDATE emails SET valid = false
-				WHERE LOWER(email) IN (SELECT email FROM blacklist)
-			`)
-
-			return c.JSON(fiber.Map{
-				"message":    "Blacklist imported via ClickHouse",
-				"imported":   imported,
-				"duplicates": duplicates,
-			})
+			chInserted = int(ins)
+			log.Printf("[Blacklist] ClickHouse: inserted %d emails", chInserted)
 		}
 	}
 
-	// Fallback to PostgreSQL
+	// ALWAYS also insert into PostgreSQL as backup
 	tx, _ := s.db.Begin()
 
 	for _, email := range emails {
@@ -329,6 +319,11 @@ func (s *Server) importBlacklist(c *fiber.Ctx) error {
 		UPDATE emails SET valid = false
 		WHERE LOWER(email) IN (SELECT email FROM blacklist)
 	`)
+
+	// Use ClickHouse count if higher (PostgreSQL may have had some duplicates already)
+	if chInserted > imported {
+		imported = chInserted
+	}
 
 	return c.JSON(fiber.Map{
 		"message":    "Blacklist imported",

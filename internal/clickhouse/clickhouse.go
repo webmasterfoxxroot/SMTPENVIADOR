@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log"
 	"strings"
@@ -77,14 +78,15 @@ func (c *Client) InsertBlacklistBatch(ctx context.Context, emails []string, reas
 	}
 
 	batch, err := c.conn.PrepareBatch(ctx, `
-		INSERT INTO blacklist (email, reason, created_at)
+		INSERT INTO blacklist (id, email, reason, created_at)
 	`)
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to prepare batch: %w", err)
 	}
 
 	for _, email := range emails {
-		if err := batch.Append(email, reason, time.Now()); err != nil {
+		id := generateUUID()
+		if err := batch.Append(id, email, reason, time.Now()); err != nil {
 			log.Printf("Failed to append email %s: %v", email, err)
 			continue
 		}
@@ -96,6 +98,16 @@ func (c *Client) InsertBlacklistBatch(ctx context.Context, emails []string, reas
 	}
 
 	return inserted, 0, nil
+}
+
+// generateUUID generates a UUID v4 string
+func generateUUID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // IsBlacklisted checks if an email is in the blacklist
