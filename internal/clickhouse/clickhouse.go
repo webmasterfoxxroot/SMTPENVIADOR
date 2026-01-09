@@ -318,6 +318,7 @@ func (c *Client) MarkEmailsAsInvalid(ctx context.Context, listID string) error {
 }
 
 // GetEmailsForCampaign returns emails for a campaign from specified lists
+// Excludes blacklisted emails directly
 func (c *Client) GetEmailsForCampaign(ctx context.Context, listIDs []string) ([]CampaignEmail, error) {
 	if len(listIDs) == 0 {
 		return nil, nil
@@ -329,10 +330,15 @@ func (c *Client) GetEmailsForCampaign(ctx context.Context, listIDs []string) ([]
 		placeholders[i] = fmt.Sprintf("$%d", i+1)
 	}
 
+	// Query excludes emails that are in the blacklist
 	query := fmt.Sprintf(`
 		SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
 		FROM emails
-		WHERE list_id IN (%s) AND valid = 1 AND bounced = 0 AND unsubscribed = 0
+		WHERE list_id IN (%s)
+		  AND valid = 1
+		  AND bounced = 0
+		  AND unsubscribed = 0
+		  AND lower(email) NOT IN (SELECT lower(email) FROM blacklist)
 	`, placeholderList(len(listIDs)))
 
 	// Convert listIDs to interface slice for query
@@ -361,14 +367,20 @@ func (c *Client) GetEmailsForCampaign(ctx context.Context, listIDs []string) ([]
 }
 
 // GetEmailCountForCampaign returns count of valid emails for a campaign from specified lists
+// Excludes blacklisted emails directly
 func (c *Client) GetEmailCountForCampaign(ctx context.Context, listIDs []string) (uint64, error) {
 	if len(listIDs) == 0 {
 		return 0, nil
 	}
 
+	// Query excludes emails that are in the blacklist
 	query := fmt.Sprintf(`
 		SELECT count() FROM emails
-		WHERE list_id IN (%s) AND valid = 1 AND bounced = 0 AND unsubscribed = 0
+		WHERE list_id IN (%s)
+		  AND valid = 1
+		  AND bounced = 0
+		  AND unsubscribed = 0
+		  AND lower(email) NOT IN (SELECT lower(email) FROM blacklist)
 	`, placeholderList(len(listIDs)))
 
 	args := make([]interface{}, len(listIDs))

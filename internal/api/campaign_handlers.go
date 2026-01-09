@@ -166,7 +166,7 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 			placeholders[i] = fmt.Sprintf("$%d", i+1)
 			args[i] = id
 		}
-		query := fmt.Sprintf(`SELECT COUNT(*) FROM emails WHERE list_id IN (%s) AND valid = true AND bounced = false AND unsubscribed = false`, strings.Join(placeholders, ","))
+		query := fmt.Sprintf(`SELECT COUNT(*) FROM emails WHERE list_id IN (%s) AND valid = true AND bounced = false AND unsubscribed = false AND LOWER(email) NOT IN (SELECT LOWER(email) FROM blacklist)`, strings.Join(placeholders, ","))
 		s.db.QueryRow(query, args...).Scan(&totalEmails)
 	}
 
@@ -377,6 +377,7 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 			SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
 			FROM emails
 			WHERE list_id IN (%s) AND valid = true AND bounced = false AND unsubscribed = false
+			AND LOWER(email) NOT IN (SELECT LOWER(email) FROM blacklist)
 		`, strings.Join(placeholders, ","))
 		rows, err := s.db.Query(query, args...)
 		if err != nil {
@@ -588,6 +589,7 @@ func (s *Server) autoStartCampaignByID(id string) {
 			SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
 			FROM emails
 			WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
+			AND LOWER(email) NOT IN (SELECT LOWER(email) FROM blacklist)
 		`, listID)
 		if err != nil {
 			fmt.Printf("[AutoStart] Error getting emails for campaign %s: %v\n", id, err)
@@ -677,7 +679,7 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 		}
 	}
 	if totalEmails == 0 {
-		s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false`, listID).Scan(&totalEmails)
+		s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false AND LOWER(email) NOT IN (SELECT LOWER(email) FROM blacklist)`, listID).Scan(&totalEmails)
 	}
 
 	// Create new campaign with "Copy of" prefix as draft with auto_start_at = NOW() + 60 seconds (UTC)
@@ -748,6 +750,7 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 			SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
 			FROM emails
 			WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
+			AND LOWER(email) NOT IN (SELECT LOWER(email) FROM blacklist)
 		`, listID)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch emails"})
