@@ -863,9 +863,12 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 }
 
 // queueEmails is a helper to queue emails from a rows result
+// Now processes in batches for better performance
 func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string, trackOpens, trackClicks bool, trackingDomain string) int {
 	count := 0
-	var err error
+	batchSize := 1000
+	batch := make([]*queue.EmailJob, 0, batchSize)
+
 	for rows.Next() {
 		var emailID, email string
 		var name, c1, c2, c3, c4, c5 *string
@@ -912,27 +915,69 @@ func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, re
 			CreatedAt:      time.Now(),
 		}
 
-		_, err = s.db.Exec(`
-			INSERT INTO campaign_emails (id, campaign_id, email_id, status)
-			VALUES ($1, $2, $3, 'queued')
-		`, job.ID, campaignID, emailID)
+		batch = append(batch, job)
+		count++
+
+		// Process batch when full
+		if len(batch) >= batchSize {
+			s.processBatch(batch, campaignID)
+			log.Printf("[Campaign %s] Queued %d emails...", campaignID[:8], count)
+			batch = make([]*queue.EmailJob, 0, batchSize)
+		}
+	}
+
+	// Process remaining batch
+	if len(batch) > 0 {
+		s.processBatch(batch, campaignID)
+	}
+
+	log.Printf("[Campaign %s] Total queued: %d emails", campaignID[:8], count)
+	return count
+}
+
+// processBatch processes a batch of email jobs
+func (s *Server) processBatch(batch []*queue.EmailJob, campaignID string) {
+	if len(batch) == 0 {
+		return
+	}
+
+	// Batch insert into campaign_emails using transaction
+	tx, err := s.db.Begin()
+	if err != nil {
+		log.Printf("❌ Failed to start transaction: %v", err)
+		return
+	}
+
+	stmt, err := tx.Prepare(`INSERT INTO campaign_emails (id, campaign_id, email_id, status) VALUES ($1, $2, $3, 'queued')`)
+	if err != nil {
+		tx.Rollback()
+		log.Printf("❌ Failed to prepare statement: %v", err)
+		return
+	}
+	defer stmt.Close()
+
+	for _, job := range batch {
+		_, err = stmt.Exec(job.ID, campaignID, job.EmailID)
 		if err != nil {
-			log.Printf("❌ Failed to insert campaign_email for %s: %v", email, err)
+			log.Printf("❌ Failed to insert campaign_email for %s: %v", job.To, err)
 			continue
 		}
 
 		if err := s.queue.Push(job); err != nil {
-			log.Printf("❌ Failed to push job to queue for %s: %v", email, err)
-			continue
+			log.Printf("❌ Failed to push job to queue for %s: %v", job.To, err)
 		}
-		count++
 	}
-	return count
+
+	tx.Commit()
 }
 
 // queueClickHouseEmails is a helper to queue emails from ClickHouse results
+// Now processes in batches for better performance
 func (s *Server) queueClickHouseEmails(emails []clickhouse.CampaignEmail, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string, trackOpens, trackClicks bool, trackingDomain string) int {
 	count := 0
+	batchSize := 1000
+	batch := make([]*queue.EmailJob, 0, batchSize)
+
 	for _, e := range emails {
 		variables := make(map[string]string)
 		if e.Custom1 != "" {
@@ -970,21 +1015,23 @@ func (s *Server) queueClickHouseEmails(emails []clickhouse.CampaignEmail, campai
 			CreatedAt:      time.Now(),
 		}
 
-		_, err := s.db.Exec(`
-			INSERT INTO campaign_emails (id, campaign_id, email_id, status)
-			VALUES ($1, $2, $3, 'queued')
-		`, job.ID, campaignID, e.ID)
-		if err != nil {
-			log.Printf("❌ Failed to insert campaign_email for %s: %v", e.Email, err)
-			continue
-		}
-
-		if err := s.queue.Push(job); err != nil {
-			log.Printf("❌ Failed to push job to queue for %s: %v", e.Email, err)
-			continue
-		}
+		batch = append(batch, job)
 		count++
+
+		// Process batch when full
+		if len(batch) >= batchSize {
+			s.processBatch(batch, campaignID)
+			log.Printf("[Campaign %s] Queued %d emails from ClickHouse...", campaignID[:8], count)
+			batch = make([]*queue.EmailJob, 0, batchSize)
+		}
 	}
+
+	// Process remaining batch
+	if len(batch) > 0 {
+		s.processBatch(batch, campaignID)
+	}
+
+	log.Printf("[Campaign %s] Total queued from ClickHouse: %d emails", campaignID[:8], count)
 	return count
 }
 

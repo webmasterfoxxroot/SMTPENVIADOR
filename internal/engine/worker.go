@@ -55,42 +55,53 @@ func (w *Worker) processJob() {
 	job, err := w.queue.Pop()
 	if err != nil {
 		log.Printf("⚠️ Worker %d: Failed to pop job: %v", w.id, err)
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 		return
 	}
 
 	// No job available, wait a bit
 	if job == nil {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 		return
 	}
 
-	log.Printf("📬 Worker %d: Processing job for %s", w.id, job.To)
+	// Check job age - if job is too old and has been retried many times, skip it
+	if job.Retries > 10 {
+		log.Printf("⚠️ Worker %d: Job for %s exceeded max retries (%d), marking as failed", w.id, job.To, job.Retries)
+		w.queue.PushFailed(job, "Max retries exceeded")
+		w.updateEmailStatus(job.ID, "failed", "Max retries exceeded")
+		w.updateCampaignFailedCount(job.CampaignID)
+		return
+	}
 
 	// Get SMTP connection
 	smtp := w.smtpPool.GetNextSMTP()
 	if smtp == nil {
-		// No SMTPs available, push job back and wait
-		log.Printf("⚠️ Worker %d: No SMTP available, pushing job back", w.id)
+		// No SMTPs available - wait longer before pushing back
+		if job.Retries == 0 {
+			log.Printf("⚠️ Worker %d: No SMTP available for %s, will retry", w.id, job.To)
+		}
+		job.Retries++
 		w.queue.Push(job)
-		time.Sleep(1 * time.Second)
+		time.Sleep(5 * time.Second) // Wait 5 seconds before retrying
 		return
 	}
 
 	// Get next sender from SMTP (rotates automatically)
 	sender := smtp.GetNextSender()
 	if sender == nil {
-		log.Printf("⚠️ Worker %d: No senders for SMTP %s, pushing job back", w.id, smtp.Name)
+		if job.Retries == 0 {
+			log.Printf("⚠️ Worker %d: No senders for SMTP %s", w.id, smtp.Name)
+		}
+		job.Retries++
 		w.queue.Push(job)
-		time.Sleep(1 * time.Second)
+		time.Sleep(2 * time.Second)
 		return
 	}
 
-	log.Printf("📤 Worker %d: Using SMTP %s <%s> to send to %s", w.id, smtp.Name, sender.Email, job.To)
-
 	// Check rate limit
 	if !w.queue.CheckRateLimit(smtp.ID, smtp.MaxPerMinute) {
-		// Rate limited, try another SMTP or wait
+		// Rate limited, push back without incrementing retries (this is normal)
 		w.queue.Push(job)
 		time.Sleep(100 * time.Millisecond)
 		return
@@ -166,7 +177,11 @@ func (w *Worker) processJob() {
 	w.updateSMTPStats(smtp.ID, true)
 	w.updateCampaignSentCount(job.CampaignID)
 
-	log.Printf("✅ Worker %d: Sent email to %s via %s", w.id, job.To, smtp.Name)
+	// Log only every 100th email to reduce noise
+	sent := w.stats.TotalSent.Load()
+	if sent%100 == 0 {
+		log.Printf("✅ Progress: %d emails sent (last: %s via %s)", sent, job.To, smtp.Name)
+	}
 }
 
 // updateCampaignSentCount updates the campaign sent_count
