@@ -36,16 +36,20 @@ func (s *Server) listTemplates(c *fiber.Ctx) error {
 		ORDER BY created_at DESC
 	`)
 	if err != nil {
+		log.Printf("[Templates] Error querying templates: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch templates"})
 	}
 	defer rows.Close()
 
-	var templates []fiber.Map
+	templates := make([]fiber.Map, 0) // Initialize as empty array, not nil
 	for rows.Next() {
 		var id, name, fromName, subject string
 		var createdAt, updatedAt time.Time
 
-		rows.Scan(&id, &name, &fromName, &subject, &createdAt, &updatedAt)
+		if err := rows.Scan(&id, &name, &fromName, &subject, &createdAt, &updatedAt); err != nil {
+			log.Printf("[Templates] Error scanning row: %v", err)
+			continue
+		}
 		templates = append(templates, fiber.Map{
 			"id":         id,
 			"name":       name,
@@ -55,6 +59,8 @@ func (s *Server) listTemplates(c *fiber.Ctx) error {
 			"updated_at": updatedAt,
 		})
 	}
+
+	log.Printf("[Templates] Returning %d templates", len(templates))
 
 	return c.JSON(fiber.Map{
 		"data":  templates,
