@@ -290,17 +290,17 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 	}
 
 	// Get stats by email domain (today) - gmail.com, hotmail.com, etc.
+	// Use stored email directly from campaign_emails
 	domainRows, _ := s.db.Query(`
 		SELECT
-			LOWER(SPLIT_PART(e.email, '@', 2)) as domain,
+			LOWER(SPLIT_PART(ce.email, '@', 2)) as domain,
 			COUNT(CASE WHEN ce.status = 'sent' THEN 1 END) as sent,
 			COUNT(CASE WHEN ce.status = 'failed' THEN 1 END) as failed,
 			COUNT(CASE WHEN ce.opened_at IS NOT NULL THEN 1 END) as opened,
 			COUNT(CASE WHEN ce.clicked_at IS NOT NULL THEN 1 END) as clicked
 		FROM campaign_emails ce
-		JOIN emails e ON ce.email_id = e.id
-		WHERE DATE(ce.created_at) = CURRENT_DATE
-		GROUP BY LOWER(SPLIT_PART(e.email, '@', 2))
+		WHERE DATE(ce.created_at) = CURRENT_DATE AND ce.email IS NOT NULL
+		GROUP BY LOWER(SPLIT_PART(ce.email, '@', 2))
 		ORDER BY sent DESC
 		LIMIT 15
 	`)
@@ -330,17 +330,18 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 func (s *Server) getRecentActivity(c *fiber.Ctx) error {
 	limit := c.QueryInt("limit", 20)
 
+	// Join with campaign_emails to get stored email instead of emails table
 	rows, err := s.db.Query(`
 		SELECT
 			te.event_type,
-			e.email,
+			ce.email,
 			c.name as campaign_name,
 			te.link_url,
 			te.created_at
 		FROM tracking_events te
-		JOIN emails e ON te.email_id = e.id
+		JOIN campaign_emails ce ON te.email_id = ce.email_id AND te.campaign_id = ce.campaign_id
 		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE te.event_type IN ('open', 'click')
+		WHERE te.event_type IN ('open', 'click') AND ce.email IS NOT NULL
 		ORDER BY te.created_at DESC
 		LIMIT $1
 	`, limit)
@@ -352,15 +353,21 @@ func (s *Server) getRecentActivity(c *fiber.Ctx) error {
 
 	var activities []map[string]interface{}
 	for rows.Next() {
-		var eventType, email, campaignName string
+		var eventType, campaignName string
+		var email *string
 		var linkURL *string
 		var createdAt time.Time
 
 		rows.Scan(&eventType, &email, &campaignName, &linkURL, &createdAt)
 
+		emailStr := ""
+		if email != nil {
+			emailStr = *email
+		}
+
 		activity := map[string]interface{}{
 			"type":      eventType,
-			"email":     email,
+			"email":     emailStr,
 			"campaign":  campaignName,
 			"timestamp": createdAt,
 		}
