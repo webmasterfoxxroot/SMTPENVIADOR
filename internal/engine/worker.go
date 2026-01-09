@@ -179,11 +179,9 @@ func (w *Worker) processJob() {
 	w.updateSMTPStats(smtp.ID, true)
 	w.updateCampaignSentCount(job.CampaignID)
 
-	// Log only every 100th email to reduce noise
+	// Log every email sent for monitoring
 	sent := w.stats.TotalSent.Load()
-	if sent%100 == 0 {
-		log.Printf("✅ Progress: %d emails sent (last: %s via %s)", sent, job.To, smtp.Name)
-	}
+	log.Printf("✅ [%d] Email enviado para %s via %s", sent, job.To, smtp.Name)
 }
 
 // updateCampaignSentCount updates the campaign sent_count
