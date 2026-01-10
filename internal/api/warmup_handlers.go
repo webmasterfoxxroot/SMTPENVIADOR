@@ -1095,6 +1095,13 @@ func (s *Server) deleteWarmupTemplate(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Template deleted"})
 }
 
+// triggerIMAPCheck forces an immediate IMAP check on all seeds
+func (s *Server) triggerIMAPCheck(c *fiber.Ctx) error {
+	log.Println("[Warmup IMAP] Manual check triggered")
+	go s.processIMAPInteractions()
+	return c.JSON(fiber.Map{"message": "Verificação IMAP iniciada"})
+}
+
 // ============================================
 // HELPER FUNCTIONS
 // ============================================
@@ -1195,6 +1202,9 @@ func (s *Server) generateProgressiveSchedule(warmupID string, minEmails, maxEmai
 
 func (s *Server) startWarmupEngine() {
 	log.Println("[Warmup Engine] Starting...")
+
+	// Run IMAP check immediately on startup
+	go s.processIMAPInteractions()
 
 	// Run every minute to check and send warmup emails
 	ticker := time.NewTicker(1 * time.Minute)
