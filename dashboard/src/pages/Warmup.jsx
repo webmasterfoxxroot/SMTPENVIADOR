@@ -21,10 +21,418 @@ import {
   Clock,
   X,
   ChevronDown,
-  RefreshCw
+  RefreshCw,
+  Edit,
+  Save
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
+
+// Componente do grafico interativo de barras
+function WarmupChart({ schedule, onChange, maxEmails }) {
+  const chartRef = useRef(null)
+  const [dragging, setDragging] = useState(null)
+
+  const handleMouseDown = (index, e) => {
+    e.preventDefault()
+    setDragging(index)
+  }
+
+  const handleMouseMove = (e) => {
+    if (dragging === null || !chartRef.current) return
+
+    const rect = chartRef.current.getBoundingClientRect()
+    const y = e.clientY - rect.top
+    const height = rect.height - 30 // desconta espaço do label
+    const value = Math.round(maxEmails - (y / height) * maxEmails)
+    const clampedValue = Math.max(1, Math.min(maxEmails, value))
+
+    const newSchedule = [...schedule]
+    newSchedule[dragging] = clampedValue
+    onChange(newSchedule)
+  }
+
+  const handleMouseUp = () => {
+    setDragging(null)
+  }
+
+  useEffect(() => {
+    if (dragging !== null) {
+      const handleMove = (e) => handleMouseMove(e)
+      const handleUp = () => handleMouseUp()
+
+      window.addEventListener('mousemove', handleMove)
+      window.addEventListener('mouseup', handleUp)
+      return () => {
+        window.removeEventListener('mousemove', handleMove)
+        window.removeEventListener('mouseup', handleUp)
+      }
+    }
+  }, [dragging, schedule])
+
+  const maxValue = Math.max(...schedule, maxEmails)
+
+  return (
+    <div className="bg-gray-50 rounded-xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="font-medium text-gray-700">Plano de Aquecimento</h4>
+        <div className="flex items-center gap-4 text-xs">
+          <div className="flex items-center gap-1">
+            <div className="w-2 h-2 bg-blue-500 rounded"></div>
+            <span className="text-gray-500">Agendado</span>
+          </div>
+        </div>
+      </div>
+
+      <div
+        ref={chartRef}
+        className="relative h-48 flex items-end"
+        style={{ cursor: dragging !== null ? 'ns-resize' : 'default' }}
+      >
+        {/* Y-axis labels */}
+        <div className="absolute left-0 top-0 bottom-6 w-6 flex flex-col justify-between text-xs text-gray-400 pr-1">
+          <span>{maxValue}</span>
+          <span>{Math.round(maxValue / 2)}</span>
+          <span>0</span>
+        </div>
+
+        {/* Bars container */}
+        <div className="flex-1 flex items-end gap-0.5 ml-7 pb-6 h-full">
+          {schedule.map((value, index) => (
+            <div
+              key={index}
+              className="flex-1 flex flex-col items-center h-full justify-end"
+              onMouseDown={(e) => handleMouseDown(index, e)}
+            >
+              {/* Bar */}
+              <div
+                className={`w-full rounded-t transition-colors cursor-ns-resize relative group ${
+                  dragging === index ? 'bg-blue-600' : 'bg-blue-500 hover:bg-blue-600'
+                }`}
+                style={{
+                  height: `${Math.max((value / maxValue) * 100, 2)}%`,
+                  minHeight: '8px'
+                }}
+              >
+                {/* Tooltip on hover */}
+                <div className="absolute -top-6 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                  {value}
+                </div>
+                {/* Drag handle */}
+                <div className="absolute -top-1 left-0 right-0 h-2 bg-blue-700 rounded-t opacity-0 group-hover:opacity-100 cursor-ns-resize"></div>
+              </div>
+              {/* Day label */}
+              <div className="text-[10px] text-gray-400 mt-1 select-none">
+                {index + 1}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <p className="text-xs text-gray-400 mt-2 text-center">
+        Arraste as barras para cima/baixo para ajustar emails por dia
+      </p>
+    </div>
+  )
+}
+
+// Modal para editar configurações do SMTP em warmup
+function EditWarmupModal({ warmupSMTP, onClose, onSave }) {
+  const [form, setForm] = useState({
+    recipe_type: warmupSMTP.recipe_type || 'progressive',
+    min_emails_per_day: warmupSMTP.min_emails_per_day || 5,
+    max_emails_per_day: warmupSMTP.max_emails_per_day || 40,
+    reply_rate: warmupSMTP.reply_rate || 30,
+    start_hour: warmupSMTP.start_hour || 8,
+    end_hour: warmupSMTP.end_hour || 18
+  })
+  const [schedule, setSchedule] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [loadingStats, setLoadingStats] = useState(true)
+  const [dailyStats, setDailyStats] = useState([])
+
+  // Generate or load schedule
+  useEffect(() => {
+    loadData()
+  }, [])
+
+  const loadData = async () => {
+    setLoadingStats(true)
+    try {
+      // Get stats and schedule
+      const res = await api.get(`/warmup/smtps/${warmupSMTP.id}/stats`)
+      setDailyStats(res.data.daily_stats || [])
+
+      // Parse custom schedule or generate progressive
+      if (warmupSMTP.custom_schedule) {
+        try {
+          const parsed = JSON.parse(warmupSMTP.custom_schedule)
+          setSchedule(parsed)
+        } catch {
+          generateSchedule()
+        }
+      } else {
+        generateSchedule()
+      }
+    } catch (error) {
+      console.error('Error loading stats:', error)
+      generateSchedule()
+    } finally {
+      setLoadingStats(false)
+    }
+  }
+
+  const generateSchedule = () => {
+    const days = 45
+    const newSchedule = []
+    const increment = (form.max_emails_per_day - form.min_emails_per_day) / (days - 1)
+
+    for (let i = 0; i < days; i++) {
+      let value = form.min_emails_per_day + Math.round(i * increment)
+      if (form.recipe_type === 'flat') {
+        value = form.min_emails_per_day
+      } else if (form.recipe_type === 'randomized') {
+        value = form.min_emails_per_day + Math.floor(Math.random() * (form.max_emails_per_day - form.min_emails_per_day + 1))
+      }
+      newSchedule.push(Math.min(value, form.max_emails_per_day))
+    }
+    setSchedule(newSchedule)
+  }
+
+  const handleRecipeChange = (type) => {
+    setForm({ ...form, recipe_type: type })
+    // Regenerate schedule based on type
+    const days = schedule.length || 45
+    const newSchedule = []
+    const increment = (form.max_emails_per_day - form.min_emails_per_day) / (days - 1)
+
+    for (let i = 0; i < days; i++) {
+      let value
+      if (type === 'flat') {
+        value = form.min_emails_per_day
+      } else if (type === 'randomized') {
+        value = form.min_emails_per_day + Math.floor(Math.random() * (form.max_emails_per_day - form.min_emails_per_day + 1))
+      } else if (type === 'progressive') {
+        value = form.min_emails_per_day + Math.round(i * increment)
+      } else {
+        value = schedule[i] || form.min_emails_per_day
+      }
+      newSchedule.push(Math.min(value, form.max_emails_per_day))
+    }
+    setSchedule(newSchedule)
+  }
+
+  const handleSubmit = async () => {
+    setLoading(true)
+    try {
+      // Update settings
+      await api.put(`/warmup/smtps/${warmupSMTP.id}`, {
+        ...form,
+        status: warmupSMTP.status
+      })
+
+      // Update schedule
+      await api.put(`/warmup/smtps/${warmupSMTP.id}/schedule`, {
+        schedule: schedule
+      })
+
+      toast.success('Configurações salvas!')
+      onSave()
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Erro ao salvar')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+        {/* Header */}
+        <div className="flex items-center justify-between p-6 border-b border-gray-100 sticky top-0 bg-white">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-orange-100 rounded-xl">
+              <Settings className="w-6 h-6 text-orange-600" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Configurar Warmup</h2>
+              <p className="text-sm text-gray-500">{warmupSMTP.smtp_name}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg">
+            <X className="w-5 h-5 text-gray-400" />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-6">
+          {/* Recipe Type */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-3">Tipo de Aquecimento</label>
+            <div className="grid grid-cols-4 gap-3">
+              {[
+                { value: 'progressive', label: 'Progressivo', desc: 'Recomendado', icon: TrendingUp },
+                { value: 'flat', label: 'Fixo', desc: 'Volume constante', icon: BarChart3 },
+                { value: 'randomized', label: 'Aleatorio', desc: 'Variacao natural', icon: RefreshCw },
+                { value: 'custom', label: 'Personalizado', desc: 'Controle total', icon: Settings }
+              ].map(recipe => (
+                <button
+                  key={recipe.value}
+                  type="button"
+                  onClick={() => handleRecipeChange(recipe.value)}
+                  className={`p-3 rounded-xl border-2 transition-all text-center ${
+                    form.recipe_type === recipe.value
+                      ? 'border-orange-500 bg-orange-50'
+                      : 'border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <recipe.icon className={`w-5 h-5 mx-auto mb-1 ${
+                    form.recipe_type === recipe.value ? 'text-orange-600' : 'text-gray-400'
+                  }`} />
+                  <div className="font-medium text-sm">{recipe.label}</div>
+                  <div className="text-xs text-gray-500">{recipe.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Settings Grid */}
+          <div className="grid grid-cols-5 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Min/dia</label>
+              <input
+                type="number"
+                value={form.min_emails_per_day}
+                onChange={(e) => setForm({ ...form, min_emails_per_day: parseInt(e.target.value) || 1 })}
+                min="1"
+                max="50"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Max/dia</label>
+              <input
+                type="number"
+                value={form.max_emails_per_day}
+                onChange={(e) => setForm({ ...form, max_emails_per_day: parseInt(e.target.value) || 40 })}
+                min="1"
+                max="50"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Resposta %</label>
+              <input
+                type="number"
+                value={form.reply_rate}
+                onChange={(e) => setForm({ ...form, reply_rate: parseInt(e.target.value) || 0 })}
+                min="0"
+                max="45"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Hora inicio</label>
+              <input
+                type="number"
+                value={form.start_hour}
+                onChange={(e) => setForm({ ...form, start_hour: parseInt(e.target.value) || 0 })}
+                min="0"
+                max="23"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Hora fim</label>
+              <input
+                type="number"
+                value={form.end_hour}
+                onChange={(e) => setForm({ ...form, end_hour: parseInt(e.target.value) || 18 })}
+                min="0"
+                max="23"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+              />
+            </div>
+          </div>
+
+          {/* Interactive Chart */}
+          {loadingStats ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
+            </div>
+          ) : (
+            <WarmupChart
+              schedule={schedule}
+              onChange={setSchedule}
+              maxEmails={form.max_emails_per_day}
+            />
+          )}
+
+          {/* Daily Stats Table (if any) */}
+          {dailyStats.length > 0 && (
+            <div className="bg-gray-50 rounded-xl p-4">
+              <h4 className="font-medium text-gray-700 mb-3">Historico Recente</h4>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-gray-500">
+                      <th className="pb-2">Data</th>
+                      <th className="pb-2 text-center">Agendado</th>
+                      <th className="pb-2 text-center">Enviado</th>
+                      <th className="pb-2 text-center">Inbox</th>
+                      <th className="pb-2 text-center">Spam</th>
+                      <th className="pb-2 text-center">Respostas</th>
+                      <th className="pb-2 text-center">Progresso</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {dailyStats.slice(0, 10).map((stat, idx) => (
+                      <tr key={idx}>
+                        <td className="py-2">{stat.date}</td>
+                        <td className="py-2 text-center">{stat.scheduled}</td>
+                        <td className="py-2 text-center font-medium">{stat.sent}</td>
+                        <td className="py-2 text-center text-green-600">{stat.inbox}</td>
+                        <td className="py-2 text-center text-red-600">{stat.spam}</td>
+                        <td className="py-2 text-center text-purple-600">{stat.replies}</td>
+                        <td className="py-2">
+                          <div className="w-full bg-gray-200 rounded-full h-2">
+                            <div
+                              className="bg-green-500 h-2 rounded-full"
+                              style={{ width: `${stat.scheduled > 0 ? (stat.sent / stat.scheduled) * 100 : 0}%` }}
+                            ></div>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-end gap-3 p-6 border-t border-gray-100 sticky bottom-0 bg-white">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-6 py-3 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={loading}
+            className="px-6 py-3 bg-orange-600 text-white rounded-xl font-medium hover:bg-orange-700 flex items-center gap-2"
+          >
+            {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
+            Salvar Alteracoes
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 // Modal para adicionar SMTP ao warmup
 function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
@@ -372,101 +780,6 @@ function AddSeedModal({ onClose, onSave }) {
   )
 }
 
-// Componente do grafico interativo de barras
-function WarmupChart({ schedule, onChange, minEmails, maxEmails }) {
-  const chartRef = useRef(null)
-  const [dragging, setDragging] = useState(null)
-
-  const handleMouseDown = (index) => {
-    setDragging(index)
-  }
-
-  const handleMouseMove = (e) => {
-    if (dragging === null || !chartRef.current) return
-
-    const rect = chartRef.current.getBoundingClientRect()
-    const y = e.clientY - rect.top
-    const height = rect.height
-    const value = Math.round(maxEmails - (y / height) * maxEmails)
-    const clampedValue = Math.max(minEmails, Math.min(maxEmails, value))
-
-    const newSchedule = [...schedule]
-    newSchedule[dragging] = clampedValue
-    onChange(newSchedule)
-  }
-
-  const handleMouseUp = () => {
-    setDragging(null)
-  }
-
-  useEffect(() => {
-    if (dragging !== null) {
-      window.addEventListener('mousemove', handleMouseMove)
-      window.addEventListener('mouseup', handleMouseUp)
-      return () => {
-        window.removeEventListener('mousemove', handleMouseMove)
-        window.removeEventListener('mouseup', handleMouseUp)
-      }
-    }
-  }, [dragging])
-
-  const maxValue = Math.max(...schedule, maxEmails)
-
-  return (
-    <div className="bg-white rounded-xl p-6 border border-gray-100">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="font-semibold text-gray-900">Plano de Aquecimento</h3>
-        <div className="flex items-center gap-4 text-sm">
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 bg-blue-500 rounded"></div>
-            <span className="text-gray-600">Enviados</span>
-          </div>
-        </div>
-      </div>
-
-      <div
-        ref={chartRef}
-        className="relative h-64 flex items-end gap-1"
-        style={{ cursor: dragging !== null ? 'ns-resize' : 'default' }}
-      >
-        {/* Y-axis labels */}
-        <div className="absolute left-0 top-0 bottom-0 w-8 flex flex-col justify-between text-xs text-gray-400">
-          <span>{maxValue}</span>
-          <span>{Math.round(maxValue / 2)}</span>
-          <span>0</span>
-        </div>
-
-        {/* Bars */}
-        <div className="flex-1 flex items-end gap-1 ml-10">
-          {schedule.map((value, index) => (
-            <div
-              key={index}
-              className="flex-1 flex flex-col items-center"
-              onMouseDown={() => handleMouseDown(index)}
-            >
-              <div
-                className={`w-full rounded-t transition-all cursor-ns-resize ${
-                  dragging === index ? 'bg-blue-600' : 'bg-blue-500 hover:bg-blue-600'
-                }`}
-                style={{ height: `${(value / maxValue) * 100}%`, minHeight: '4px' }}
-              >
-                <div className="text-xs text-white text-center font-medium pt-1">
-                  {value}
-                </div>
-              </div>
-              <div className="text-xs text-gray-400 mt-1">D{index + 1}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <p className="text-xs text-gray-400 mt-4 text-center">
-        Arraste as barras para ajustar a quantidade de emails por dia
-      </p>
-    </div>
-  )
-}
-
 // Componente principal
 function Warmup() {
   const [loading, setLoading] = useState(true)
@@ -477,7 +790,7 @@ function Warmup() {
   const [availableSMTPs, setAvailableSMTPs] = useState([])
   const [showAddSMTP, setShowAddSMTP] = useState(false)
   const [showAddSeed, setShowAddSeed] = useState(false)
-  const [activeTab, setActiveTab] = useState('dashboard')
+  const [editingWarmup, setEditingWarmup] = useState(null)
 
   useEffect(() => {
     fetchAll()
@@ -669,6 +982,13 @@ function Warmup() {
                       {smtp.status === 'active' ? 'Ativo' : 'Pausado'}
                     </span>
                     <button
+                      onClick={() => setEditingWarmup(smtp)}
+                      className="p-2 hover:bg-orange-100 rounded-lg transition-colors"
+                      title="Configurar"
+                    >
+                      <Settings className="w-4 h-4 text-orange-600" />
+                    </button>
+                    <button
                       onClick={() => toggleWarmup(smtp.id)}
                       className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
                       title={smtp.status === 'active' ? 'Pausar' : 'Ativar'}
@@ -839,6 +1159,14 @@ function Warmup() {
         <AddSeedModal
           onClose={() => setShowAddSeed(false)}
           onSave={() => { setShowAddSeed(false); fetchAll() }}
+        />
+      )}
+
+      {editingWarmup && (
+        <EditWarmupModal
+          warmupSMTP={editingWarmup}
+          onClose={() => setEditingWarmup(null)}
+          onSave={() => { setEditingWarmup(null); fetchAll() }}
         />
       )}
     </div>
