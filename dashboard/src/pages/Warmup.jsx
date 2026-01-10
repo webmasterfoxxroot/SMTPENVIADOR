@@ -474,7 +474,7 @@ function EditWarmupModal({ warmupSMTP, onClose, onSave }) {
                       <th className="pb-2">Data</th>
                       <th className="pb-2 text-center">Agendado</th>
                       <th className="pb-2 text-center">Enviado</th>
-                      <th className="pb-2 text-center">Inbox</th>
+                      <th className="pb-2 text-center">Entrada</th>
                       <th className="pb-2 text-center">Spam</th>
                       <th className="pb-2 text-center">Respostas</th>
                       <th className="pb-2 text-center">Progresso</th>
@@ -1136,7 +1136,7 @@ function Warmup() {
                     <div>
                       <p className="font-medium text-gray-900">{smtp.smtp_name}</p>
                       <p className="text-sm text-gray-500">
-                        Dia {smtp.current_day} | {smtp.total_sent} enviados | {smtp.inbox_rate?.toFixed(1)}% inbox
+                        Dia {smtp.current_day} | {smtp.total_sent} enviados | {smtp.inbox_rate?.toFixed(1)}% entrada
                       </p>
                     </div>
                   </div>
@@ -1186,7 +1186,7 @@ function Warmup() {
         </div>
 
         <div className="bg-white rounded-2xl p-6 border border-gray-100">
-          <h3 className="font-semibold text-gray-900 mb-4">Inbox vs Spam</h3>
+          <h3 className="font-semibold text-gray-900 mb-4">Entrada vs Spam</h3>
           <div className="relative w-40 h-40 mx-auto">
             <svg className="w-full h-full" viewBox="0 0 36 36">
               <path
@@ -1207,14 +1207,14 @@ function Warmup() {
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="text-center">
                 <p className="text-2xl font-bold text-blue-600">{stats.inbox_rate?.toFixed(1) || 100}%</p>
-                <p className="text-xs text-gray-500">Inbox</p>
+                <p className="text-xs text-gray-500">Entrada</p>
               </div>
             </div>
           </div>
           <div className="flex justify-center gap-6 mt-4">
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-              <span className="text-sm text-gray-600">Inbox</span>
+              <span className="text-sm text-gray-600">Entrada</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 bg-gray-200 rounded-full"></div>
@@ -1288,7 +1288,7 @@ function Warmup() {
                     </div>
                     <div className="flex items-center gap-1">
                       <Inbox className="w-3 h-3 text-green-500" />
-                      <span className="text-gray-600">Inbox:</span>
+                      <span className="text-gray-600">Entrada:</span>
                       <span className="font-medium text-green-600">{seed.total_inbox || 0}</span>
                     </div>
                     <div className="flex items-center gap-1">
