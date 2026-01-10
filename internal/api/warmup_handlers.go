@@ -1726,6 +1726,8 @@ func (s *Server) processOneSeedInbox(seedID, email, password, imapHost string, i
 	// Update last check
 	s.db.Exec(`UPDATE warmup_seeds SET last_check = NOW(), status = 'active', error_message = NULL WHERE id = $1`, seedID)
 
+	log.Printf("[Warmup IMAP] Connected successfully to %s, checking mailboxes...", email)
+
 	// Check INBOX for warmup emails
 	s.checkMailbox(c, seedID, "INBOX", false)
 
@@ -1751,14 +1753,21 @@ func (s *Server) checkMailbox(c *client.Client, seedID, mailbox string, isSpam b
 		return true
 	}
 
-	// Search for unseen messages
+	// Search for emails from the last 7 days (not just unseen)
 	criteria := imap.NewSearchCriteria()
-	criteria.WithoutFlags = []string{imap.SeenFlag}
+	criteria.Since = time.Now().AddDate(0, 0, -7)
 
 	ids, err := c.Search(criteria)
 	if err != nil || len(ids) == 0 {
 		return true
 	}
+
+	// Limit to last 100 messages to avoid processing too many
+	if len(ids) > 100 {
+		ids = ids[len(ids)-100:]
+	}
+
+	log.Printf("[Warmup IMAP] Found %d emails in %s to check", len(ids), mailbox)
 
 	seqSet := new(imap.SeqSet)
 	seqSet.AddNum(ids...)
@@ -1777,22 +1786,51 @@ func (s *Server) checkMailbox(c *client.Client, seedID, mailbox string, isSpam b
 
 		// Check if this is a warmup email (by message ID)
 		messageID := msg.Envelope.MessageId
+		subject := ""
+		if msg.Envelope.Subject != "" {
+			subject = msg.Envelope.Subject
+		}
+
+		// Skip if no message ID
+		if messageID == "" {
+			continue
+		}
+
+		// Clean message ID (remove angle brackets if present)
+		cleanMessageID := strings.Trim(messageID, "<>")
+
+		// Check if this contains "warmup" - our marker
+		if !strings.Contains(cleanMessageID, "@warmup") {
+			continue
+		}
+
+		log.Printf("[Warmup IMAP] Found warmup marker in email: %s (MessageID: %s)", subject, messageID)
 
 		var warmupEmailID, warmupSMTPID string
+		// Try exact match with angle brackets
 		err := s.db.QueryRow(`
 			SELECT id, warmup_smtp_id FROM warmup_emails
 			WHERE message_id = $1 AND seed_id = $2
-		`, "<"+messageID+">", seedID).Scan(&warmupEmailID, &warmupSMTPID)
+		`, "<"+cleanMessageID+">", seedID).Scan(&warmupEmailID, &warmupSMTPID)
 
 		if err != nil {
-			// Also try without angle brackets
+			// Try without angle brackets
 			s.db.QueryRow(`
 				SELECT id, warmup_smtp_id FROM warmup_emails
 				WHERE message_id = $1 AND seed_id = $2
-			`, messageID, seedID).Scan(&warmupEmailID, &warmupSMTPID)
+			`, cleanMessageID, seedID).Scan(&warmupEmailID, &warmupSMTPID)
+		}
+
+		if err != nil {
+			// Try with LIKE for flexible matching
+			s.db.QueryRow(`
+				SELECT id, warmup_smtp_id FROM warmup_emails
+				WHERE message_id LIKE $1 AND seed_id = $2
+			`, "%"+cleanMessageID+"%", seedID).Scan(&warmupEmailID, &warmupSMTPID)
 		}
 
 		if warmupEmailID == "" {
+			log.Printf("[Warmup IMAP] Email not found in DB for MessageID: %s", cleanMessageID)
 			continue
 		}
 
