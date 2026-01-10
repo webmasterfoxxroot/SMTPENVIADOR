@@ -1215,12 +1215,18 @@ func (s *Server) startWarmupEngine() {
 	imapTicker := time.NewTicker(5 * time.Minute)
 	defer imapTicker.Stop()
 
+	// Run seed-to-SMTP emails every 3 minutes
+	seedToSMTPTicker := time.NewTicker(3 * time.Minute)
+	defer seedToSMTPTicker.Stop()
+
 	for {
 		select {
 		case <-ticker.C:
 			s.processWarmupEmails()
 		case <-imapTicker.C:
 			s.processIMAPInteractions()
+		case <-seedToSMTPTicker.C:
+			s.processSeedToSMTPEmails()
 		}
 	}
 }
@@ -1714,6 +1720,135 @@ func (s *Server) updateWarmupDailyStats(warmupID, statType string) {
 			WHERE warmup_smtp_id = $1 AND date = $2
 		`, statType, statType), warmupID, today)
 	}
+}
+
+// ============================================
+// SEED TO SMTP EMAIL PROCESSOR
+// ============================================
+
+func (s *Server) processSeedToSMTPEmails() {
+	now := time.Now()
+	currentHour := now.Hour()
+
+	// Only send during business hours (6-22)
+	if currentHour < 6 || currentHour > 22 {
+		return
+	}
+
+	// Get active seeds with SMTP settings
+	seedRows, err := s.db.Query(`
+		SELECT id, email, password, smtp_host, smtp_port, use_tls
+		FROM warmup_seeds
+		WHERE status = 'active' AND smtp_host IS NOT NULL AND smtp_host != ''
+	`)
+	if err != nil {
+		log.Printf("[Warmup Seed→SMTP] Error getting seeds: %v", err)
+		return
+	}
+	defer seedRows.Close()
+
+	var seeds []struct {
+		ID       string
+		Email    string
+		Password string
+		SMTPHost string
+		SMTPPort int
+		UseTLS   bool
+	}
+
+	for seedRows.Next() {
+		var seed struct {
+			ID       string
+			Email    string
+			Password string
+			SMTPHost string
+			SMTPPort int
+			UseTLS   bool
+		}
+		seedRows.Scan(&seed.ID, &seed.Email, &seed.Password, &seed.SMTPHost, &seed.SMTPPort, &seed.UseTLS)
+		seeds = append(seeds, seed)
+	}
+
+	if len(seeds) == 0 {
+		return
+	}
+
+	// Get active warmup SMTPs and their senders
+	smtpRows, err := s.db.Query(`
+		SELECT w.id, w.smtp_id, ss.email as sender_email
+		FROM warmup_smtps w
+		JOIN smtp_senders ss ON ss.smtp_id = w.smtp_id
+		WHERE w.status = 'active' AND ss.active = true
+		ORDER BY RANDOM()
+		LIMIT 10
+	`)
+	if err != nil {
+		log.Printf("[Warmup Seed→SMTP] Error getting SMTP senders: %v", err)
+		return
+	}
+	defer smtpRows.Close()
+
+	var targets []struct {
+		WarmupID    string
+		SMTPID      string
+		SenderEmail string
+	}
+
+	for smtpRows.Next() {
+		var target struct {
+			WarmupID    string
+			SMTPID      string
+			SenderEmail string
+		}
+		smtpRows.Scan(&target.WarmupID, &target.SMTPID, &target.SenderEmail)
+		targets = append(targets, target)
+	}
+
+	if len(targets) == 0 {
+		return
+	}
+
+	// Random chance to send (20% per cycle)
+	if rand.Intn(100) > 20 {
+		return
+	}
+
+	// Pick random seed and target
+	seed := seeds[rand.Intn(len(seeds))]
+	target := targets[rand.Intn(len(targets))]
+
+	// Get a random template
+	var subject, body string
+	err = s.db.QueryRow(`
+		SELECT subject, body FROM warmup_templates
+		WHERE active = true ORDER BY RANDOM() LIMIT 1
+	`).Scan(&subject, &body)
+	if err != nil {
+		return
+	}
+
+	// Add randomization to subject
+	subject = subject + " #" + fmt.Sprintf("%d", rand.Intn(9999))
+
+	// Generate message ID
+	messageID := fmt.Sprintf("<%s@seed-warmup>", uuid.New().String())
+
+	// Determine TLS mode for seed's SMTP
+	tlsMode := "starttls"
+	if seed.SMTPPort == 465 {
+		tlsMode = "tls"
+	}
+
+	// Send email from seed to SMTP sender
+	err = s.sendSMTPEmail(seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
+		seed.Email, target.SenderEmail, subject, body, messageID)
+
+	if err != nil {
+		log.Printf("[Warmup Seed→SMTP] Failed to send from %s to %s: %v", seed.Email, target.SenderEmail, err)
+		return
+	}
+
+	log.Printf("[Warmup Seed→SMTP] ✉️ Sent from %s to %s: %s", seed.Email, target.SenderEmail, subject)
 }
 
 // ============================================
