@@ -799,20 +799,32 @@ function Warmup() {
   const fetchAll = async () => {
     setLoading(true)
     try {
-      const [statsRes, smtpsRes, seedsRes, activityRes, availableRes] = await Promise.all([
-        api.get('/warmup/stats'),
-        api.get('/warmup/smtps'),
-        api.get('/warmup/seeds'),
-        api.get('/warmup/activity'),
-        api.get('/smtp')
-      ])
-      setStats(statsRes.data)
-      setWarmupSMTPs(smtpsRes.data || [])
-      setSeeds(seedsRes.data || [])
-      setActivity(activityRes.data || [])
+      // Fetch SMTPs first (this should always work)
+      const availableRes = await api.get('/smtp')
       setAvailableSMTPs(availableRes.data?.data || [])
+
+      // Fetch warmup data (may fail if tables don't exist yet)
+      try {
+        const [statsRes, smtpsRes, seedsRes, activityRes] = await Promise.all([
+          api.get('/warmup/stats'),
+          api.get('/warmup/smtps'),
+          api.get('/warmup/seeds'),
+          api.get('/warmup/activity')
+        ])
+        setStats(statsRes.data || {})
+        setWarmupSMTPs(smtpsRes.data || [])
+        setSeeds(seedsRes.data || [])
+        setActivity(activityRes.data || [])
+      } catch (warmupError) {
+        console.log('Warmup data not available yet:', warmupError)
+        // Set defaults
+        setStats({})
+        setWarmupSMTPs([])
+        setSeeds([])
+        setActivity([])
+      }
     } catch (error) {
-      console.error('Error fetching warmup data:', error)
+      console.error('Error fetching data:', error)
     } finally {
       setLoading(false)
     }
