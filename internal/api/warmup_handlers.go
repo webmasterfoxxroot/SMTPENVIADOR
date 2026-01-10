@@ -147,9 +147,9 @@ func (s *Server) initWarmupTables() {
 
 	// Add verified column if missing (migration)
 	s.db.Exec(`ALTER TABLE warmup_emails ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT false`)
-	if err != nil {
-		log.Printf("[Warmup] Error creating warmup_emails table: %v", err)
-	}
+
+	// Add total_sent column to warmup_seeds for tracking sent emails
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS total_sent INT DEFAULT 0`)
 
 	// Create warmup_templates table
 	_, err = s.db.Exec(`
@@ -769,6 +769,7 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 		SELECT
 			ws.id, ws.email, ws.provider, ws.imap_host, ws.imap_port, ws.smtp_host, ws.smtp_port,
 			ws.use_tls, ws.status, ws.last_check, ws.error_message, ws.created_at,
+			COALESCE(ws.total_sent, 0) as total_sent,
 			COALESCE(stats.total_received, 0) as total_received,
 			COALESCE(stats.total_inbox, 0) as total_inbox,
 			COALESCE(stats.total_spam, 0) as total_spam,
@@ -801,11 +802,11 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 		var lastCheck sql.NullTime
 		var errorMsg sql.NullString
 		var createdAt time.Time
-		var totalReceived, totalInbox, totalSpam, totalMoved, totalReplied int
+		var totalSent, totalReceived, totalInbox, totalSpam, totalMoved, totalReplied int
 
 		rows.Scan(&id, &email, &provider, &imapHost, &imapPort, &smtpHost, &smtpPort,
 			&useTLS, &status, &lastCheck, &errorMsg, &createdAt,
-			&totalReceived, &totalInbox, &totalSpam, &totalMoved, &totalReplied)
+			&totalSent, &totalReceived, &totalInbox, &totalSpam, &totalMoved, &totalReplied)
 
 		seed := fiber.Map{
 			"id":             id,
@@ -818,6 +819,7 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 			"use_tls":        useTLS,
 			"status":         status,
 			"created_at":     createdAt,
+			"total_sent":     totalSent,
 			"total_received": totalReceived,
 			"total_inbox":    totalInbox,
 			"total_spam":     totalSpam,
@@ -1847,6 +1849,9 @@ func (s *Server) processSeedToSMTPEmails() {
 		log.Printf("[Warmup Seed→SMTP] Failed to send from %s to %s: %v", seed.Email, target.SenderEmail, err)
 		return
 	}
+
+	// Update seed's sent counter
+	s.db.Exec(`UPDATE warmup_seeds SET total_sent = total_sent + 1 WHERE id = $1`, seed.ID)
 
 	log.Printf("[Warmup Seed→SMTP] ✉️ Sent from %s to %s: %s", seed.Email, target.SenderEmail, subject)
 }

@@ -25,7 +25,8 @@ import {
   Edit,
   Save,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Send
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
@@ -1332,6 +1333,11 @@ function Warmup() {
                 {/* Seed Statistics */}
                 <div className="mt-3 pt-3 border-t border-gray-100">
                   <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="flex items-center gap-1">
+                      <Send className="w-3 h-3 text-cyan-500" />
+                      <span className="text-gray-600">Enviados:</span>
+                      <span className="font-medium text-cyan-600">{seed.total_sent || 0}</span>
+                    </div>
                     <div className="flex items-center gap-1">
                       <Mail className="w-3 h-3 text-blue-500" />
                       <span className="text-gray-600">Recebidos:</span>
