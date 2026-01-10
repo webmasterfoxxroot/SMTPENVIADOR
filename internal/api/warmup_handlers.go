@@ -22,17 +22,47 @@ import (
 // ============================================
 
 func (s *Server) initWarmupTables() {
-	// Drop old tables if they exist with wrong column types (VARCHAR instead of UUID)
-	// This is needed for migration from old schema
+	// Check if migration needed
+	var needsMigration bool
+
+	// Check if warmup_smtps has wrong column type (VARCHAR instead of UUID)
 	var columnType string
 	err := s.db.QueryRow(`
 		SELECT data_type FROM information_schema.columns
 		WHERE table_name = 'warmup_smtps' AND column_name = 'id'
 	`).Scan(&columnType)
-
 	if err == nil && columnType == "character varying" {
-		log.Println("[Warmup] Migrating old tables to UUID schema...")
-		// Drop in correct order due to foreign keys
+		needsMigration = true
+	}
+
+	// Check if warmup_seeds has wrong column type
+	err = s.db.QueryRow(`
+		SELECT data_type FROM information_schema.columns
+		WHERE table_name = 'warmup_seeds' AND column_name = 'id'
+	`).Scan(&columnType)
+	if err == nil && columnType == "character varying" {
+		needsMigration = true
+	}
+
+	// Check if warmup_emails table exists (might have failed to create)
+	var emailsTableExists bool
+	s.db.QueryRow(`
+		SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'warmup_emails')
+	`).Scan(&emailsTableExists)
+
+	// Also check if warmup_smtps exists but warmup_emails doesn't
+	var smtpsTableExists bool
+	s.db.QueryRow(`
+		SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'warmup_smtps')
+	`).Scan(&smtpsTableExists)
+
+	if smtpsTableExists && !emailsTableExists {
+		needsMigration = true
+	}
+
+	if needsMigration {
+		log.Println("[Warmup] Migrating tables to UUID schema...")
+		// Drop ALL warmup tables in correct order due to foreign keys
 		s.db.Exec(`DROP TABLE IF EXISTS warmup_daily_stats CASCADE`)
 		s.db.Exec(`DROP TABLE IF EXISTS warmup_emails CASCADE`)
 		s.db.Exec(`DROP TABLE IF EXISTS warmup_templates CASCADE`)
