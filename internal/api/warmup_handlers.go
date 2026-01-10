@@ -131,6 +131,7 @@ func (s *Server) initWarmupTables() {
 			subject VARCHAR(500),
 			message_id VARCHAR(255),
 			status VARCHAR(20) DEFAULT 'sent',
+			verified BOOLEAN DEFAULT false,
 			landed_in_spam BOOLEAN DEFAULT false,
 			moved_to_inbox BOOLEAN DEFAULT false,
 			sent_at TIMESTAMP DEFAULT NOW(),
@@ -139,6 +140,12 @@ func (s *Server) initWarmupTables() {
 			created_at TIMESTAMP DEFAULT NOW()
 		)
 	`)
+	if err != nil {
+		log.Printf("[Warmup] Error creating warmup_emails table: %v", err)
+	}
+
+	// Add verified column if missing (migration)
+	s.db.Exec(`ALTER TABLE warmup_emails ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT false`)
 	if err != nil {
 		log.Printf("[Warmup] Error creating warmup_emails table: %v", err)
 	}
@@ -761,10 +768,10 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 		LEFT JOIN (
 			SELECT
 				seed_id,
-				COUNT(*) as total_received,
-				COUNT(CASE WHEN landed_in_spam = false THEN 1 END) as total_inbox,
-				COUNT(CASE WHEN landed_in_spam = true THEN 1 END) as total_spam,
-				COUNT(CASE WHEN moved_to_inbox = true THEN 1 END) as total_moved,
+				COUNT(CASE WHEN verified = true THEN 1 END) as total_received,
+				COUNT(CASE WHEN verified = true AND landed_in_spam = false THEN 1 END) as total_inbox,
+				COUNT(CASE WHEN verified = true AND landed_in_spam = true THEN 1 END) as total_spam,
+				COUNT(CASE WHEN verified = true AND moved_to_inbox = true THEN 1 END) as total_moved,
 				COUNT(CASE WHEN replied_at IS NOT NULL THEN 1 END) as total_replied
 			FROM warmup_emails
 			GROUP BY seed_id
@@ -1789,6 +1796,17 @@ func (s *Server) checkMailbox(c *client.Client, seedID, mailbox string, isSpam b
 		singleSeq := new(imap.SeqSet)
 		singleSeq.AddNum(msg.SeqNum)
 		c.Store(singleSeq, item, flags, nil)
+
+		// Check if already verified (avoid counting twice)
+		var alreadyVerified bool
+		s.db.QueryRow(`SELECT verified FROM warmup_emails WHERE id = $1`, warmupEmailID).Scan(&alreadyVerified)
+
+		if alreadyVerified {
+			continue // Already processed this email
+		}
+
+		// Mark as verified - we confirmed the email arrived
+		s.db.Exec(`UPDATE warmup_emails SET verified = true WHERE id = $1`, warmupEmailID)
 
 		if isSpam {
 			// Move from spam to inbox
