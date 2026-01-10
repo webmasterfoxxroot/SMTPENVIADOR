@@ -28,8 +28,8 @@ import {
 import toast from 'react-hot-toast'
 import api from '../services/api'
 
-// Componente do grafico interativo de barras
-function WarmupChart({ schedule, onChange, maxEmails }) {
+// Componente do grafico interativo de barras com circulos arrastaveis
+function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
   const chartRef = useRef(null)
   const [dragging, setDragging] = useState(null)
 
@@ -43,8 +43,8 @@ function WarmupChart({ schedule, onChange, maxEmails }) {
 
     const rect = chartRef.current.getBoundingClientRect()
     const y = e.clientY - rect.top
-    const height = rect.height - 30 // desconta espaço do label
-    const value = Math.round(maxEmails - (y / height) * maxEmails)
+    const chartHeight = rect.height - 50 // espaço para labels
+    const value = Math.round(maxEmails - (y / chartHeight) * maxEmails)
     const clampedValue = Math.max(1, Math.min(maxEmails, value))
 
     const newSchedule = [...schedule]
@@ -70,68 +70,97 @@ function WarmupChart({ schedule, onChange, maxEmails }) {
     }
   }, [dragging, schedule])
 
+  // Gerar labels de data
+  const getDateLabel = (index) => {
+    const date = new Date(startDate || new Date())
+    date.setDate(date.getDate() + index)
+    return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }).replace('.', '')
+  }
+
   const maxValue = Math.max(...schedule, maxEmails)
+  const yAxisSteps = [0, Math.round(maxValue * 0.25), Math.round(maxValue * 0.5), Math.round(maxValue * 0.75), maxValue]
 
   return (
-    <div className="bg-gray-50 rounded-xl p-4">
-      <div className="flex items-center justify-between mb-3">
-        <h4 className="font-medium text-gray-700">Plano de Aquecimento</h4>
-        <div className="flex items-center gap-4 text-xs">
-          <div className="flex items-center gap-1">
-            <div className="w-2 h-2 bg-blue-500 rounded"></div>
-            <span className="text-gray-500">Agendado</span>
-          </div>
+    <div className="bg-white rounded-xl border border-gray-200 p-6">
+      {/* Slider track visual */}
+      <div className="mb-4">
+        <div className="h-2 bg-gray-200 rounded-full relative">
+          <div
+            className="h-2 bg-blue-500 rounded-full"
+            style={{ width: `${(schedule.filter((_, i) => i < new Date().getDate()).length / schedule.length) * 100}%` }}
+          ></div>
         </div>
       </div>
 
       <div
         ref={chartRef}
-        className="relative h-48 flex items-end"
-        style={{ cursor: dragging !== null ? 'ns-resize' : 'default' }}
+        className="relative"
+        style={{ height: '280px', cursor: dragging !== null ? 'ns-resize' : 'default' }}
       >
-        {/* Y-axis labels */}
-        <div className="absolute left-0 top-0 bottom-6 w-6 flex flex-col justify-between text-xs text-gray-400 pr-1">
-          <span>{maxValue}</span>
-          <span>{Math.round(maxValue / 2)}</span>
-          <span>0</span>
+        {/* Y-axis */}
+        <div className="absolute left-0 top-0 bottom-8 w-10 flex flex-col justify-between text-xs text-gray-400">
+          {yAxisSteps.reverse().map((val, i) => (
+            <span key={i} className="text-right pr-2">{val}</span>
+          ))}
+        </div>
+
+        {/* Grid lines */}
+        <div className="absolute left-10 right-0 top-0 bottom-8">
+          {[0, 25, 50, 75, 100].map((percent) => (
+            <div
+              key={percent}
+              className="absolute left-0 right-0 border-t border-gray-100"
+              style={{ top: `${percent}%` }}
+            ></div>
+          ))}
         </div>
 
         {/* Bars container */}
-        <div className="flex-1 flex items-end gap-0.5 ml-7 pb-6 h-full">
-          {schedule.map((value, index) => (
-            <div
-              key={index}
-              className="flex-1 flex flex-col items-center h-full justify-end"
-              onMouseDown={(e) => handleMouseDown(index, e)}
-            >
-              {/* Bar */}
+        <div className="absolute left-10 right-0 top-0 bottom-0 flex items-end pb-8">
+          {schedule.slice(0, 15).map((value, index) => {
+            const barHeight = (value / maxValue) * 100
+            return (
               <div
-                className={`w-full rounded-t transition-colors cursor-ns-resize relative group ${
-                  dragging === index ? 'bg-blue-600' : 'bg-blue-500 hover:bg-blue-600'
-                }`}
-                style={{
-                  height: `${Math.max((value / maxValue) * 100, 2)}%`,
-                  minHeight: '8px'
-                }}
+                key={index}
+                className="flex-1 flex flex-col items-center px-0.5 h-full justify-end relative"
+                onMouseDown={(e) => handleMouseDown(index, e)}
               >
-                {/* Tooltip on hover */}
-                <div className="absolute -top-6 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                {/* Value label above bar */}
+                <div className="absolute text-xs font-medium text-gray-600 select-none" style={{ bottom: `calc(${barHeight}% + 24px)` }}>
                   {value}
                 </div>
-                {/* Drag handle */}
-                <div className="absolute -top-1 left-0 right-0 h-2 bg-blue-700 rounded-t opacity-0 group-hover:opacity-100 cursor-ns-resize"></div>
+
+                {/* Draggable circle */}
+                <div
+                  className={`absolute w-3 h-3 rounded-full border-2 border-white shadow-md cursor-ns-resize z-10 transition-transform ${
+                    dragging === index ? 'bg-blue-700 scale-125' : 'bg-blue-500 hover:scale-110'
+                  }`}
+                  style={{ bottom: `calc(${barHeight}% + 4px)` }}
+                ></div>
+
+                {/* Bar */}
+                <div
+                  className={`w-full rounded-t-md transition-colors ${
+                    dragging === index ? 'bg-blue-600' : 'bg-blue-500'
+                  }`}
+                  style={{
+                    height: `${Math.max(barHeight, 1)}%`,
+                    minHeight: '4px'
+                  }}
+                ></div>
+
+                {/* Date label */}
+                <div className="absolute -bottom-6 text-[10px] text-gray-400 whitespace-nowrap select-none">
+                  {getDateLabel(index)}
+                </div>
               </div>
-              {/* Day label */}
-              <div className="text-[10px] text-gray-400 mt-1 select-none">
-                {index + 1}
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       </div>
 
-      <p className="text-xs text-gray-400 mt-2 text-center">
-        Arraste as barras para cima/baixo para ajustar emails por dia
+      <p className="text-xs text-gray-400 mt-6 text-center">
+        Arraste os circulos azuis para ajustar a quantidade de emails por dia
       </p>
     </div>
   )
@@ -365,6 +394,7 @@ function EditWarmupModal({ warmupSMTP, onClose, onSave }) {
               schedule={schedule}
               onChange={setSchedule}
               maxEmails={form.max_emails_per_day}
+              startDate={warmupSMTP.start_date}
             />
           )}
 
