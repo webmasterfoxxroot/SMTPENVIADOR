@@ -23,10 +23,10 @@ import (
 
 func (s *Server) initWarmupTables() {
 	// Create warmup_smtps table
-	s.db.Exec(`
+	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS warmup_smtps (
-			id VARCHAR(36) PRIMARY KEY,
-			smtp_id VARCHAR(36) NOT NULL REFERENCES smtp_servers(id) ON DELETE CASCADE,
+			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+			smtp_id UUID NOT NULL REFERENCES smtp_servers(id) ON DELETE CASCADE,
 			status VARCHAR(20) DEFAULT 'active',
 			recipe_type VARCHAR(20) DEFAULT 'progressive',
 			start_date TIMESTAMP DEFAULT NOW(),
@@ -46,11 +46,14 @@ func (s *Server) initWarmupTables() {
 			updated_at TIMESTAMP DEFAULT NOW()
 		)
 	`)
+	if err != nil {
+		log.Printf("[Warmup] Error creating warmup_smtps table: %v", err)
+	}
 
 	// Create warmup_seeds table
-	s.db.Exec(`
+	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS warmup_seeds (
-			id VARCHAR(36) PRIMARY KEY,
+			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
 			email VARCHAR(255) NOT NULL UNIQUE,
 			password VARCHAR(255) NOT NULL,
 			provider VARCHAR(50) DEFAULT 'other',
@@ -66,13 +69,16 @@ func (s *Server) initWarmupTables() {
 			updated_at TIMESTAMP DEFAULT NOW()
 		)
 	`)
+	if err != nil {
+		log.Printf("[Warmup] Error creating warmup_seeds table: %v", err)
+	}
 
 	// Create warmup_emails table
-	s.db.Exec(`
+	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS warmup_emails (
-			id VARCHAR(36) PRIMARY KEY,
-			warmup_smtp_id VARCHAR(36) NOT NULL REFERENCES warmup_smtps(id) ON DELETE CASCADE,
-			seed_id VARCHAR(36) NOT NULL REFERENCES warmup_seeds(id) ON DELETE CASCADE,
+			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+			warmup_smtp_id UUID NOT NULL REFERENCES warmup_smtps(id) ON DELETE CASCADE,
+			seed_id UUID NOT NULL REFERENCES warmup_seeds(id) ON DELETE CASCADE,
 			subject VARCHAR(500),
 			message_id VARCHAR(255),
 			status VARCHAR(20) DEFAULT 'sent',
@@ -84,11 +90,14 @@ func (s *Server) initWarmupTables() {
 			created_at TIMESTAMP DEFAULT NOW()
 		)
 	`)
+	if err != nil {
+		log.Printf("[Warmup] Error creating warmup_emails table: %v", err)
+	}
 
 	// Create warmup_templates table
-	s.db.Exec(`
+	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS warmup_templates (
-			id VARCHAR(36) PRIMARY KEY,
+			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
 			subject VARCHAR(500) NOT NULL,
 			body TEXT NOT NULL,
 			category VARCHAR(50) DEFAULT 'business',
@@ -96,12 +105,15 @@ func (s *Server) initWarmupTables() {
 			created_at TIMESTAMP DEFAULT NOW()
 		)
 	`)
+	if err != nil {
+		log.Printf("[Warmup] Error creating warmup_templates table: %v", err)
+	}
 
 	// Create warmup_daily_stats table
-	s.db.Exec(`
+	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS warmup_daily_stats (
-			id VARCHAR(36) PRIMARY KEY,
-			warmup_smtp_id VARCHAR(36) NOT NULL REFERENCES warmup_smtps(id) ON DELETE CASCADE,
+			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+			warmup_smtp_id UUID NOT NULL REFERENCES warmup_smtps(id) ON DELETE CASCADE,
 			date DATE NOT NULL,
 			scheduled INT DEFAULT 0,
 			sent INT DEFAULT 0,
@@ -112,6 +124,9 @@ func (s *Server) initWarmupTables() {
 			UNIQUE(warmup_smtp_id, date)
 		)
 	`)
+	if err != nil {
+		log.Printf("[Warmup] Error creating warmup_daily_stats table: %v", err)
+	}
 
 	// Insert default warmup templates
 	s.insertDefaultWarmupTemplates()

@@ -519,7 +519,7 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
     }
     setLoading(true)
     try {
-      await api.post('/warmup/smtps', { ...form, custom_schedule: JSON.stringify(schedule) })
+      await api.post('/warmup/smtps', { ...form, custom_schedule: schedule })
       toast.success('SMTP adicionado ao warmup!')
       onSave()
     } catch (error) {
