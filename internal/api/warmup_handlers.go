@@ -1451,60 +1451,27 @@ func (s *Server) sendSMTPEmail(host string, port int, username, password, tlsMod
 
 	addr := fmt.Sprintf("%s:%d", host, port)
 
-	var auth smtp.Auth
-	if username != "" && password != "" {
-		auth = smtp.PlainAuth("", username, password, host)
+	// Handle different TLS modes like the campaign engine
+	switch tlsMode {
+	case "tls":
+		return s.sendWithImplicitTLS(addr, host, username, password, fromEmail, to, []byte(msg))
+	case "starttls":
+		return s.sendWithSTARTTLS(addr, host, username, password, fromEmail, to, []byte(msg))
+	default: // "none" or empty
+		return s.sendPlainSMTP(addr, host, username, password, fromEmail, to, []byte(msg))
+	}
+}
+
+// sendWithImplicitTLS sends email using implicit TLS (port 465)
+func (s *Server) sendWithImplicitTLS(addr, host, username, password, from, to string, msg []byte) error {
+	tlsConfig := &tls.Config{
+		ServerName:         host,
+		InsecureSkipVerify: true,
 	}
 
-	// tls_mode: "none", "starttls", "tls" (implicit TLS)
-	if tlsMode == "tls" || port == 465 {
-		// Direct TLS connection (implicit TLS)
-		tlsConfig := &tls.Config{ServerName: host}
-		conn, err := tls.Dial("tcp", addr, tlsConfig)
-		if err != nil {
-			return fmt.Errorf("TLS dial error: %v", err)
-		}
-		defer conn.Close()
-
-		client, err := smtp.NewClient(conn, host)
-		if err != nil {
-			return fmt.Errorf("SMTP client error: %v", err)
-		}
-		defer client.Close()
-
-		if auth != nil {
-			if err := client.Auth(auth); err != nil {
-				return fmt.Errorf("auth error: %v", err)
-			}
-		}
-
-		if err := client.Mail(fromEmail); err != nil {
-			return fmt.Errorf("MAIL error: %v", err)
-		}
-		if err := client.Rcpt(to); err != nil {
-			return fmt.Errorf("RCPT error: %v", err)
-		}
-
-		w, err := client.Data()
-		if err != nil {
-			return fmt.Errorf("DATA error: %v", err)
-		}
-		_, err = w.Write([]byte(msg))
-		if err != nil {
-			return fmt.Errorf("write error: %v", err)
-		}
-		err = w.Close()
-		if err != nil {
-			return fmt.Errorf("close error: %v", err)
-		}
-
-		return client.Quit()
-	}
-
-	// STARTTLS or none - use manual connection with STARTTLS upgrade
-	conn, err := net.Dial("tcp", addr)
+	conn, err := tls.Dial("tcp", addr, tlsConfig)
 	if err != nil {
-		return fmt.Errorf("dial error: %v", err)
+		return fmt.Errorf("TLS dial error: %v", err)
 	}
 	defer conn.Close()
 
@@ -1514,24 +1481,95 @@ func (s *Server) sendSMTPEmail(host string, port int, username, password, tlsMod
 	}
 	defer client.Close()
 
-	// Try STARTTLS if available (most servers require it)
-	if ok, _ := client.Extension("STARTTLS"); ok {
-		tlsConfig := &tls.Config{ServerName: host}
-		if err := client.StartTLS(tlsConfig); err != nil {
-			return fmt.Errorf("STARTTLS error: %v", err)
-		}
-	} else if tlsMode == "starttls" {
-		// STARTTLS required but not available
-		return fmt.Errorf("STARTTLS not supported by server")
+	if err := s.authenticateSMTP(client, host, username, password); err != nil {
+		return err
 	}
 
-	if auth != nil {
-		if err := client.Auth(auth); err != nil {
-			return fmt.Errorf("auth error: %v", err)
-		}
+	return s.sendSMTPMessage(client, from, to, msg)
+}
+
+// sendWithSTARTTLS sends email using STARTTLS
+func (s *Server) sendWithSTARTTLS(addr, host, username, password, from, to string, msg []byte) error {
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("dial error: %v", err)
 	}
 
-	if err := client.Mail(fromEmail); err != nil {
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("SMTP client error: %v", err)
+	}
+	defer client.Close()
+
+	if err := client.Hello("[127.0.0.1]"); err != nil {
+		return fmt.Errorf("EHLO error: %v", err)
+	}
+
+	tlsConfig := &tls.Config{
+		ServerName:         host,
+		InsecureSkipVerify: true,
+	}
+
+	if err := client.StartTLS(tlsConfig); err != nil {
+		return fmt.Errorf("STARTTLS error: %v", err)
+	}
+
+	if err := s.authenticateSMTP(client, host, username, password); err != nil {
+		return err
+	}
+
+	return s.sendSMTPMessage(client, from, to, msg)
+}
+
+// sendPlainSMTP sends email without TLS (for PowerMTA and similar)
+func (s *Server) sendPlainSMTP(addr, host, username, password, from, to string, msg []byte) error {
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("dial error: %v", err)
+	}
+
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("SMTP client error: %v", err)
+	}
+	defer client.Close()
+
+	if err := client.Hello("[127.0.0.1]"); err != nil {
+		return fmt.Errorf("EHLO error: %v", err)
+	}
+
+	if err := s.authenticateSMTP(client, host, username, password); err != nil {
+		return err
+	}
+
+	return s.sendSMTPMessage(client, from, to, msg)
+}
+
+// authenticateSMTP tries LOGIN auth first (works without TLS), then PLAIN
+func (s *Server) authenticateSMTP(client *smtp.Client, host, username, password string) error {
+	if username == "" || password == "" {
+		return nil // No auth needed
+	}
+
+	// Try LOGIN auth first (doesn't require encrypted connection)
+	if err := client.Auth(warmupLoginAuth(username, password)); err == nil {
+		return nil
+	}
+
+	// Try PLAIN auth as fallback
+	auth := smtp.PlainAuth("", username, password, host)
+	if err := client.Auth(auth); err != nil {
+		return fmt.Errorf("auth error (tried LOGIN, PLAIN): %v", err)
+	}
+
+	return nil
+}
+
+// sendSMTPMessage sends the email message after authentication
+func (s *Server) sendSMTPMessage(client *smtp.Client, from, to string, msg []byte) error {
+	if err := client.Mail(from); err != nil {
 		return fmt.Errorf("MAIL error: %v", err)
 	}
 	if err := client.Rcpt(to); err != nil {
@@ -1542,16 +1580,41 @@ func (s *Server) sendSMTPEmail(host string, port int, username, password, tlsMod
 	if err != nil {
 		return fmt.Errorf("DATA error: %v", err)
 	}
-	_, err = w.Write([]byte(msg))
-	if err != nil {
+	if _, err := w.Write(msg); err != nil {
 		return fmt.Errorf("write error: %v", err)
 	}
-	err = w.Close()
-	if err != nil {
+	if err := w.Close(); err != nil {
 		return fmt.Errorf("close error: %v", err)
 	}
 
 	return client.Quit()
+}
+
+// warmupLoginAuth implements LOGIN authentication (works without TLS)
+type warmupLoginAuthStruct struct {
+	username, password string
+}
+
+func warmupLoginAuth(username, password string) smtp.Auth {
+	return &warmupLoginAuthStruct{username, password}
+}
+
+func (a *warmupLoginAuthStruct) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	return "LOGIN", []byte{}, nil
+}
+
+func (a *warmupLoginAuthStruct) Next(fromServer []byte, more bool) ([]byte, error) {
+	if more {
+		switch string(fromServer) {
+		case "Username:":
+			return []byte(a.username), nil
+		case "Password:":
+			return []byte(a.password), nil
+		default:
+			return nil, fmt.Errorf("unknown from server: %s", string(fromServer))
+		}
+	}
+	return nil, nil
 }
 
 func (s *Server) updateWarmupDailyStats(warmupID, statType string) {
