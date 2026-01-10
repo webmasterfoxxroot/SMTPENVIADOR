@@ -979,6 +979,20 @@ function Warmup() {
     }
   }
 
+  const triggerWarmup = async (id, count = 1) => {
+    try {
+      const res = await api.post(`/warmup/smtps/${id}/trigger?count=${count}`)
+      if (res.data.sent > 0) {
+        toast.success(`✉️ ${res.data.message}`)
+      } else {
+        toast.error(res.data.errors?.[0] || 'Nenhum email enviado')
+      }
+      fetchAll()
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Erro ao enviar warmup')
+    }
+  }
+
   const deleteWarmupSMTP = async (id) => {
     if (!confirm('Remover este SMTP do warmup?')) return
     try {
@@ -1149,6 +1163,13 @@ function Warmup() {
                       ) : (
                         <Play className="w-4 h-4 text-green-600" />
                       )}
+                    </button>
+                    <button
+                      onClick={() => triggerWarmup(smtp.id, 3)}
+                      className="p-2 hover:bg-blue-100 rounded-lg transition-colors"
+                      title="Enviar 3 emails agora (teste)"
+                    >
+                      <Mail className="w-4 h-4 text-blue-600" />
                     </button>
                     <button
                       onClick={() => deleteWarmupSMTP(smtp.id)}

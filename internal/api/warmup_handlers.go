@@ -498,6 +498,127 @@ func (s *Server) toggleWarmupSMTP(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"status": newStatus})
 }
 
+// triggerWarmupSMTP manually sends warmup emails for testing
+func (s *Server) triggerWarmupSMTP(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	// Get number of emails to send (default 1)
+	count := c.QueryInt("count", 1)
+	if count < 1 {
+		count = 1
+	}
+	if count > 10 {
+		count = 10 // Max 10 at a time for safety
+	}
+
+	// Get SMTP and warmup info
+	var smtpID, recipeType string
+	var host, username, password, tlsMode string
+	var port, replyRate int
+
+	err := s.db.QueryRow(`
+		SELECT w.smtp_id, w.recipe_type, w.reply_rate,
+			   s.host, s.port, s.username, s.password, s.tls_mode
+		FROM warmup_smtps w
+		JOIN smtp_servers s ON w.smtp_id = s.id
+		WHERE w.id = $1
+	`, id).Scan(&smtpID, &recipeType, &replyRate, &host, &port, &username, &password, &tlsMode)
+
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Warmup SMTP not found"})
+	}
+
+	// Check for active seeds
+	var activeSeeds int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'active'`).Scan(&activeSeeds)
+	if activeSeeds == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "No active seed accounts available"})
+	}
+
+	// Send emails
+	sent := 0
+	errors := []string{}
+	for i := 0; i < count; i++ {
+		err := s.sendWarmupEmailWithResult(id, host, port, username, password, tlsMode, replyRate)
+		if err != nil {
+			errors = append(errors, err.Error())
+		} else {
+			sent++
+		}
+	}
+
+	result := fiber.Map{
+		"sent":      sent,
+		"requested": count,
+		"message":   fmt.Sprintf("Sent %d of %d warmup emails", sent, count),
+	}
+	if len(errors) > 0 {
+		result["errors"] = errors
+	}
+
+	return c.JSON(result)
+}
+
+// sendWarmupEmailWithResult sends a warmup email and returns error if any
+func (s *Server) sendWarmupEmailWithResult(warmupID, host string, port int, username, password, tlsMode string, replyRate int) error {
+	// Get a random active seed
+	var seedID, seedEmail string
+	err := s.db.QueryRow(`
+		SELECT id, email FROM warmup_seeds
+		WHERE status = 'active'
+		ORDER BY RANDOM()
+		LIMIT 1
+	`).Scan(&seedID, &seedEmail)
+
+	if err != nil {
+		return fmt.Errorf("no active seeds available")
+	}
+
+	// Get a random template
+	var subject, body string
+	err = s.db.QueryRow(`
+		SELECT subject, body FROM warmup_templates
+		WHERE active = true
+		ORDER BY RANDOM()
+		LIMIT 1
+	`).Scan(&subject, &body)
+
+	if err != nil {
+		return fmt.Errorf("no templates available")
+	}
+
+	// Add some randomization to subject
+	subject = subject + " #" + fmt.Sprintf("%d", rand.Intn(9999))
+
+	// Generate message ID
+	messageID := fmt.Sprintf("<%s@warmup>", uuid.New().String())
+
+	// Send email via SMTP
+	err = s.sendSMTPEmail(host, port, username, password, tlsMode, seedEmail, subject, body, messageID)
+	if err != nil {
+		return fmt.Errorf("SMTP error: %v", err)
+	}
+
+	// Record the email
+	emailID := uuid.New().String()
+	s.db.Exec(`
+		INSERT INTO warmup_emails (id, warmup_smtp_id, seed_id, subject, message_id, status, sent_at)
+		VALUES ($1, $2, $3, $4, $5, 'sent', NOW())
+	`, emailID, warmupID, seedID, subject, messageID)
+
+	// Update stats
+	s.db.Exec(`
+		UPDATE warmup_smtps SET total_sent = total_sent + 1, updated_at = NOW()
+		WHERE id = $1
+	`, warmupID)
+
+	// Update daily stats
+	s.updateWarmupDailyStats(warmupID, "sent")
+
+	log.Printf("[Warmup Manual] ✉️ Sent to %s: %s", seedEmail, subject)
+	return nil
+}
+
 // getWarmupSMTPStats gets detailed stats for a warmup SMTP
 func (s *Server) getWarmupSMTPStats(c *fiber.Ctx) error {
 	id := c.Params("id")
@@ -1113,23 +1234,34 @@ func (s *Server) processWarmupEmails() {
 		}
 
 		// Calculate how many to send this minute (spread throughout the day)
+		remaining := todayLimit - sentToday
 		sendingHours := endHour - startHour
-		emailsPerHour := float64(todayLimit) / float64(sendingHours)
-		emailsPerMinute := int(emailsPerHour / 60)
-		if emailsPerMinute < 1 {
-			// Send randomly based on probability
-			if rand.Float64() < emailsPerHour/60 {
+		if sendingHours <= 0 {
+			sendingHours = 1
+		}
+		sendingMinutes := sendingHours * 60
+		emailsPerMinute := remaining / sendingMinutes
+
+		// Always send at least 1 if there's remaining quota (probabilistic for low volume)
+		if emailsPerMinute < 1 && remaining > 0 {
+			// Calculate probability: remaining emails / remaining minutes in window
+			currentMinuteInWindow := (currentHour-startHour)*60 + time.Now().Minute()
+			remainingMinutes := sendingMinutes - currentMinuteInWindow
+			if remainingMinutes <= 0 {
+				remainingMinutes = 1
+			}
+			probability := float64(remaining) / float64(remainingMinutes)
+			if rand.Float64() < probability || remaining >= remainingMinutes {
 				emailsPerMinute = 1
 			}
 		}
 
-		remaining := todayLimit - sentToday
 		if emailsPerMinute > remaining {
 			emailsPerMinute = remaining
 		}
 
 		// Send warmup emails
-		log.Printf("[Warmup Engine] SMTP %s: Sending %d emails this minute", warmupID, emailsPerMinute)
+		log.Printf("[Warmup Engine] SMTP %s: Sending %d emails this minute (remaining: %d)", warmupID, emailsPerMinute, remaining)
 		for i := 0; i < emailsPerMinute; i++ {
 			s.sendWarmupEmail(warmupID, host, port, username, password, tlsMode, replyRate)
 		}

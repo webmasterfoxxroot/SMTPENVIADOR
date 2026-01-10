@@ -344,6 +344,7 @@ func (s *Server) setupRoutes() {
 	warmup.Put("/smtps/:id", s.updateWarmupSMTP)
 	warmup.Delete("/smtps/:id", s.deleteWarmupSMTP)
 	warmup.Post("/smtps/:id/toggle", s.toggleWarmupSMTP)
+	warmup.Post("/smtps/:id/trigger", s.triggerWarmupSMTP)
 	warmup.Get("/smtps/:id/stats", s.getWarmupSMTPStats)
 	warmup.Put("/smtps/:id/schedule", s.updateWarmupSchedule)
 	// Warmup Seeds
