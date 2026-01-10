@@ -1032,9 +1032,27 @@ func (s *Server) processWarmupEmails() {
 	now := time.Now()
 	currentHour := now.Hour()
 
+	// Log active counts
+	var activeSMTPs, activeSeeds, activeTemplates int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeSMTPs)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'active'`).Scan(&activeSeeds)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_templates WHERE active = true`).Scan(&activeTemplates)
+
+	log.Printf("[Warmup Engine] Processing at %s (hour %d) - Active: %d SMTPs, %d Seeds, %d Templates",
+		now.Format("15:04:05"), currentHour, activeSMTPs, activeSeeds, activeTemplates)
+
+	if activeSeeds == 0 {
+		log.Printf("[Warmup Engine] No active seeds available - cannot send warmup emails")
+		return
+	}
+	if activeTemplates == 0 {
+		log.Printf("[Warmup Engine] No active templates available - cannot send warmup emails")
+		return
+	}
+
 	// Get active warmup SMTPs that should send now
 	rows, err := s.db.Query(`
-		SELECT w.id, w.smtp_id, w.current_day, w.min_emails_per_day, w.max_emails_per_day,
+		SELECT w.id, w.smtp_id, w.start_date, w.min_emails_per_day, w.max_emails_per_day,
 			   w.recipe_type, w.custom_schedule, w.reply_rate, w.start_hour, w.end_hour,
 			   s.host, s.port, s.username, s.password, s.tls_mode
 		FROM warmup_smtps w
@@ -1050,17 +1068,30 @@ func (s *Server) processWarmupEmails() {
 
 	for rows.Next() {
 		var warmupID, smtpID, recipeType string
-		var currentDay, minEmails, maxEmails, replyRate, startHour, endHour int
+		var startDate time.Time
+		var minEmails, maxEmails, replyRate, startHour, endHour int
 		var customSchedule sql.NullString
 		var host, username, password, tlsMode string
 		var port int
 
-		rows.Scan(&warmupID, &smtpID, &currentDay, &minEmails, &maxEmails,
+		rows.Scan(&warmupID, &smtpID, &startDate, &minEmails, &maxEmails,
 			&recipeType, &customSchedule, &replyRate, &startHour, &endHour,
 			&host, &port, &username, &password, &tlsMode)
 
+		// Calculate current day based on start date
+		currentDay := int(now.Sub(startDate).Hours()/24) + 1
+		if currentDay < 1 {
+			currentDay = 1
+		}
+
+		// Update current_day in database for UI display
+		s.db.Exec(`UPDATE warmup_smtps SET current_day = $1 WHERE id = $2`, currentDay, warmupID)
+
+		log.Printf("[Warmup Engine] SMTP %s: Day %d, hours %d-%d, current hour %d", warmupID, currentDay, startHour, endHour, currentHour)
+
 		// Check if within sending hours
 		if currentHour < startHour || currentHour >= endHour {
+			log.Printf("[Warmup Engine] SMTP %s: Outside sending hours, skipping", warmupID)
 			continue
 		}
 
@@ -1074,7 +1105,10 @@ func (s *Server) processWarmupEmails() {
 			WHERE warmup_smtp_id = $1 AND DATE(sent_at) = $2
 		`, warmupID, now.Format("2006-01-02")).Scan(&sentToday)
 
+		log.Printf("[Warmup Engine] SMTP %s: Today's limit %d, sent so far %d", warmupID, todayLimit, sentToday)
+
 		if sentToday >= todayLimit {
+			log.Printf("[Warmup Engine] SMTP %s: Daily limit reached, skipping", warmupID)
 			continue
 		}
 
@@ -1095,6 +1129,7 @@ func (s *Server) processWarmupEmails() {
 		}
 
 		// Send warmup emails
+		log.Printf("[Warmup Engine] SMTP %s: Sending %d emails this minute", warmupID, emailsPerMinute)
 		for i := 0; i < emailsPerMinute; i++ {
 			s.sendWarmupEmail(warmupID, host, port, username, password, tlsMode, replyRate)
 		}
@@ -1286,7 +1321,15 @@ func (s *Server) updateWarmupDailyStats(warmupID, statType string) {
 // ============================================
 
 func (s *Server) processIMAPInteractions() {
-	log.Println("[Warmup IMAP] Checking seed inboxes...")
+	// Count active seeds
+	var activeSeeds int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'active'`).Scan(&activeSeeds)
+	log.Printf("[Warmup IMAP] Checking %d active seed inboxes...", activeSeeds)
+
+	if activeSeeds == 0 {
+		log.Println("[Warmup IMAP] No active seeds to check")
+		return
+	}
 
 	// Get all active seeds
 	rows, err := s.db.Query(`
@@ -1306,6 +1349,7 @@ func (s *Server) processIMAPInteractions() {
 
 		rows.Scan(&seedID, &email, &password, &imapHost, &imapPort, &useTLS)
 
+		log.Printf("[Warmup IMAP] Processing inbox for %s", email)
 		go s.processOneSeedInbox(seedID, email, password, imapHost, imapPort, useTLS)
 	}
 }
