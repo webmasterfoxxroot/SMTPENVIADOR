@@ -478,6 +478,38 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
     end_hour: 18
   })
   const [loading, setLoading] = useState(false)
+  const [schedule, setSchedule] = useState([])
+
+  // Gerar schedule inicial
+  useEffect(() => {
+    generateSchedule(form.recipe_type)
+  }, [])
+
+  const generateSchedule = (type) => {
+    const days = 45
+    const newSchedule = []
+    const increment = (form.max_emails_per_day - form.min_emails_per_day) / (days - 1)
+
+    for (let i = 0; i < days; i++) {
+      let value
+      if (type === 'flat') {
+        value = form.min_emails_per_day
+      } else if (type === 'randomized') {
+        value = form.min_emails_per_day + Math.floor(Math.random() * (form.max_emails_per_day - form.min_emails_per_day + 1))
+      } else if (type === 'progressive') {
+        value = form.min_emails_per_day + Math.round(i * increment)
+      } else {
+        value = form.min_emails_per_day
+      }
+      newSchedule.push(Math.min(value, form.max_emails_per_day))
+    }
+    setSchedule(newSchedule)
+  }
+
+  const handleRecipeChange = (type) => {
+    setForm({ ...form, recipe_type: type })
+    generateSchedule(type)
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -487,7 +519,7 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
     }
     setLoading(true)
     try {
-      await api.post('/warmup/smtps', form)
+      await api.post('/warmup/smtps', { ...form, custom_schedule: schedule })
       toast.success('SMTP adicionado ao warmup!')
       onSave()
     } catch (error) {
@@ -499,8 +531,8 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-6 border-b border-gray-100">
+      <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-6 border-b border-gray-100 sticky top-0 bg-white">
           <div className="flex items-center gap-3">
             <div className="p-3 bg-orange-100 rounded-xl">
               <Flame className="w-6 h-6 text-orange-600" />
@@ -545,20 +577,97 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
                 <button
                   key={recipe.value}
                   type="button"
-                  onClick={() => setForm({ ...form, recipe_type: recipe.value })}
-                  className={`p-4 rounded-xl border-2 transition-all text-center ${
+                  onClick={() => handleRecipeChange(recipe.value)}
+                  className={`p-3 rounded-xl border-2 transition-all text-center ${
                     form.recipe_type === recipe.value
                       ? 'border-orange-500 bg-orange-50'
                       : 'border-gray-200 hover:border-gray-300'
                   }`}
                 >
-                  <recipe.icon className={`w-6 h-6 mx-auto mb-2 ${
+                  <recipe.icon className={`w-5 h-5 mx-auto mb-1 ${
                     form.recipe_type === recipe.value ? 'text-orange-600' : 'text-gray-400'
                   }`} />
                   <div className="font-medium text-sm">{recipe.label}</div>
                   <div className="text-xs text-gray-500">{recipe.desc}</div>
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Interactive Chart */}
+          {schedule.length > 0 && (
+            <WarmupChart
+              schedule={schedule}
+              onChange={setSchedule}
+              maxEmails={form.max_emails_per_day}
+              startDate={form.start_date}
+            />
+          )}
+
+          {/* Settings Grid */}
+          <div className="grid grid-cols-5 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Min/dia</label>
+              <input
+                type="number"
+                value={form.min_emails_per_day}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value) || 1
+                  setForm({ ...form, min_emails_per_day: val })
+                  generateSchedule(form.recipe_type)
+                }}
+                min="1"
+                max="50"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Max/dia</label>
+              <input
+                type="number"
+                value={form.max_emails_per_day}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value) || 40
+                  setForm({ ...form, max_emails_per_day: val })
+                  generateSchedule(form.recipe_type)
+                }}
+                min="1"
+                max="50"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Resposta %</label>
+              <input
+                type="number"
+                value={form.reply_rate}
+                onChange={(e) => setForm({ ...form, reply_rate: parseInt(e.target.value) || 0 })}
+                min="0"
+                max="45"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Hora inicio</label>
+              <input
+                type="number"
+                value={form.start_hour}
+                onChange={(e) => setForm({ ...form, start_hour: parseInt(e.target.value) || 0 })}
+                min="0"
+                max="23"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Hora fim</label>
+              <input
+                type="number"
+                value={form.end_hour}
+                onChange={(e) => setForm({ ...form, end_hour: parseInt(e.target.value) || 18 })}
+                min="0"
+                max="23"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+              />
             </div>
           </div>
 
@@ -585,72 +694,7 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
             </div>
           </div>
 
-          {/* Email Limits */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Minimo emails/dia</label>
-              <input
-                type="number"
-                value={form.min_emails_per_day}
-                onChange={(e) => setForm({ ...form, min_emails_per_day: parseInt(e.target.value) })}
-                min="1"
-                max="50"
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Maximo emails/dia</label>
-              <input
-                type="number"
-                value={form.max_emails_per_day}
-                onChange={(e) => setForm({ ...form, max_emails_per_day: parseInt(e.target.value) })}
-                min="1"
-                max="50"
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none"
-              />
-              <p className="text-xs text-gray-400 mt-1">40 recomendado, 50 max</p>
-            </div>
-          </div>
-
-          {/* Reply Rate and Hours */}
-          <div className="grid grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Taxa de Resposta %</label>
-              <input
-                type="number"
-                value={form.reply_rate}
-                onChange={(e) => setForm({ ...form, reply_rate: parseInt(e.target.value) })}
-                min="0"
-                max="45"
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none"
-              />
-              <p className="text-xs text-gray-400 mt-1">30% recomendado</p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Hora Inicio</label>
-              <input
-                type="number"
-                value={form.start_hour}
-                onChange={(e) => setForm({ ...form, start_hour: parseInt(e.target.value) })}
-                min="0"
-                max="23"
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Hora Fim</label>
-              <input
-                type="number"
-                value={form.end_hour}
-                onChange={(e) => setForm({ ...form, end_hour: parseInt(e.target.value) })}
-                min="0"
-                max="23"
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none"
-              />
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-3 pt-4 border-t">
+          <div className="flex justify-end gap-3 pt-4 border-t sticky bottom-0 bg-white">
             <button type="button" onClick={onClose} className="px-6 py-3 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50">
               Cancelar
             </button>
