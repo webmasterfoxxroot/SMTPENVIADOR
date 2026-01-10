@@ -1278,6 +1278,36 @@ function Warmup() {
                     </span>
                   )}
                 </p>
+                {/* Seed Statistics */}
+                <div className="mt-3 pt-3 border-t border-gray-100">
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="flex items-center gap-1">
+                      <Mail className="w-3 h-3 text-blue-500" />
+                      <span className="text-gray-600">Recebidos:</span>
+                      <span className="font-medium text-gray-900">{seed.total_received || 0}</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Inbox className="w-3 h-3 text-green-500" />
+                      <span className="text-gray-600">Inbox:</span>
+                      <span className="font-medium text-green-600">{seed.total_inbox || 0}</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3 text-red-500" />
+                      <span className="text-gray-600">Spam:</span>
+                      <span className="font-medium text-red-600">{seed.total_spam || 0}</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <TrendingUp className="w-3 h-3 text-orange-500" />
+                      <span className="text-gray-600">Movidos:</span>
+                      <span className="font-medium text-orange-600">{seed.total_moved || 0}</span>
+                    </div>
+                    <div className="flex items-center gap-1 col-span-2">
+                      <MessageSquare className="w-3 h-3 text-purple-500" />
+                      <span className="text-gray-600">Respondidos:</span>
+                      <span className="font-medium text-purple-600">{seed.total_replied || 0}</span>
+                    </div>
+                  </div>
+                </div>
               </div>
             ))}
           </div>

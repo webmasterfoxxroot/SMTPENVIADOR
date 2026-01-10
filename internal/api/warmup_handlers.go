@@ -721,13 +721,30 @@ func (s *Server) updateWarmupSchedule(c *fiber.Ctx) error {
 // WARMUP SEED HANDLERS
 // ============================================
 
-// listWarmupSeeds returns all seed accounts
+// listWarmupSeeds returns all seed accounts with statistics
 func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 	rows, err := s.db.Query(`
-		SELECT id, email, provider, imap_host, imap_port, smtp_host, smtp_port,
-			   use_tls, status, last_check, error_message, created_at
-		FROM warmup_seeds
-		ORDER BY created_at DESC
+		SELECT
+			ws.id, ws.email, ws.provider, ws.imap_host, ws.imap_port, ws.smtp_host, ws.smtp_port,
+			ws.use_tls, ws.status, ws.last_check, ws.error_message, ws.created_at,
+			COALESCE(stats.total_received, 0) as total_received,
+			COALESCE(stats.total_inbox, 0) as total_inbox,
+			COALESCE(stats.total_spam, 0) as total_spam,
+			COALESCE(stats.total_moved, 0) as total_moved,
+			COALESCE(stats.total_replied, 0) as total_replied
+		FROM warmup_seeds ws
+		LEFT JOIN (
+			SELECT
+				seed_id,
+				COUNT(*) as total_received,
+				COUNT(CASE WHEN landed_in_spam = false THEN 1 END) as total_inbox,
+				COUNT(CASE WHEN landed_in_spam = true THEN 1 END) as total_spam,
+				COUNT(CASE WHEN moved_to_inbox = true THEN 1 END) as total_moved,
+				COUNT(CASE WHEN replied_at IS NOT NULL THEN 1 END) as total_replied
+			FROM warmup_emails
+			GROUP BY seed_id
+		) stats ON ws.id = stats.seed_id
+		ORDER BY ws.created_at DESC
 	`)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -742,21 +759,28 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 		var lastCheck sql.NullTime
 		var errorMsg sql.NullString
 		var createdAt time.Time
+		var totalReceived, totalInbox, totalSpam, totalMoved, totalReplied int
 
 		rows.Scan(&id, &email, &provider, &imapHost, &imapPort, &smtpHost, &smtpPort,
-			&useTLS, &status, &lastCheck, &errorMsg, &createdAt)
+			&useTLS, &status, &lastCheck, &errorMsg, &createdAt,
+			&totalReceived, &totalInbox, &totalSpam, &totalMoved, &totalReplied)
 
 		seed := fiber.Map{
-			"id":         id,
-			"email":      email,
-			"provider":   provider,
-			"imap_host":  imapHost,
-			"imap_port":  imapPort,
-			"smtp_host":  smtpHost,
-			"smtp_port":  smtpPort,
-			"use_tls":    useTLS,
-			"status":     status,
-			"created_at": createdAt,
+			"id":             id,
+			"email":          email,
+			"provider":       provider,
+			"imap_host":      imapHost,
+			"imap_port":      imapPort,
+			"smtp_host":      smtpHost,
+			"smtp_port":      smtpPort,
+			"use_tls":        useTLS,
+			"status":         status,
+			"created_at":     createdAt,
+			"total_received": totalReceived,
+			"total_inbox":    totalInbox,
+			"total_spam":     totalSpam,
+			"total_moved":    totalMoved,
+			"total_replied":  totalReplied,
 		}
 
 		if lastCheck.Valid {
