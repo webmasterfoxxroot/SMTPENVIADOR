@@ -22,8 +22,26 @@ import (
 // ============================================
 
 func (s *Server) initWarmupTables() {
+	// Drop old tables if they exist with wrong column types (VARCHAR instead of UUID)
+	// This is needed for migration from old schema
+	var columnType string
+	err := s.db.QueryRow(`
+		SELECT data_type FROM information_schema.columns
+		WHERE table_name = 'warmup_smtps' AND column_name = 'id'
+	`).Scan(&columnType)
+
+	if err == nil && columnType == "character varying" {
+		log.Println("[Warmup] Migrating old tables to UUID schema...")
+		// Drop in correct order due to foreign keys
+		s.db.Exec(`DROP TABLE IF EXISTS warmup_daily_stats CASCADE`)
+		s.db.Exec(`DROP TABLE IF EXISTS warmup_emails CASCADE`)
+		s.db.Exec(`DROP TABLE IF EXISTS warmup_templates CASCADE`)
+		s.db.Exec(`DROP TABLE IF EXISTS warmup_seeds CASCADE`)
+		s.db.Exec(`DROP TABLE IF EXISTS warmup_smtps CASCADE`)
+	}
+
 	// Create warmup_smtps table
-	_, err := s.db.Exec(`
+	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS warmup_smtps (
 			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
 			smtp_id UUID NOT NULL REFERENCES smtp_servers(id) ON DELETE CASCADE,
