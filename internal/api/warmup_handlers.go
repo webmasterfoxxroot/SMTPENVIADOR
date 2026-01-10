@@ -131,6 +131,7 @@ func (s *Server) initWarmupTables() {
 			subject VARCHAR(500),
 			message_id VARCHAR(255),
 			status VARCHAR(20) DEFAULT 'sent',
+			verified BOOLEAN DEFAULT false,
 			landed_in_spam BOOLEAN DEFAULT false,
 			moved_to_inbox BOOLEAN DEFAULT false,
 			sent_at TIMESTAMP DEFAULT NOW(),
@@ -139,6 +140,12 @@ func (s *Server) initWarmupTables() {
 			created_at TIMESTAMP DEFAULT NOW()
 		)
 	`)
+	if err != nil {
+		log.Printf("[Warmup] Error creating warmup_emails table: %v", err)
+	}
+
+	// Add verified column if missing (migration)
+	s.db.Exec(`ALTER TABLE warmup_emails ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT false`)
 	if err != nil {
 		log.Printf("[Warmup] Error creating warmup_emails table: %v", err)
 	}
@@ -184,6 +191,15 @@ func (s *Server) initWarmupTables() {
 }
 
 func (s *Server) insertDefaultWarmupTemplates() {
+	// Check if we have English templates (need to migrate to Portuguese)
+	var englishCount int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_templates WHERE subject LIKE '%Quick question%' OR subject LIKE '%Thought of you%'`).Scan(&englishCount)
+	if englishCount > 0 {
+		// Delete old English templates and re-insert Portuguese ones
+		s.db.Exec(`DELETE FROM warmup_templates`)
+		log.Println("[Warmup] Migrating templates to Portuguese")
+	}
+
 	var count int
 	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_templates`).Scan(&count)
 	if count > 0 {
@@ -196,25 +212,25 @@ func (s *Server) insertDefaultWarmupTemplates() {
 		category string
 	}{
 		// Business templates
-		{"Quick question about your services", "Hi,\n\nI came across your company and wanted to reach out. Do you have a few minutes to discuss potential collaboration?\n\nBest regards", "business"},
-		{"Following up on our conversation", "Hello,\n\nI wanted to follow up on our previous discussion. Have you had a chance to review the information I sent?\n\nLooking forward to hearing from you.", "business"},
-		{"Partnership opportunity", "Hi there,\n\nI believe there might be a great opportunity for us to work together. Would you be open to a brief call this week?\n\nThanks!", "business"},
-		{"Meeting request", "Hello,\n\nI would like to schedule a meeting to discuss some ideas. What does your availability look like next week?\n\nBest", "business"},
-		{"Introduction", "Hi,\n\nMy name is {{name}} and I'm reaching out because I think we could benefit from connecting. Let me know if you'd be interested in chatting.\n\nRegards", "business"},
+		{"Dúvida sobre seus serviços", "Olá,\n\nEncontrei sua empresa e gostaria de entrar em contato. Você tem alguns minutos para discutir uma possível colaboração?\n\nAtenciosamente", "business"},
+		{"Retornando sobre nossa conversa", "Olá,\n\nGostaria de dar continuidade à nossa conversa anterior. Você teve a chance de revisar as informações que enviei?\n\nAguardo seu retorno.", "business"},
+		{"Oportunidade de parceria", "Olá,\n\nAcredito que pode haver uma ótima oportunidade para trabalharmos juntos. Você estaria disponível para uma breve conversa esta semana?\n\nObrigado!", "business"},
+		{"Solicitação de reunião", "Olá,\n\nGostaria de agendar uma reunião para discutir algumas ideias. Qual seria sua disponibilidade na próxima semana?\n\nAbraços", "business"},
+		{"Apresentação", "Olá,\n\nMeu nome é {{name}} e estou entrando em contato porque acredito que podemos nos beneficiar dessa conexão. Me avise se tiver interesse em conversar.\n\nAtenciosamente", "business"},
 
 		// Casual templates
-		{"Hey, quick question", "Hey!\n\nHope you're doing well. I had a quick question - do you have a moment?\n\nThanks!", "casual"},
-		{"Checking in", "Hi there,\n\nJust wanted to check in and see how things are going. Let me know if you need anything!\n\nCheers", "casual"},
-		{"Thought of you", "Hey,\n\nI saw something today that made me think of you. Hope everything is going great on your end!\n\nTalk soon", "casual"},
-		{"Long time no talk", "Hi!\n\nIt's been a while since we last connected. How have you been? Would love to catch up sometime.\n\nBest", "casual"},
-		{"Quick update", "Hey,\n\nJust wanted to give you a quick update on things. Let me know when you have a few minutes to chat.\n\nThanks!", "casual"},
+		{"Ei, uma pergunta rápida", "Oi!\n\nEspero que esteja tudo bem. Tenho uma pergunta rápida - você tem um momento?\n\nObrigado!", "casual"},
+		{"Passando para ver como está", "Olá,\n\nSó queria saber como estão as coisas por aí. Me avise se precisar de algo!\n\nAbraços", "casual"},
+		{"Lembrei de você", "Oi,\n\nVi algo hoje que me fez lembrar de você. Espero que esteja tudo ótimo!\n\nFalamos em breve", "casual"},
+		{"Faz tempo que não conversamos", "Oi!\n\nFaz um tempo desde a última vez que nos falamos. Como você tem estado? Adoraria colocar o papo em dia.\n\nAbraços", "casual"},
+		{"Atualização rápida", "Oi,\n\nSó queria te dar uma atualização rápida sobre as coisas. Me avise quando tiver alguns minutos para conversar.\n\nObrigado!", "casual"},
 
 		// Newsletter style
-		{"Weekly digest", "Hello,\n\nHere's your weekly roundup of industry news and updates. Check out the highlights below.\n\nStay informed!", "newsletter"},
-		{"Don't miss out", "Hi,\n\nWe have some exciting updates to share with you. Take a look when you get a chance!\n\nBest regards", "newsletter"},
-		{"Your monthly summary", "Hello,\n\nHere's a summary of what happened this month. Some great progress has been made!\n\nCheers", "newsletter"},
-		{"New features available", "Hi there,\n\nWe've just released some new features that you might find interesting. Check them out!\n\nThanks for your continued support", "newsletter"},
-		{"Important announcement", "Hello,\n\nWe have an important announcement to share with you. Please take a moment to read through.\n\nThank you!", "newsletter"},
+		{"Resumo semanal", "Olá,\n\nAqui está seu resumo semanal de notícias e atualizações do setor. Confira os destaques abaixo.\n\nMantenha-se informado!", "newsletter"},
+		{"Não perca", "Olá,\n\nTemos algumas novidades empolgantes para compartilhar com você. Dê uma olhada quando puder!\n\nAtenciosamente", "newsletter"},
+		{"Seu resumo mensal", "Olá,\n\nAqui está um resumo do que aconteceu este mês. Muito progresso foi feito!\n\nAbraços", "newsletter"},
+		{"Novos recursos disponíveis", "Olá,\n\nAcabamos de lançar alguns novos recursos que podem te interessar. Confira!\n\nObrigado pelo apoio contínuo", "newsletter"},
+		{"Comunicado importante", "Olá,\n\nTemos um comunicado importante para compartilhar com você. Por favor, reserve um momento para ler.\n\nObrigado!", "newsletter"},
 	}
 
 	for _, t := range templates {
@@ -761,10 +777,10 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 		LEFT JOIN (
 			SELECT
 				seed_id,
-				COUNT(*) as total_received,
-				COUNT(CASE WHEN landed_in_spam = false THEN 1 END) as total_inbox,
-				COUNT(CASE WHEN landed_in_spam = true THEN 1 END) as total_spam,
-				COUNT(CASE WHEN moved_to_inbox = true THEN 1 END) as total_moved,
+				COUNT(CASE WHEN verified = true THEN 1 END) as total_received,
+				COUNT(CASE WHEN verified = true AND landed_in_spam = false THEN 1 END) as total_inbox,
+				COUNT(CASE WHEN verified = true AND landed_in_spam = true THEN 1 END) as total_spam,
+				COUNT(CASE WHEN verified = true AND moved_to_inbox = true THEN 1 END) as total_moved,
 				COUNT(CASE WHEN replied_at IS NOT NULL THEN 1 END) as total_replied
 			FROM warmup_emails
 			GROUP BY seed_id
@@ -1790,6 +1806,17 @@ func (s *Server) checkMailbox(c *client.Client, seedID, mailbox string, isSpam b
 		singleSeq.AddNum(msg.SeqNum)
 		c.Store(singleSeq, item, flags, nil)
 
+		// Check if already verified (avoid counting twice)
+		var alreadyVerified bool
+		s.db.QueryRow(`SELECT verified FROM warmup_emails WHERE id = $1`, warmupEmailID).Scan(&alreadyVerified)
+
+		if alreadyVerified {
+			continue // Already processed this email
+		}
+
+		// Mark as verified - we confirmed the email arrived
+		s.db.Exec(`UPDATE warmup_emails SET verified = true WHERE id = $1`, warmupEmailID)
+
 		if isSpam {
 			// Move from spam to inbox
 			s.db.Exec(`UPDATE warmup_emails SET landed_in_spam = true WHERE id = $1`, warmupEmailID)
@@ -1874,16 +1901,16 @@ func (s *Server) maybeReplyToWarmupEmail(c *client.Client, seedID, email, passwo
 
 func getRandomReplyBody() string {
 	replies := []string{
-		"Thanks for reaching out! I'll get back to you soon.",
-		"Got it, thanks for the information.",
-		"Thank you for your message. I'll review and respond shortly.",
-		"Received, thanks!",
-		"Thanks for the update. I appreciate it.",
-		"Perfect, thank you for letting me know.",
-		"Great, I'll take a look at this.",
-		"Thanks! I'll be in touch.",
-		"Noted. Thanks for sending this over.",
-		"Thank you, I'll follow up on this soon.",
+		"Obrigado por entrar em contato! Retorno em breve.",
+		"Recebi, obrigado pela informação.",
+		"Obrigado pela mensagem. Vou analisar e respondo em breve.",
+		"Recebido, obrigado!",
+		"Obrigado pela atualização. Agradeço!",
+		"Perfeito, obrigado por avisar.",
+		"Ótimo, vou dar uma olhada nisso.",
+		"Obrigado! Entro em contato em breve.",
+		"Anotado. Obrigado por enviar.",
+		"Obrigado, vou dar seguimento nisso em breve.",
 	}
 	return replies[rand.Intn(len(replies))]
 }
