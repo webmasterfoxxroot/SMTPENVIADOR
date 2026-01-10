@@ -1046,6 +1046,16 @@ function Warmup() {
     }
   }
 
+  const checkIMAP = async () => {
+    try {
+      await api.post('/warmup/check-imap')
+      toast.success('Verificação IMAP iniciada! Aguarde...')
+      setTimeout(fetchAll, 3000)
+    } catch (error) {
+      toast.error('Erro ao verificar IMAP')
+    }
+  }
+
   const deleteSeed = async (id) => {
     if (!confirm('Remover esta conta seed?')) return
     try {
@@ -1260,7 +1270,16 @@ function Warmup() {
       <div className="bg-white rounded-2xl p-6 border border-gray-100 mb-6">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold text-gray-900">Contas Seed (IMAP)</h3>
-          <span className="text-sm text-gray-500">{seeds.length} contas</span>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={checkIMAP}
+              className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors text-sm"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Verificar Emails
+            </button>
+            <span className="text-sm text-gray-500">{seeds.length} contas</span>
+          </div>
         </div>
 
         {seeds.length === 0 ? (
