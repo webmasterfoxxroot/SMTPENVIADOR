@@ -933,7 +933,39 @@ function Warmup() {
 
   useEffect(() => {
     fetchAll()
+
+    // Auto-refresh every 10 seconds
+    const interval = setInterval(() => {
+      fetchAllSilent()
+    }, 10000)
+
+    return () => clearInterval(interval)
   }, [])
+
+  // Silent fetch without loading state (for auto-refresh)
+  const fetchAllSilent = async () => {
+    try {
+      const availableRes = await api.get('/smtp')
+      setAvailableSMTPs(availableRes.data?.data || [])
+
+      try {
+        const [statsRes, smtpsRes, seedsRes, activityRes] = await Promise.all([
+          api.get('/warmup/stats'),
+          api.get('/warmup/smtps'),
+          api.get('/warmup/seeds'),
+          api.get('/warmup/activity')
+        ])
+        setStats(statsRes.data || {})
+        setWarmupSMTPs(smtpsRes.data || [])
+        setSeeds(seedsRes.data || [])
+        setActivity(activityRes.data || [])
+      } catch (warmupError) {
+        // Silent fail for auto-refresh
+      }
+    } catch (error) {
+      // Silent fail for auto-refresh
+    }
+  }
 
   const fetchAll = async () => {
     setLoading(true)
