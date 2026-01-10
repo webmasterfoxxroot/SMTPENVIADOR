@@ -540,7 +540,7 @@ func (s *Server) triggerWarmupSMTP(c *fiber.Ctx) error {
 	sent := 0
 	errors := []string{}
 	for i := 0; i < count; i++ {
-		err := s.sendWarmupEmailWithResult(id, host, port, username, password, tlsMode, replyRate)
+		err := s.sendWarmupEmailWithResult(id, smtpID, host, port, username, password, tlsMode, replyRate)
 		if err != nil {
 			errors = append(errors, err.Error())
 		} else {
@@ -561,7 +561,7 @@ func (s *Server) triggerWarmupSMTP(c *fiber.Ctx) error {
 }
 
 // sendWarmupEmailWithResult sends a warmup email and returns error if any
-func (s *Server) sendWarmupEmailWithResult(warmupID, host string, port int, username, password, tlsMode string, replyRate int) error {
+func (s *Server) sendWarmupEmailWithResult(warmupID, smtpID, host string, port int, username, password, tlsMode string, replyRate int) error {
 	// Get a random active seed
 	var seedID, seedEmail string
 	err := s.db.QueryRow(`
@@ -573,6 +573,27 @@ func (s *Server) sendWarmupEmailWithResult(warmupID, host string, port int, user
 
 	if err != nil {
 		return fmt.Errorf("no active seeds available")
+	}
+
+	// Get a random sender from smtp_senders (or fall back to username)
+	var senderEmail string
+	var senderName sql.NullString
+	err = s.db.QueryRow(`
+		SELECT email, name FROM smtp_senders
+		WHERE smtp_id = $1 AND active = true
+		ORDER BY RANDOM()
+		LIMIT 1
+	`, smtpID).Scan(&senderEmail, &senderName)
+
+	if err != nil || senderEmail == "" {
+		// Fall back to SMTP username if no senders configured
+		senderEmail = username
+	}
+
+	// Format From address with name if available
+	fromAddress := senderEmail
+	if senderName.Valid && senderName.String != "" {
+		fromAddress = fmt.Sprintf("%s <%s>", senderName.String, senderEmail)
 	}
 
 	// Get a random template
@@ -595,7 +616,7 @@ func (s *Server) sendWarmupEmailWithResult(warmupID, host string, port int, user
 	messageID := fmt.Sprintf("<%s@warmup>", uuid.New().String())
 
 	// Send email via SMTP
-	err = s.sendSMTPEmail(host, port, username, password, tlsMode, seedEmail, subject, body, messageID)
+	err = s.sendSMTPEmail(host, port, username, password, tlsMode, fromAddress, seedEmail, subject, body, messageID)
 	if err != nil {
 		return fmt.Errorf("SMTP error: %v", err)
 	}
@@ -616,7 +637,10 @@ func (s *Server) sendWarmupEmailWithResult(warmupID, host string, port int, user
 	// Update daily stats
 	s.updateWarmupDailyStats(warmupID, "sent")
 
-	log.Printf("[Warmup Manual] ✉️ Sent to %s: %s", seedEmail, subject)
+	// Update sender stats
+	s.db.Exec(`UPDATE smtp_senders SET total_sent = total_sent + 1 WHERE email = $1 AND smtp_id = $2`, senderEmail, smtpID)
+
+	log.Printf("[Warmup Manual] ✉️ Sent from %s to %s: %s", senderEmail, seedEmail, subject)
 	return nil
 }
 
@@ -1288,7 +1312,7 @@ func (s *Server) processWarmupEmails() {
 		// Send warmup emails
 		log.Printf("[Warmup Engine] SMTP %s: Sending %d emails this minute (remaining: %d)", warmupID, emailsPerMinute, remaining)
 		for i := 0; i < emailsPerMinute; i++ {
-			s.sendWarmupEmail(warmupID, host, port, username, password, tlsMode, replyRate)
+			s.sendWarmupEmail(warmupID, smtpID, host, port, username, password, tlsMode, replyRate)
 		}
 	}
 }
@@ -1319,7 +1343,7 @@ func (s *Server) calculateDailyLimit(recipeType string, currentDay, minEmails, m
 	}
 }
 
-func (s *Server) sendWarmupEmail(warmupID, host string, port int, username, password, tlsMode string, replyRate int) {
+func (s *Server) sendWarmupEmail(warmupID, smtpID, host string, port int, username, password, tlsMode string, replyRate int) {
 	// Get a random active seed
 	var seedID, seedEmail string
 	err := s.db.QueryRow(`
@@ -1332,6 +1356,28 @@ func (s *Server) sendWarmupEmail(warmupID, host string, port int, username, pass
 	if err != nil {
 		log.Printf("[Warmup] No active seeds available")
 		return
+	}
+
+	// Get a random sender from smtp_senders (or fall back to username)
+	var senderEmail string
+	var senderName sql.NullString
+	err = s.db.QueryRow(`
+		SELECT email, name FROM smtp_senders
+		WHERE smtp_id = $1 AND active = true
+		ORDER BY RANDOM()
+		LIMIT 1
+	`, smtpID).Scan(&senderEmail, &senderName)
+
+	if err != nil || senderEmail == "" {
+		// Fall back to SMTP username if no senders configured
+		senderEmail = username
+		log.Printf("[Warmup] No senders configured for SMTP, using username: %s", username)
+	}
+
+	// Format From address with name if available
+	fromAddress := senderEmail
+	if senderName.Valid && senderName.String != "" {
+		fromAddress = fmt.Sprintf("%s <%s>", senderName.String, senderEmail)
 	}
 
 	// Get a random template
@@ -1355,9 +1401,9 @@ func (s *Server) sendWarmupEmail(warmupID, host string, port int, username, pass
 	messageID := fmt.Sprintf("<%s@warmup>", uuid.New().String())
 
 	// Send email via SMTP
-	err = s.sendSMTPEmail(host, port, username, password, tlsMode, seedEmail, subject, body, messageID)
+	err = s.sendSMTPEmail(host, port, username, password, tlsMode, fromAddress, seedEmail, subject, body, messageID)
 	if err != nil {
-		log.Printf("[Warmup] Failed to send to %s: %v", seedEmail, err)
+		log.Printf("[Warmup] Failed to send from %s to %s: %v", senderEmail, seedEmail, err)
 		return
 	}
 
@@ -1377,11 +1423,22 @@ func (s *Server) sendWarmupEmail(warmupID, host string, port int, username, pass
 	// Update daily stats
 	s.updateWarmupDailyStats(warmupID, "sent")
 
-	log.Printf("[Warmup] ✉️ Sent to %s: %s", seedEmail, subject)
+	// Update sender stats
+	s.db.Exec(`UPDATE smtp_senders SET total_sent = total_sent + 1 WHERE email = $1 AND smtp_id = $2`, senderEmail, smtpID)
+
+	log.Printf("[Warmup] ✉️ Sent from %s to %s: %s", senderEmail, seedEmail, subject)
 }
 
-func (s *Server) sendSMTPEmail(host string, port int, username, password, tlsMode, to, subject, body, messageID string) error {
-	from := username
+func (s *Server) sendSMTPEmail(host string, port int, username, password, tlsMode, from, to, subject, body, messageID string) error {
+	// Extract email from "Name <email>" format if present
+	fromEmail := from
+	if strings.Contains(from, "<") && strings.Contains(from, ">") {
+		start := strings.Index(from, "<") + 1
+		end := strings.Index(from, ">")
+		if start > 0 && end > start {
+			fromEmail = from[start:end]
+		}
+	}
 
 	msg := fmt.Sprintf("From: %s\r\n"+
 		"To: %s\r\n"+
@@ -1421,7 +1478,7 @@ func (s *Server) sendSMTPEmail(host string, port int, username, password, tlsMod
 			}
 		}
 
-		if err := client.Mail(from); err != nil {
+		if err := client.Mail(fromEmail); err != nil {
 			return fmt.Errorf("MAIL error: %v", err)
 		}
 		if err := client.Rcpt(to); err != nil {
@@ -1474,7 +1531,7 @@ func (s *Server) sendSMTPEmail(host string, port int, username, password, tlsMod
 		}
 	}
 
-	if err := client.Mail(from); err != nil {
+	if err := client.Mail(fromEmail); err != nil {
 		return fmt.Errorf("MAIL error: %v", err)
 	}
 	if err := client.Rcpt(to); err != nil {
@@ -1736,8 +1793,8 @@ func (s *Server) maybeReplyToWarmupEmail(c *client.Client, seedID, email, passwo
 	}
 
 	replyMessageID := fmt.Sprintf("<%s@warmup-reply>", uuid.New().String())
-	// Seeds typically use STARTTLS
-	err = s.sendSMTPEmail(seedSMTPHost, seedSMTPPort, email, password, "starttls", smtpUsername, replySubject, replyBody, replyMessageID)
+	// Seeds typically use STARTTLS - seed email is the From address
+	err = s.sendSMTPEmail(seedSMTPHost, seedSMTPPort, email, password, "starttls", email, smtpUsername, replySubject, replyBody, replyMessageID)
 
 	if err != nil {
 		log.Printf("[Warmup Reply] Failed to send reply: %v", err)
