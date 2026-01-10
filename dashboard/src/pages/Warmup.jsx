@@ -270,57 +270,53 @@ function EditWarmupModal({ warmupSMTP, onClose, onSave }) {
           const parsed = JSON.parse(warmupSMTP.custom_schedule)
           setSchedule(parsed)
         } catch {
-          generateSchedule()
+          generateSchedule(form.recipe_type, form.min_emails_per_day, form.max_emails_per_day)
         }
       } else {
-        generateSchedule()
+        generateSchedule(form.recipe_type, form.min_emails_per_day, form.max_emails_per_day)
       }
     } catch (error) {
       console.error('Error loading stats:', error)
-      generateSchedule()
+      generateSchedule(form.recipe_type, form.min_emails_per_day, form.max_emails_per_day)
     } finally {
       setLoadingStats(false)
     }
   }
 
-  const generateSchedule = () => {
+  const generateSchedule = (type, minEmails, maxEmails) => {
     const days = 45
     const newSchedule = []
-    const increment = (form.max_emails_per_day - form.min_emails_per_day) / (days - 1)
+    const increment = (maxEmails - minEmails) / (days - 1)
 
     for (let i = 0; i < days; i++) {
-      let value = form.min_emails_per_day + Math.round(i * increment)
-      if (form.recipe_type === 'flat') {
-        value = form.min_emails_per_day
-      } else if (form.recipe_type === 'randomized') {
-        value = form.min_emails_per_day + Math.floor(Math.random() * (form.max_emails_per_day - form.min_emails_per_day + 1))
+      let value
+      if (type === 'flat') {
+        value = minEmails
+      } else if (type === 'randomized') {
+        value = minEmails + Math.floor(Math.random() * (maxEmails - minEmails + 1))
+      } else if (type === 'progressive') {
+        value = minEmails + Math.round(i * increment)
+      } else {
+        value = minEmails
       }
-      newSchedule.push(Math.min(value, form.max_emails_per_day))
+      newSchedule.push(Math.min(value, maxEmails))
     }
     setSchedule(newSchedule)
   }
 
   const handleRecipeChange = (type) => {
     setForm({ ...form, recipe_type: type })
-    // Regenerate schedule based on type
-    const days = schedule.length || 45
-    const newSchedule = []
-    const increment = (form.max_emails_per_day - form.min_emails_per_day) / (days - 1)
+    generateSchedule(type, form.min_emails_per_day, form.max_emails_per_day)
+  }
 
-    for (let i = 0; i < days; i++) {
-      let value
-      if (type === 'flat') {
-        value = form.min_emails_per_day
-      } else if (type === 'randomized') {
-        value = form.min_emails_per_day + Math.floor(Math.random() * (form.max_emails_per_day - form.min_emails_per_day + 1))
-      } else if (type === 'progressive') {
-        value = form.min_emails_per_day + Math.round(i * increment)
-      } else {
-        value = schedule[i] || form.min_emails_per_day
-      }
-      newSchedule.push(Math.min(value, form.max_emails_per_day))
-    }
-    setSchedule(newSchedule)
+  const handleMinChange = (val) => {
+    setForm({ ...form, min_emails_per_day: val })
+    generateSchedule(form.recipe_type, val, form.max_emails_per_day)
+  }
+
+  const handleMaxChange = (val) => {
+    setForm({ ...form, max_emails_per_day: val })
+    generateSchedule(form.recipe_type, form.min_emails_per_day, val)
   }
 
   const handleSubmit = async () => {
@@ -403,9 +399,8 @@ function EditWarmupModal({ warmupSMTP, onClose, onSave }) {
               <input
                 type="number"
                 value={form.min_emails_per_day}
-                onChange={(e) => setForm({ ...form, min_emails_per_day: parseInt(e.target.value) || 1 })}
+                onChange={(e) => handleMinChange(parseInt(e.target.value) || 1)}
                 min="1"
-                max="50"
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
               />
             </div>
@@ -414,9 +409,8 @@ function EditWarmupModal({ warmupSMTP, onClose, onSave }) {
               <input
                 type="number"
                 value={form.max_emails_per_day}
-                onChange={(e) => setForm({ ...form, max_emails_per_day: parseInt(e.target.value) || 40 })}
+                onChange={(e) => handleMaxChange(parseInt(e.target.value) || 40)}
                 min="1"
-                max="50"
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
               />
             </div>
@@ -553,33 +547,43 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
 
   // Gerar schedule inicial
   useEffect(() => {
-    generateSchedule(form.recipe_type)
+    generateSchedule(form.recipe_type, form.min_emails_per_day, form.max_emails_per_day)
   }, [])
 
-  const generateSchedule = (type) => {
+  const generateSchedule = (type, minEmails, maxEmails) => {
     const days = 45
     const newSchedule = []
-    const increment = (form.max_emails_per_day - form.min_emails_per_day) / (days - 1)
+    const increment = (maxEmails - minEmails) / (days - 1)
 
     for (let i = 0; i < days; i++) {
       let value
       if (type === 'flat') {
-        value = form.min_emails_per_day
+        value = minEmails
       } else if (type === 'randomized') {
-        value = form.min_emails_per_day + Math.floor(Math.random() * (form.max_emails_per_day - form.min_emails_per_day + 1))
+        value = minEmails + Math.floor(Math.random() * (maxEmails - minEmails + 1))
       } else if (type === 'progressive') {
-        value = form.min_emails_per_day + Math.round(i * increment)
+        value = minEmails + Math.round(i * increment)
       } else {
-        value = form.min_emails_per_day
+        value = minEmails
       }
-      newSchedule.push(Math.min(value, form.max_emails_per_day))
+      newSchedule.push(Math.min(value, maxEmails))
     }
     setSchedule(newSchedule)
   }
 
   const handleRecipeChange = (type) => {
     setForm({ ...form, recipe_type: type })
-    generateSchedule(type)
+    generateSchedule(type, form.min_emails_per_day, form.max_emails_per_day)
+  }
+
+  const handleMinChange = (val) => {
+    setForm({ ...form, min_emails_per_day: val })
+    generateSchedule(form.recipe_type, val, form.max_emails_per_day)
+  }
+
+  const handleMaxChange = (val) => {
+    setForm({ ...form, max_emails_per_day: val })
+    generateSchedule(form.recipe_type, form.min_emails_per_day, val)
   }
 
   const handleSubmit = async (e) => {
@@ -682,13 +686,8 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
               <input
                 type="number"
                 value={form.min_emails_per_day}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value) || 1
-                  setForm({ ...form, min_emails_per_day: val })
-                  generateSchedule(form.recipe_type)
-                }}
+                onChange={(e) => handleMinChange(parseInt(e.target.value) || 1)}
                 min="1"
-                max="50"
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
               />
             </div>
@@ -697,13 +696,8 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
               <input
                 type="number"
                 value={form.max_emails_per_day}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value) || 40
-                  setForm({ ...form, max_emails_per_day: val })
-                  generateSchedule(form.recipe_type)
-                }}
+                onChange={(e) => handleMaxChange(parseInt(e.target.value) || 40)}
                 min="1"
-                max="50"
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
               />
             </div>
