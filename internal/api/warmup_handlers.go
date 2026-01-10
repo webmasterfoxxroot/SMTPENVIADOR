@@ -769,7 +769,7 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 		SELECT
 			ws.id, ws.email, ws.provider, ws.imap_host, ws.imap_port, ws.smtp_host, ws.smtp_port,
 			ws.use_tls, ws.status, ws.last_check, ws.error_message, ws.created_at,
-			COALESCE(ws.total_sent, 0) as total_sent,
+			COALESCE(ws.total_sent, 0) + COALESCE(stats.total_replied, 0) as total_sent,
 			COALESCE(stats.total_received, 0) as total_received,
 			COALESCE(stats.total_inbox, 0) as total_inbox,
 			COALESCE(stats.total_spam, 0) as total_spam,
