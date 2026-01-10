@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net"
 	"net/smtp"
 	"strings"
 	"time"
@@ -1400,51 +1401,100 @@ func (s *Server) sendSMTPEmail(host string, port int, username, password, tlsMod
 
 	// tls_mode: "none", "starttls", "tls" (implicit TLS)
 	if tlsMode == "tls" || port == 465 {
-		// Direct TLS connection
+		// Direct TLS connection (implicit TLS)
 		tlsConfig := &tls.Config{ServerName: host}
 		conn, err := tls.Dial("tcp", addr, tlsConfig)
 		if err != nil {
-			return err
+			return fmt.Errorf("TLS dial error: %v", err)
 		}
 		defer conn.Close()
 
 		client, err := smtp.NewClient(conn, host)
 		if err != nil {
-			return err
+			return fmt.Errorf("SMTP client error: %v", err)
 		}
 		defer client.Close()
 
 		if auth != nil {
 			if err := client.Auth(auth); err != nil {
-				return err
+				return fmt.Errorf("auth error: %v", err)
 			}
 		}
 
 		if err := client.Mail(from); err != nil {
-			return err
+			return fmt.Errorf("MAIL error: %v", err)
 		}
 		if err := client.Rcpt(to); err != nil {
-			return err
+			return fmt.Errorf("RCPT error: %v", err)
 		}
 
 		w, err := client.Data()
 		if err != nil {
-			return err
+			return fmt.Errorf("DATA error: %v", err)
 		}
 		_, err = w.Write([]byte(msg))
 		if err != nil {
-			return err
+			return fmt.Errorf("write error: %v", err)
 		}
 		err = w.Close()
 		if err != nil {
-			return err
+			return fmt.Errorf("close error: %v", err)
 		}
 
 		return client.Quit()
 	}
 
-	// STARTTLS
-	return smtp.SendMail(addr, auth, from, []string{to}, []byte(msg))
+	// STARTTLS or none - use manual connection with STARTTLS upgrade
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("dial error: %v", err)
+	}
+	defer conn.Close()
+
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		return fmt.Errorf("SMTP client error: %v", err)
+	}
+	defer client.Close()
+
+	// Try STARTTLS if available (most servers require it)
+	if ok, _ := client.Extension("STARTTLS"); ok {
+		tlsConfig := &tls.Config{ServerName: host}
+		if err := client.StartTLS(tlsConfig); err != nil {
+			return fmt.Errorf("STARTTLS error: %v", err)
+		}
+	} else if tlsMode == "starttls" {
+		// STARTTLS required but not available
+		return fmt.Errorf("STARTTLS not supported by server")
+	}
+
+	if auth != nil {
+		if err := client.Auth(auth); err != nil {
+			return fmt.Errorf("auth error: %v", err)
+		}
+	}
+
+	if err := client.Mail(from); err != nil {
+		return fmt.Errorf("MAIL error: %v", err)
+	}
+	if err := client.Rcpt(to); err != nil {
+		return fmt.Errorf("RCPT error: %v", err)
+	}
+
+	w, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("DATA error: %v", err)
+	}
+	_, err = w.Write([]byte(msg))
+	if err != nil {
+		return fmt.Errorf("write error: %v", err)
+	}
+	err = w.Close()
+	if err != nil {
+		return fmt.Errorf("close error: %v", err)
+	}
+
+	return client.Quit()
 }
 
 func (s *Server) updateWarmupDailyStats(warmupID, statType string) {
