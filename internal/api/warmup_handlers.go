@@ -988,7 +988,7 @@ func (s *Server) processWarmupEmails() {
 	rows, err := s.db.Query(`
 		SELECT w.id, w.smtp_id, w.current_day, w.min_emails_per_day, w.max_emails_per_day,
 			   w.recipe_type, w.custom_schedule, w.reply_rate, w.start_hour, w.end_hour,
-			   s.host, s.port, s.username, s.password, s.tls
+			   s.host, s.port, s.username, s.password, s.tls_mode
 		FROM warmup_smtps w
 		JOIN smtp_servers s ON w.smtp_id = s.id
 		WHERE w.status = 'active'
@@ -1004,13 +1004,12 @@ func (s *Server) processWarmupEmails() {
 		var warmupID, smtpID, recipeType string
 		var currentDay, minEmails, maxEmails, replyRate, startHour, endHour int
 		var customSchedule sql.NullString
-		var host, username, password string
+		var host, username, password, tlsMode string
 		var port int
-		var useTLS bool
 
 		rows.Scan(&warmupID, &smtpID, &currentDay, &minEmails, &maxEmails,
 			&recipeType, &customSchedule, &replyRate, &startHour, &endHour,
-			&host, &port, &username, &password, &useTLS)
+			&host, &port, &username, &password, &tlsMode)
 
 		// Check if within sending hours
 		if currentHour < startHour || currentHour >= endHour {
@@ -1049,7 +1048,7 @@ func (s *Server) processWarmupEmails() {
 
 		// Send warmup emails
 		for i := 0; i < emailsPerMinute; i++ {
-			s.sendWarmupEmail(warmupID, host, port, username, password, useTLS, replyRate)
+			s.sendWarmupEmail(warmupID, host, port, username, password, tlsMode, replyRate)
 		}
 	}
 }
@@ -1080,7 +1079,7 @@ func (s *Server) calculateDailyLimit(recipeType string, currentDay, minEmails, m
 	}
 }
 
-func (s *Server) sendWarmupEmail(warmupID, host string, port int, username, password string, useTLS bool, replyRate int) {
+func (s *Server) sendWarmupEmail(warmupID, host string, port int, username, password, tlsMode string, replyRate int) {
 	// Get a random active seed
 	var seedID, seedEmail string
 	err := s.db.QueryRow(`
@@ -1116,7 +1115,7 @@ func (s *Server) sendWarmupEmail(warmupID, host string, port int, username, pass
 	messageID := fmt.Sprintf("<%s@warmup>", uuid.New().String())
 
 	// Send email via SMTP
-	err = s.sendSMTPEmail(host, port, username, password, useTLS, seedEmail, subject, body, messageID)
+	err = s.sendSMTPEmail(host, port, username, password, tlsMode, seedEmail, subject, body, messageID)
 	if err != nil {
 		log.Printf("[Warmup] Failed to send to %s: %v", seedEmail, err)
 		return
@@ -1141,7 +1140,7 @@ func (s *Server) sendWarmupEmail(warmupID, host string, port int, username, pass
 	log.Printf("[Warmup] ✉️ Sent to %s: %s", seedEmail, subject)
 }
 
-func (s *Server) sendSMTPEmail(host string, port int, username, password string, useTLS bool, to, subject, body, messageID string) error {
+func (s *Server) sendSMTPEmail(host string, port int, username, password, tlsMode, to, subject, body, messageID string) error {
 	from := username
 
 	msg := fmt.Sprintf("From: %s\r\n"+
@@ -1160,7 +1159,8 @@ func (s *Server) sendSMTPEmail(host string, port int, username, password string,
 		auth = smtp.PlainAuth("", username, password, host)
 	}
 
-	if useTLS || port == 465 {
+	// tls_mode: "none", "starttls", "tls" (implicit TLS)
+	if tlsMode == "tls" || port == 465 {
 		// Direct TLS connection
 		tlsConfig := &tls.Config{ServerName: host}
 		conn, err := tls.Dial("tcp", addr, tlsConfig)
@@ -1397,13 +1397,12 @@ func (s *Server) checkMailbox(c *client.Client, seedID, mailbox string, isSpam b
 func (s *Server) maybeReplyToWarmupEmail(c *client.Client, seedID, email, password, imapHost string) {
 	// Get a warmup email that hasn't been replied to
 	var warmupEmailID, warmupSMTPID, originalSubject, messageID string
-	var smtpHost, smtpUsername, smtpPassword string
+	var smtpHost, smtpUsername, smtpPassword, smtpTLSMode string
 	var smtpPort int
-	var smtpTLS bool
 
 	err := s.db.QueryRow(`
 		SELECT e.id, e.warmup_smtp_id, e.subject, e.message_id,
-			   s.host, s.port, s.username, s.password, s.tls
+			   s.host, s.port, s.username, s.password, s.tls_mode
 		FROM warmup_emails e
 		JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
 		JOIN smtp_servers s ON w.smtp_id = s.id
@@ -1411,7 +1410,7 @@ func (s *Server) maybeReplyToWarmupEmail(c *client.Client, seedID, email, passwo
 		ORDER BY RANDOM()
 		LIMIT 1
 	`, seedID).Scan(&warmupEmailID, &warmupSMTPID, &originalSubject, &messageID,
-		&smtpHost, &smtpPort, &smtpUsername, &smtpPassword, &smtpTLS)
+		&smtpHost, &smtpPort, &smtpUsername, &smtpPassword, &smtpTLSMode)
 
 	if err != nil {
 		return
@@ -1439,7 +1438,8 @@ func (s *Server) maybeReplyToWarmupEmail(c *client.Client, seedID, email, passwo
 	}
 
 	replyMessageID := fmt.Sprintf("<%s@warmup-reply>", uuid.New().String())
-	err = s.sendSMTPEmail(seedSMTPHost, seedSMTPPort, email, password, true, smtpUsername, replySubject, replyBody, replyMessageID)
+	// Seeds typically use STARTTLS
+	err = s.sendSMTPEmail(seedSMTPHost, seedSMTPPort, email, password, "starttls", smtpUsername, replySubject, replyBody, replyMessageID)
 
 	if err != nil {
 		log.Printf("[Warmup Reply] Failed to send reply: %v", err)

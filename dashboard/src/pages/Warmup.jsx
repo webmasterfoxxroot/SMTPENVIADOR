@@ -23,7 +23,9 @@ import {
   ChevronDown,
   RefreshCw,
   Edit,
-  Save
+  Save,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
@@ -31,11 +33,16 @@ import api from '../services/api'
 // Componente do grafico interativo de barras com circulos arrastaveis
 function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
   const chartRef = useRef(null)
+  const sliderRef = useRef(null)
   const [dragging, setDragging] = useState(null)
+  const [startIndex, setStartIndex] = useState(0)
+  const [isDraggingSlider, setIsDraggingSlider] = useState(false)
+  const visibleBars = 15
+  const totalBars = schedule.length
 
   const handleMouseDown = (index, e) => {
     e.preventDefault()
-    setDragging(index)
+    setDragging(startIndex + index)
   }
 
   const handleMouseMove = (e) => {
@@ -43,7 +50,7 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
 
     const rect = chartRef.current.getBoundingClientRect()
     const y = e.clientY - rect.top
-    const chartHeight = rect.height - 50 // espaço para labels
+    const chartHeight = rect.height - 50
     const value = Math.round(maxEmails - (y / chartHeight) * maxEmails)
     const clampedValue = Math.max(1, Math.min(maxEmails, value))
 
@@ -54,11 +61,37 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
 
   const handleMouseUp = () => {
     setDragging(null)
+    setIsDraggingSlider(false)
+  }
+
+  // Slider drag handling
+  const handleSliderMouseDown = (e) => {
+    e.preventDefault()
+    setIsDraggingSlider(true)
+    updateSliderPosition(e)
+  }
+
+  const updateSliderPosition = (e) => {
+    if (!sliderRef.current) return
+    const rect = sliderRef.current.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const percentage = Math.max(0, Math.min(1, x / rect.width))
+    const newStartIndex = Math.round(percentage * (totalBars - visibleBars))
+    setStartIndex(Math.max(0, Math.min(newStartIndex, totalBars - visibleBars)))
+  }
+
+  const handleSliderMouseMove = (e) => {
+    if (isDraggingSlider) {
+      updateSliderPosition(e)
+    }
   }
 
   useEffect(() => {
-    if (dragging !== null) {
-      const handleMove = (e) => handleMouseMove(e)
+    if (dragging !== null || isDraggingSlider) {
+      const handleMove = (e) => {
+        handleMouseMove(e)
+        handleSliderMouseMove(e)
+      }
       const handleUp = () => handleMouseUp()
 
       window.addEventListener('mousemove', handleMove)
@@ -68,9 +101,8 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
         window.removeEventListener('mouseup', handleUp)
       }
     }
-  }, [dragging, schedule])
+  }, [dragging, isDraggingSlider, schedule])
 
-  // Gerar labels de data
   const getDateLabel = (index) => {
     const date = new Date(startDate || new Date())
     date.setDate(date.getDate() + index)
@@ -80,14 +112,52 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
   const maxValue = Math.max(...schedule, maxEmails)
   const yAxisSteps = [0, Math.round(maxValue * 0.25), Math.round(maxValue * 0.5), Math.round(maxValue * 0.75), maxValue]
 
+  const canGoLeft = startIndex > 0
+  const canGoRight = startIndex < totalBars - visibleBars
+  const sliderWidth = (visibleBars / totalBars) * 100
+  const sliderPosition = (startIndex / (totalBars - visibleBars || 1)) * (100 - sliderWidth)
+
+  const goLeft = () => setStartIndex(Math.max(0, startIndex - visibleBars))
+  const goRight = () => setStartIndex(Math.min(totalBars - visibleBars, startIndex + visibleBars))
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-6">
-      {/* Slider track visual */}
-      <div className="mb-4">
-        <div className="h-2 bg-gray-200 rounded-full relative">
+      {/* Navigation header */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-sm text-gray-500">
+          Dias {startIndex + 1} - {Math.min(startIndex + visibleBars, totalBars)} de {totalBars}
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={goLeft}
+            disabled={!canGoLeft}
+            className={`p-2 rounded-lg transition-colors ${canGoLeft ? 'hover:bg-gray-100 text-gray-600' : 'text-gray-300 cursor-not-allowed'}`}
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <button
+            onClick={goRight}
+            disabled={!canGoRight}
+            className={`p-2 rounded-lg transition-colors ${canGoRight ? 'hover:bg-gray-100 text-gray-600' : 'text-gray-300 cursor-not-allowed'}`}
+          >
+            <ChevronRight className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Slider track - draggable */}
+      <div
+        ref={sliderRef}
+        className="mb-4 cursor-pointer"
+        onMouseDown={handleSliderMouseDown}
+      >
+        <div className="h-3 bg-gray-200 rounded-full relative">
           <div
-            className="h-2 bg-blue-500 rounded-full"
-            style={{ width: `${(schedule.filter((_, i) => i < new Date().getDate()).length / schedule.length) * 100}%` }}
+            className={`h-3 bg-blue-500 rounded-full absolute transition-all ${isDraggingSlider ? 'bg-blue-600' : 'hover:bg-blue-600'}`}
+            style={{
+              width: `${sliderWidth}%`,
+              left: `${sliderPosition}%`
+            }}
           ></div>
         </div>
       </div>
@@ -99,7 +169,7 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
       >
         {/* Y-axis */}
         <div className="absolute left-0 top-0 bottom-8 w-10 flex flex-col justify-between text-xs text-gray-400">
-          {yAxisSteps.reverse().map((val, i) => (
+          {[...yAxisSteps].reverse().map((val, i) => (
             <span key={i} className="text-right pr-2">{val}</span>
           ))}
         </div>
@@ -117,11 +187,12 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
 
         {/* Bars container */}
         <div className="absolute left-10 right-0 top-0 bottom-0 flex items-end pb-8">
-          {schedule.slice(0, 15).map((value, index) => {
+          {schedule.slice(startIndex, startIndex + visibleBars).map((value, index) => {
+            const actualIndex = startIndex + index
             const barHeight = (value / maxValue) * 100
             return (
               <div
-                key={index}
+                key={actualIndex}
                 className="flex-1 flex flex-col items-center px-0.5 h-full justify-end relative"
                 onMouseDown={(e) => handleMouseDown(index, e)}
               >
@@ -133,7 +204,7 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
                 {/* Draggable circle */}
                 <div
                   className={`absolute w-3 h-3 rounded-full border-2 border-white shadow-md cursor-ns-resize z-10 transition-transform ${
-                    dragging === index ? 'bg-blue-700 scale-125' : 'bg-blue-500 hover:scale-110'
+                    dragging === actualIndex ? 'bg-blue-700 scale-125' : 'bg-blue-500 hover:scale-110'
                   }`}
                   style={{ bottom: `calc(${barHeight}% + 4px)` }}
                 ></div>
@@ -141,7 +212,7 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
                 {/* Bar */}
                 <div
                   className={`w-full rounded-t-md transition-colors ${
-                    dragging === index ? 'bg-blue-600' : 'bg-blue-500'
+                    dragging === actualIndex ? 'bg-blue-600' : 'bg-blue-500'
                   }`}
                   style={{
                     height: `${Math.max(barHeight, 1)}%`,
@@ -151,7 +222,7 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
 
                 {/* Date label */}
                 <div className="absolute -bottom-6 text-[10px] text-gray-400 whitespace-nowrap select-none">
-                  {getDateLabel(index)}
+                  {getDateLabel(actualIndex)}
                 </div>
               </div>
             )
@@ -160,7 +231,7 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
       </div>
 
       <p className="text-xs text-gray-400 mt-6 text-center">
-        Arraste os circulos azuis para ajustar a quantidade de emails por dia
+        Arraste os circulos azuis para ajustar | Arraste a barra azul acima para navegar entre os dias
       </p>
     </div>
   )
