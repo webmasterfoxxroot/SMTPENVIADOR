@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/tls"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -1458,22 +1459,39 @@ func (s *Server) sendWarmupEmail(warmupID, smtpID, host string, port int, userna
 func (s *Server) sendSMTPEmail(host string, port int, username, password, tlsMode, from, to, subject, body, messageID string) error {
 	// Extract email from "Name <email>" format if present
 	fromEmail := from
+	fromHeader := from
 	if strings.Contains(from, "<") && strings.Contains(from, ">") {
 		start := strings.Index(from, "<") + 1
 		end := strings.Index(from, ">")
 		if start > 0 && end > start {
 			fromEmail = from[start:end]
 		}
+		// Encode the name part if it contains non-ASCII
+		nameEnd := strings.Index(from, "<")
+		if nameEnd > 0 {
+			name := strings.TrimSpace(from[:nameEnd])
+			if needsEncoding(name) {
+				fromHeader = mimeEncode(name) + " <" + fromEmail + ">"
+			}
+		}
+	}
+
+	// Encode subject if it contains non-ASCII characters
+	encodedSubject := subject
+	if needsEncoding(subject) {
+		encodedSubject = mimeEncode(subject)
 	}
 
 	msg := fmt.Sprintf("From: %s\r\n"+
 		"To: %s\r\n"+
 		"Subject: %s\r\n"+
 		"Message-ID: %s\r\n"+
+		"Date: %s\r\n"+
 		"MIME-Version: 1.0\r\n"+
-		"Content-Type: text/plain; charset=utf-8\r\n"+
+		"Content-Type: text/plain; charset=UTF-8\r\n"+
+		"Content-Transfer-Encoding: base64\r\n"+
 		"\r\n"+
-		"%s", from, to, subject, messageID, body)
+		"%s", fromHeader, to, encodedSubject, messageID, time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 -0700"), encodeBase64WithLineBreaks([]byte(body)))
 
 	addr := fmt.Sprintf("%s:%d", host, port)
 
@@ -1486,6 +1504,36 @@ func (s *Server) sendSMTPEmail(host string, port int, username, password, tlsMod
 	default: // "none" or empty
 		return s.sendPlainSMTP(addr, host, username, password, fromEmail, to, []byte(msg))
 	}
+}
+
+// needsEncoding checks if a string contains non-ASCII characters
+func needsEncoding(s string) bool {
+	for _, r := range s {
+		if r > 127 {
+			return true
+		}
+	}
+	return false
+}
+
+// mimeEncode encodes a string using MIME base64 encoding (RFC 2047)
+func mimeEncode(s string) string {
+	return "=?UTF-8?B?" + base64.StdEncoding.EncodeToString([]byte(s)) + "?="
+}
+
+// encodeBase64WithLineBreaks encodes data to base64 with 76-char line breaks (RFC 2045)
+func encodeBase64WithLineBreaks(data []byte) string {
+	encoded := base64.StdEncoding.EncodeToString(data)
+	// Insert line breaks every 76 characters
+	var result string
+	for i := 0; i < len(encoded); i += 76 {
+		end := i + 76
+		if end > len(encoded) {
+			end = len(encoded)
+		}
+		result += encoded[i:end] + "\r\n"
+	}
+	return result
 }
 
 // sendWithImplicitTLS sends email using implicit TLS (port 465)
