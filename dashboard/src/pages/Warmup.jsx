@@ -245,6 +245,7 @@ function EditWarmupModal({ warmupSMTP, onClose, onSave }) {
     recipe_type: warmupSMTP.recipe_type || 'progressive',
     min_emails_per_day: warmupSMTP.min_emails_per_day || 5,
     max_emails_per_day: warmupSMTP.max_emails_per_day || 40,
+    send_rate: warmupSMTP.send_rate || 30,
     reply_rate: warmupSMTP.reply_rate || 30,
     start_hour: warmupSMTP.start_hour || 8,
     end_hour: warmupSMTP.end_hour || 18
@@ -395,7 +396,7 @@ function EditWarmupModal({ warmupSMTP, onClose, onSave }) {
           </div>
 
           {/* Settings Grid */}
-          <div className="grid grid-cols-5 gap-4">
+          <div className="grid grid-cols-3 gap-4 mb-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Min/dia</label>
               <input
@@ -417,15 +418,30 @@ function EditWarmupModal({ warmupSMTP, onClose, onSave }) {
               />
             </div>
             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Envio %</label>
+              <input
+                type="number"
+                value={form.send_rate}
+                onChange={(e) => setForm({ ...form, send_rate: parseInt(e.target.value) || 30 })}
+                min="1"
+                max="100"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+              />
+              <p className="text-xs text-gray-400 mt-1">Chance de enviar</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Resposta %</label>
               <input
                 type="number"
                 value={form.reply_rate}
                 onChange={(e) => setForm({ ...form, reply_rate: parseInt(e.target.value) || 0 })}
                 min="0"
-                max="45"
+                max="100"
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
               />
+              <p className="text-xs text-gray-400 mt-1">Chance de responder</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Hora inicio</label>
@@ -540,6 +556,7 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
     end_date: '',
     min_emails_per_day: 5,
     max_emails_per_day: 40,
+    send_rate: 30,
     reply_rate: 30,
     start_hour: 8,
     end_hour: 18
@@ -682,7 +699,7 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
           )}
 
           {/* Settings Grid */}
-          <div className="grid grid-cols-5 gap-4">
+          <div className="grid grid-cols-3 gap-4 mb-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Min/dia</label>
               <input
@@ -704,15 +721,30 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
               />
             </div>
             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Envio %</label>
+              <input
+                type="number"
+                value={form.send_rate}
+                onChange={(e) => setForm({ ...form, send_rate: parseInt(e.target.value) || 30 })}
+                min="1"
+                max="100"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+              />
+              <p className="text-xs text-gray-400 mt-1">Chance de enviar</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Resposta %</label>
               <input
                 type="number"
                 value={form.reply_rate}
                 onChange={(e) => setForm({ ...form, reply_rate: parseInt(e.target.value) || 0 })}
                 min="0"
-                max="45"
+                max="100"
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
               />
+              <p className="text-xs text-gray-400 mt-1">Chance de responder</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Hora inicio</label>
