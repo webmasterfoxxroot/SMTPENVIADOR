@@ -155,6 +155,10 @@ func (s *Server) initWarmupTables() {
 	// Add total_sent column to warmup_seeds for tracking sent emails
 	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS total_sent INT DEFAULT 0`)
 
+	// Add TLS mode columns to warmup_seeds (migration)
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS imap_tls_mode VARCHAR(20) DEFAULT 'tls'`) // tls, starttls, none
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS smtp_tls_mode VARCHAR(20) DEFAULT 'starttls'`) // tls, starttls, none
+
 	// Add IMAP fields to smtp_senders for internal warmup (migration)
 	s.db.Exec(`ALTER TABLE smtp_senders ADD COLUMN IF NOT EXISTS imap_host VARCHAR(255)`)
 	s.db.Exec(`ALTER TABLE smtp_senders ADD COLUMN IF NOT EXISTS imap_port INT DEFAULT 993`)
@@ -886,14 +890,15 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 // createWarmupSeed adds a new seed account
 func (s *Server) createWarmupSeed(c *fiber.Ctx) error {
 	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-		Provider string `json:"provider"`
-		IMAPHost string `json:"imap_host"`
-		IMAPPort int    `json:"imap_port"`
-		SMTPHost string `json:"smtp_host"`
-		SMTPPort int    `json:"smtp_port"`
-		UseTLS   bool   `json:"use_tls"`
+		Email       string `json:"email"`
+		Password    string `json:"password"`
+		Provider    string `json:"provider"`
+		IMAPHost    string `json:"imap_host"`
+		IMAPPort    int    `json:"imap_port"`
+		IMAPTLSMode string `json:"imap_tls_mode"` // tls, starttls, none
+		SMTPHost    string `json:"smtp_host"`
+		SMTPPort    int    `json:"smtp_port"`
+		SMTPTLSMode string `json:"smtp_tls_mode"` // tls, starttls, none
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -912,12 +917,32 @@ func (s *Server) createWarmupSeed(c *fiber.Ctx) error {
 		req.SMTPPort = 587
 	}
 
+	// Auto-detect TLS mode based on port if not specified
+	if req.IMAPTLSMode == "" {
+		if req.IMAPPort == 993 {
+			req.IMAPTLSMode = "tls"
+		} else if req.IMAPPort == 143 {
+			req.IMAPTLSMode = "starttls"
+		} else {
+			req.IMAPTLSMode = "none"
+		}
+	}
+	if req.SMTPTLSMode == "" {
+		if req.SMTPPort == 465 {
+			req.SMTPTLSMode = "tls"
+		} else if req.SMTPPort == 587 || req.SMTPPort == 25 {
+			req.SMTPTLSMode = "starttls"
+		} else {
+			req.SMTPTLSMode = "none"
+		}
+	}
+
 	id := uuid.New().String()
 
 	_, err := s.db.Exec(`
-		INSERT INTO warmup_seeds (id, email, password, provider, imap_host, imap_port, smtp_host, smtp_port, use_tls, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active')
-	`, id, req.Email, req.Password, req.Provider, req.IMAPHost, req.IMAPPort, req.SMTPHost, req.SMTPPort, req.UseTLS)
+		INSERT INTO warmup_seeds (id, email, password, provider, imap_host, imap_port, imap_tls_mode, smtp_host, smtp_port, smtp_tls_mode, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active')
+	`, id, req.Email, req.Password, req.Provider, req.IMAPHost, req.IMAPPort, req.IMAPTLSMode, req.SMTPHost, req.SMTPPort, req.SMTPTLSMode)
 
 	if err != nil {
 		if strings.Contains(err.Error(), "unique") {
@@ -1313,23 +1338,184 @@ func testIMAPConnectionWithMode(host string, port int, email, password, tlsMode 
 func (s *Server) testSeedConnection(seedID string) {
 	var email, password, imapHost string
 	var imapPort int
-	var useTLS bool
+	var imapTLSMode sql.NullString
 
 	err := s.db.QueryRow(`
-		SELECT email, password, imap_host, imap_port, use_tls
+		SELECT email, password, imap_host, imap_port, COALESCE(imap_tls_mode, 'tls')
 		FROM warmup_seeds WHERE id = $1
-	`, seedID).Scan(&email, &password, &imapHost, &imapPort, &useTLS)
+	`, seedID).Scan(&email, &password, &imapHost, &imapPort, &imapTLSMode)
 
 	if err != nil {
 		return
 	}
 
-	err = testIMAPConnection(imapHost, imapPort, email, password, useTLS)
+	tlsMode := "tls"
+	if imapTLSMode.Valid && imapTLSMode.String != "" {
+		tlsMode = imapTLSMode.String
+	}
+
+	err = testIMAPConnectionWithMode(imapHost, imapPort, email, password, tlsMode)
 	if err != nil {
 		s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
 			err.Error(), seedID)
 	} else {
 		s.db.Exec(`UPDATE warmup_seeds SET status = 'active', error_message = NULL, last_check = NOW() WHERE id = $1`, seedID)
+	}
+}
+
+// testSeedConnectionPreview tests IMAP/SMTP connection WITHOUT saving (for preview before creating)
+func (s *Server) testSeedConnectionPreview(c *fiber.Ctx) error {
+	var req struct {
+		Email       string `json:"email"`
+		Password    string `json:"password"`
+		IMAPHost    string `json:"imap_host"`
+		IMAPPort    int    `json:"imap_port"`
+		IMAPTLSMode string `json:"imap_tls_mode"` // tls, starttls, none
+		SMTPHost    string `json:"smtp_host"`
+		SMTPPort    int    `json:"smtp_port"`
+		SMTPTLSMode string `json:"smtp_tls_mode"` // tls, starttls, none
+		TestType    string `json:"test_type"`     // imap, smtp, both
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Requisição inválida"})
+	}
+
+	if req.Email == "" || req.Password == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Email e senha são obrigatórios"})
+	}
+
+	results := fiber.Map{}
+
+	// Test IMAP if requested
+	if req.TestType == "imap" || req.TestType == "both" || req.TestType == "" {
+		if req.IMAPHost == "" {
+			results["imap"] = fiber.Map{"success": false, "error": "Host IMAP não informado"}
+		} else {
+			if req.IMAPPort == 0 {
+				req.IMAPPort = 993
+			}
+			if req.IMAPTLSMode == "" {
+				req.IMAPTLSMode = getTLSModeFromBool(true, req.IMAPPort)
+			}
+
+			err := testIMAPConnectionWithMode(req.IMAPHost, req.IMAPPort, req.Email, req.Password, req.IMAPTLSMode)
+			if err != nil {
+				results["imap"] = fiber.Map{"success": false, "error": err.Error()}
+			} else {
+				results["imap"] = fiber.Map{"success": true, "message": "Conexão IMAP OK!"}
+			}
+		}
+	}
+
+	// Test SMTP if requested
+	if req.TestType == "smtp" || req.TestType == "both" {
+		if req.SMTPHost == "" {
+			results["smtp"] = fiber.Map{"success": false, "error": "Host SMTP não informado"}
+		} else {
+			if req.SMTPPort == 0 {
+				req.SMTPPort = 587
+			}
+			if req.SMTPTLSMode == "" {
+				if req.SMTPPort == 465 {
+					req.SMTPTLSMode = "tls"
+				} else {
+					req.SMTPTLSMode = "starttls"
+				}
+			}
+
+			// Test SMTP connection
+			err := s.testSMTPConnection(req.SMTPHost, req.SMTPPort, req.Email, req.Password, req.SMTPTLSMode)
+			if err != nil {
+				results["smtp"] = fiber.Map{"success": false, "error": err.Error()}
+			} else {
+				results["smtp"] = fiber.Map{"success": true, "message": "Conexão SMTP OK!"}
+			}
+		}
+	}
+
+	return c.JSON(results)
+}
+
+// testSMTPConnection tests SMTP connection without sending email
+func (s *Server) testSMTPConnection(host string, port int, username, password, tlsMode string) error {
+	addr := fmt.Sprintf("%s:%d", host, port)
+
+	switch tlsMode {
+	case "tls":
+		// Implicit TLS
+		tlsConfig := &tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: true,
+		}
+		conn, err := tls.Dial("tcp", addr, tlsConfig)
+		if err != nil {
+			return fmt.Errorf("TLS connection failed: %v", err)
+		}
+		defer conn.Close()
+
+		client, err := smtp.NewClient(conn, host)
+		if err != nil {
+			return fmt.Errorf("SMTP client error: %v", err)
+		}
+		defer client.Close()
+
+		if err := s.authenticateSMTP(client, host, username, password); err != nil {
+			return err
+		}
+		return client.Quit()
+
+	case "starttls":
+		conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+		if err != nil {
+			return fmt.Errorf("Connection failed: %v", err)
+		}
+
+		client, err := smtp.NewClient(conn, host)
+		if err != nil {
+			conn.Close()
+			return fmt.Errorf("SMTP client error: %v", err)
+		}
+		defer client.Close()
+
+		if err := client.Hello("[127.0.0.1]"); err != nil {
+			return fmt.Errorf("EHLO error: %v", err)
+		}
+
+		tlsConfig := &tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: true,
+		}
+		if err := client.StartTLS(tlsConfig); err != nil {
+			return fmt.Errorf("STARTTLS failed: %v", err)
+		}
+
+		if err := s.authenticateSMTP(client, host, username, password); err != nil {
+			return err
+		}
+		return client.Quit()
+
+	default: // "none"
+		conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+		if err != nil {
+			return fmt.Errorf("Connection failed: %v", err)
+		}
+
+		client, err := smtp.NewClient(conn, host)
+		if err != nil {
+			conn.Close()
+			return fmt.Errorf("SMTP client error: %v", err)
+		}
+		defer client.Close()
+
+		if err := client.Hello("[127.0.0.1]"); err != nil {
+			return fmt.Errorf("EHLO error: %v", err)
+		}
+
+		if err := s.authenticateSMTP(client, host, username, password); err != nil {
+			return err
+		}
+		return client.Quit()
 	}
 }
 
