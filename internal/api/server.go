@@ -229,6 +229,7 @@ func (s *Server) setupRoutes() {
 	smtp := protected.Group("/smtp")
 	smtp.Get("/", s.listSMTPs)
 	smtp.Post("/", s.createSMTP)
+	smtp.Post("/test-connection", s.testSMTPConnectionPreview) // Test SMTP without saving
 	smtp.Get("/:id", s.getSMTP)
 	smtp.Put("/:id", s.updateSMTP)
 	smtp.Delete("/:id", s.deleteSMTP)

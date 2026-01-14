@@ -740,13 +740,157 @@ func (s *Server) refreshSMTPs(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "SMTPs refreshed"})
 }
 
+// testSMTPConnectionPreview tests SMTP connection without saving
+func (s *Server) testSMTPConnectionPreview(c *fiber.Ctx) error {
+	var req struct {
+		Host     string `json:"host"`
+		Port     int    `json:"port"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+		TLSMode  string `json:"tls_mode"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	if req.Host == "" || req.Username == "" || req.Password == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Host, username and password are required"})
+	}
+
+	if req.Port == 0 {
+		req.Port = 587
+	}
+
+	addr := fmt.Sprintf("%s:%d", req.Host, req.Port)
+	var client *smtp.Client
+
+	switch req.TLSMode {
+	case "tls":
+		// Implicit TLS
+		tlsConfig := &tls.Config{
+			ServerName:         req.Host,
+			InsecureSkipVerify: true,
+		}
+		conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", addr, tlsConfig)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "Conexão TLS falhou",
+				"details": err.Error(),
+			})
+		}
+		defer conn.Close()
+
+		var clientErr error
+		client, clientErr = smtp.NewClient(conn, req.Host)
+		if clientErr != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "Cliente SMTP falhou",
+				"details": clientErr.Error(),
+			})
+		}
+
+	case "starttls":
+		// STARTTLS
+		conn, connErr := net.DialTimeout("tcp", addr, 15*time.Second)
+		if connErr != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "Conexão falhou",
+				"details": connErr.Error(),
+			})
+		}
+		defer conn.Close()
+
+		var clientErr error
+		client, clientErr = smtp.NewClient(conn, req.Host)
+		if clientErr != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "Cliente SMTP falhou",
+				"details": clientErr.Error(),
+			})
+		}
+
+		if heloErr := client.Hello("localhost"); heloErr != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "HELO falhou",
+				"details": heloErr.Error(),
+			})
+		}
+
+		tlsConfig := &tls.Config{
+			ServerName:         req.Host,
+			InsecureSkipVerify: true,
+		}
+		if tlsErr := client.StartTLS(tlsConfig); tlsErr != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "STARTTLS falhou",
+				"details": tlsErr.Error(),
+			})
+		}
+
+	default: // "none"
+		// Plain connection
+		conn, connErr := net.DialTimeout("tcp", addr, 15*time.Second)
+		if connErr != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "Conexão falhou",
+				"details": connErr.Error(),
+			})
+		}
+		defer conn.Close()
+
+		var clientErr error
+		client, clientErr = smtp.NewClient(conn, req.Host)
+		if clientErr != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "Cliente SMTP falhou",
+				"details": clientErr.Error(),
+			})
+		}
+
+		if heloErr := client.Hello("localhost"); heloErr != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error":   "HELO falhou",
+				"details": heloErr.Error(),
+			})
+		}
+	}
+	defer client.Close()
+
+	// Test authentication
+	authErr := client.Auth(CRAMMD5Auth(req.Username, req.Password))
+	if authErr != nil {
+		authErr = client.Auth(LoginAuth(req.Username, req.Password))
+	}
+	if authErr != nil {
+		auth := smtp.PlainAuth("", req.Username, req.Password, req.Host)
+		authErr = client.Auth(auth)
+	}
+
+	if authErr != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error":   "Autenticação falhou",
+			"details": authErr.Error(),
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "Conexão SMTP OK!",
+		"success": true,
+	})
+}
+
 // ============ SMTP SENDERS ============
 
 type SenderRequest struct {
-	Email   string `json:"email"`
-	Name    string `json:"name"`
-	ReplyTo string `json:"reply_to"`
-	Active  bool   `json:"active"`
+	Email       string `json:"email"`
+	Name        string `json:"name"`
+	ReplyTo     string `json:"reply_to"`
+	Active      bool   `json:"active"`
+	IMAPHost    string `json:"imap_host"`
+	IMAPPort    int    `json:"imap_port"`
+	IMAPPassword string `json:"imap_password"`
+	IMAPTLSMode string `json:"imap_tls_mode"`
 }
 
 // listSMTPSenders returns all senders for an SMTP
@@ -754,7 +898,8 @@ func (s *Server) listSMTPSenders(c *fiber.Ctx) error {
 	smtpID := c.Params("id")
 
 	rows, err := s.db.Query(`
-		SELECT id, email, name, reply_to, active, total_sent, created_at
+		SELECT id, email, name, reply_to, active, total_sent, created_at,
+		       imap_host, imap_port, imap_tls_mode
 		FROM smtp_senders
 		WHERE smtp_id = $1
 		ORDER BY created_at DESC
@@ -767,24 +912,29 @@ func (s *Server) listSMTPSenders(c *fiber.Ctx) error {
 	var senders []fiber.Map
 	for rows.Next() {
 		var id, email string
-		var name, replyTo *string
+		var name, replyTo, imapHost, imapTLSMode *string
 		var active bool
 		var totalSent int64
 		var createdAt time.Time
+		var imapPort *int
 
-		err := rows.Scan(&id, &email, &name, &replyTo, &active, &totalSent, &createdAt)
+		err := rows.Scan(&id, &email, &name, &replyTo, &active, &totalSent, &createdAt,
+			&imapHost, &imapPort, &imapTLSMode)
 		if err != nil {
 			continue
 		}
 
 		senders = append(senders, fiber.Map{
-			"id":         id,
-			"email":      email,
-			"name":       name,
-			"reply_to":   replyTo,
-			"active":     active,
-			"total_sent": totalSent,
-			"created_at": createdAt,
+			"id":            id,
+			"email":         email,
+			"name":          name,
+			"reply_to":      replyTo,
+			"active":        active,
+			"total_sent":    totalSent,
+			"created_at":    createdAt,
+			"imap_host":     imapHost,
+			"imap_port":     imapPort,
+			"imap_tls_mode": imapTLSMode,
 		})
 	}
 
@@ -847,11 +997,29 @@ func (s *Server) addSMTPSendersBulk(c *fiber.Ctx) error {
 			continue
 		}
 		id := uuid.New().String()
+
+		// Set defaults for IMAP
+		imapPort := sender.IMAPPort
+		if imapPort == 0 {
+			imapPort = 993
+		}
+		imapTLSMode := sender.IMAPTLSMode
+		if imapTLSMode == "" {
+			imapTLSMode = "tls"
+		}
+
 		_, err := s.db.Exec(`
-			INSERT INTO smtp_senders (id, smtp_id, email, name, reply_to, active)
-			VALUES ($1, $2, $3, $4, $5, $6)
-			ON CONFLICT (smtp_id, email) DO UPDATE SET name = $4, reply_to = $5
-		`, id, smtpID, sender.Email, sender.Name, sender.ReplyTo, true)
+			INSERT INTO smtp_senders (id, smtp_id, email, name, reply_to, active, imap_host, imap_port, imap_password, imap_tls_mode)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			ON CONFLICT (smtp_id, email) DO UPDATE SET
+				name = $4,
+				reply_to = $5,
+				imap_host = COALESCE(NULLIF($7, ''), smtp_senders.imap_host),
+				imap_port = CASE WHEN $8 > 0 THEN $8 ELSE smtp_senders.imap_port END,
+				imap_password = COALESCE(NULLIF($9, ''), smtp_senders.imap_password),
+				imap_tls_mode = COALESCE(NULLIF($10, ''), smtp_senders.imap_tls_mode)
+		`, id, smtpID, sender.Email, sender.Name, sender.ReplyTo, true,
+		   sender.IMAPHost, imapPort, sender.IMAPPassword, imapTLSMode)
 		if err == nil {
 			added++
 		}

@@ -1554,11 +1554,14 @@ function Warmup() {
             {activity.map(item => (
               <div key={item.id} className="flex items-center gap-4 p-3 bg-gray-50 rounded-lg">
                 <div className={`p-2 rounded-lg ${
-                  item.status === 'replied' ? 'bg-purple-100' :
+                  item.warmup_type === 'internal' ? 'bg-purple-100' :
+                  item.status === 'replied' ? 'bg-indigo-100' :
                   item.status === 'opened' ? 'bg-green-100' : 'bg-blue-100'
                 }`}>
-                  {item.status === 'replied' ? (
-                    <MessageSquare className="w-4 h-4 text-purple-600" />
+                  {item.warmup_type === 'internal' ? (
+                    <Link2 className="w-4 h-4 text-purple-600" />
+                  ) : item.status === 'replied' ? (
+                    <MessageSquare className="w-4 h-4 text-indigo-600" />
                   ) : item.status === 'opened' ? (
                     <CheckCircle className="w-4 h-4 text-green-600" />
                   ) : (
@@ -1566,8 +1569,15 @@ function Warmup() {
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-900 truncate">{item.subject}</p>
-                  <p className="text-xs text-gray-500">{item.seed_email} via {item.smtp_name}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-gray-900 truncate">{item.subject}</p>
+                    {item.warmup_type === 'internal' && (
+                      <span className="px-1.5 py-0.5 text-xs font-medium bg-purple-100 text-purple-700 rounded">Interno</span>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    {item.warmup_type === 'internal' ? item.smtp_name : `${item.seed_email} via ${item.smtp_name}`}
+                  </p>
                 </div>
                 <div className="text-xs text-gray-400">
                   {new Date(item.sent_at).toLocaleString('pt-BR')}
