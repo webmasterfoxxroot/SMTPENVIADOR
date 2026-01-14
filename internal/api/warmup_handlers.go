@@ -935,6 +935,86 @@ func (s *Server) testWarmupSeed(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Connection successful"})
 }
 
+// toggleWarmupSeed toggles a seed between active and paused
+func (s *Server) toggleWarmupSeed(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	var currentStatus string
+	err := s.db.QueryRow(`SELECT status FROM warmup_seeds WHERE id = $1`, id).Scan(&currentStatus)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Seed not found"})
+	}
+
+	newStatus := "paused"
+	if currentStatus != "active" {
+		newStatus = "active"
+	}
+
+	s.db.Exec(`UPDATE warmup_seeds SET status = $1 WHERE id = $2`, newStatus, id)
+
+	return c.JSON(fiber.Map{"status": newStatus, "message": "Seed status updated"})
+}
+
+// triggerSeedSend forces the seed to send an email to a random SMTP
+func (s *Server) triggerSeedSend(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	// Get seed info
+	var email, password, smtpHost string
+	var smtpPort int
+	err := s.db.QueryRow(`
+		SELECT email, password, smtp_host, smtp_port
+		FROM warmup_seeds WHERE id = $1
+	`, id).Scan(&email, &password, &smtpHost, &smtpPort)
+
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Seed not found"})
+	}
+
+	if smtpHost == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Seed não tem SMTP configurado"})
+	}
+
+	// Get a random SMTP sender to send to
+	var targetEmail string
+	err = s.db.QueryRow(`
+		SELECT ss.email
+		FROM warmup_smtps w
+		JOIN smtp_senders ss ON ss.smtp_id = w.smtp_id
+		WHERE w.status = 'active' AND ss.active = true
+		ORDER BY RANDOM()
+		LIMIT 1
+	`).Scan(&targetEmail)
+
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Nenhum SMTP ativo encontrado"})
+	}
+
+	// Get random template
+	var subject, body string
+	s.db.QueryRow(`SELECT subject, body FROM warmup_templates WHERE active = true ORDER BY RANDOM() LIMIT 1`).Scan(&subject, &body)
+
+	subject = subject + " #" + fmt.Sprintf("%d", rand.Intn(9999))
+	messageID := fmt.Sprintf("<%s@seed-warmup>", uuid.New().String())
+
+	tlsMode := "starttls"
+	if smtpPort == 465 {
+		tlsMode = "tls"
+	}
+
+	err = s.sendSMTPEmail(smtpHost, smtpPort, email, password, tlsMode, email, targetEmail, subject, body, messageID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	// Update counter
+	s.db.Exec(`UPDATE warmup_seeds SET total_sent = total_sent + 1 WHERE id = $1`, id)
+
+	log.Printf("[Warmup Seed Manual] ✉️ Sent from %s to %s: %s", email, targetEmail, subject)
+
+	return c.JSON(fiber.Map{"message": "Email enviado com sucesso", "to": targetEmail})
+}
+
 // ============================================
 // WARMUP STATS HANDLERS
 // ============================================

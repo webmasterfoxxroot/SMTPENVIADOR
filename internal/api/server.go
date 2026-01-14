@@ -352,6 +352,8 @@ func (s *Server) setupRoutes() {
 	warmup.Post("/seeds", s.createWarmupSeed)
 	warmup.Delete("/seeds/:id", s.deleteWarmupSeed)
 	warmup.Post("/seeds/:id/test", s.testWarmupSeed)
+	warmup.Post("/seeds/:id/toggle", s.toggleWarmupSeed)
+	warmup.Post("/seeds/:id/trigger", s.triggerSeedSend)
 	warmup.Post("/check-imap", s.triggerIMAPCheck)
 	// Warmup Templates
 	warmup.Get("/templates", s.listWarmupTemplates)
