@@ -26,7 +26,8 @@ import {
   Save,
   ChevronLeft,
   ChevronRight,
-  Send
+  Send,
+  Link2
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
@@ -1037,6 +1038,16 @@ function Warmup() {
     }
   }
 
+  const toggleInternalWarmup = async (id) => {
+    try {
+      const res = await api.post(`/warmup/smtps/${id}/internal-warmup`)
+      toast.success(`Aquecimento interno ${res.data.internal_warmup ? 'ativado' : 'desativado'}`)
+      fetchAll()
+    } catch (error) {
+      toast.error('Erro ao alterar aquecimento interno')
+    }
+  }
+
   const testSeed = async (id) => {
     try {
       await api.post(`/warmup/seeds/${id}/test`)
@@ -1209,12 +1220,24 @@ function Warmup() {
                     }`}>
                       {smtp.status === 'active' ? 'Ativo' : 'Pausado'}
                     </span>
+                    {smtp.internal_warmup && (
+                      <span className="px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                        Interno
+                      </span>
+                    )}
                     <button
                       onClick={() => setEditingWarmup(smtp)}
                       className="p-2 hover:bg-orange-100 rounded-lg transition-colors"
                       title="Configurar"
                     >
                       <Settings className="w-4 h-4 text-orange-600" />
+                    </button>
+                    <button
+                      onClick={() => toggleInternalWarmup(smtp.id)}
+                      className={`p-2 rounded-lg transition-colors ${smtp.internal_warmup ? 'bg-purple-100 hover:bg-purple-200' : 'hover:bg-purple-100'}`}
+                      title={smtp.internal_warmup ? 'Desativar aquecimento interno' : 'Ativar aquecimento interno (SMTP→SMTP)'}
+                    >
+                      <Link2 className={`w-4 h-4 ${smtp.internal_warmup ? 'text-purple-600' : 'text-gray-400'}`} />
                     </button>
                     <button
                       onClick={() => toggleWarmup(smtp.id)}
