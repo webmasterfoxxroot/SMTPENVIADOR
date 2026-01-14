@@ -229,7 +229,60 @@ func (s *Server) initWarmupTables() {
 	// Insert default warmup templates
 	s.insertDefaultWarmupTemplates()
 
+	// Create warmup_settings table
+	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS warmup_settings (
+			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+			setting_key VARCHAR(100) UNIQUE NOT NULL,
+			setting_value TEXT NOT NULL,
+			description TEXT,
+			created_at TIMESTAMP DEFAULT NOW(),
+			updated_at TIMESTAMP DEFAULT NOW()
+		)
+	`)
+	if err != nil {
+		log.Printf("[Warmup] Error creating warmup_settings table: %v", err)
+	}
+
+	// Insert default settings
+	s.insertDefaultWarmupSettings()
+
 	log.Println("[Warmup] Tables initialized")
+}
+
+func (s *Server) insertDefaultWarmupSettings() {
+	defaultSettings := []struct {
+		key         string
+		value       string
+		description string
+	}{
+		// Internal warmup settings
+		{"internal_send_rate", "30", "Porcentagem de chance de envio por ciclo (0-100)"},
+		{"internal_start_hour", "6", "Hora de início do envio (0-23)"},
+		{"internal_end_hour", "22", "Hora de término do envio (0-23)"},
+		{"internal_cycle_minutes", "2", "Intervalo entre ciclos em minutos"},
+		{"internal_reply_rate", "40", "Porcentagem de chance de resposta automática (0-100)"},
+		{"internal_mark_read_rate", "80", "Porcentagem de chance de marcar como lido (0-100)"},
+
+		// External warmup settings (SMTP -> Seeds)
+		{"external_send_rate", "50", "Porcentagem de chance de envio para seeds (0-100)"},
+		{"external_start_hour", "8", "Hora de início do envio para seeds (0-23)"},
+		{"external_end_hour", "18", "Hora de término do envio para seeds (0-23)"},
+		{"external_cycle_minutes", "5", "Intervalo entre ciclos para seeds em minutos"},
+
+		// General settings
+		{"warmup_enabled", "true", "Ativar/desativar todo o sistema de warmup"},
+		{"max_emails_per_smtp_per_day", "50", "Máximo de emails por SMTP por dia"},
+		{"imap_check_interval", "5", "Intervalo de verificação IMAP em minutos"},
+	}
+
+	for _, setting := range defaultSettings {
+		s.db.Exec(`
+			INSERT INTO warmup_settings (setting_key, setting_value, description)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (setting_key) DO NOTHING
+		`, setting.key, setting.value, setting.description)
+	}
 }
 
 func (s *Server) insertDefaultWarmupTemplates() {
@@ -2536,11 +2589,20 @@ func getRandomReplyBody() string {
 
 // processInternalWarmup sends emails between SMTPs for internal warmup
 func (s *Server) processInternalWarmup() {
+	// Check if warmup is enabled
+	if s.getWarmupSetting("warmup_enabled", "true") != "true" {
+		return
+	}
+
 	now := time.Now()
 	currentHour := now.Hour()
 
-	// Only run during business hours (6-22)
-	if currentHour < 6 || currentHour > 22 {
+	// Get hours from settings
+	startHour := s.getWarmupSettingInt("internal_start_hour", 6)
+	endHour := s.getWarmupSettingInt("internal_end_hour", 22)
+
+	// Only run during configured hours
+	if currentHour < startHour || currentHour > endHour {
 		return
 	}
 
@@ -2588,8 +2650,10 @@ func (s *Server) processInternalWarmup() {
 
 	log.Printf("[Internal Warmup] Found %d SMTPs with internal warmup enabled", len(smtps))
 
-	// Random chance to send (30% per cycle)
-	if rand.Intn(100) > 30 {
+	// Random chance to send based on settings
+	sendRate := s.getWarmupSettingInt("internal_send_rate", 30)
+	if rand.Intn(100) > sendRate {
+		log.Printf("[Internal Warmup] Skipped (rate: %d%%)", sendRate)
 		return
 	}
 
@@ -2950,4 +3014,82 @@ func (s *Server) toggleInternalWarmup(c *fiber.Ctx) error {
 	s.db.Exec(`UPDATE warmup_smtps SET internal_warmup = $1, updated_at = NOW() WHERE id = $2`, newValue, id)
 
 	return c.JSON(fiber.Map{"internal_warmup": newValue, "message": "Aquecimento interno atualizado"})
+}
+
+// ============================================
+// WARMUP SETTINGS
+// ============================================
+
+// getWarmupSettings returns all warmup settings
+func (s *Server) getWarmupSettings(c *fiber.Ctx) error {
+	rows, err := s.db.Query(`
+		SELECT setting_key, setting_value, description
+		FROM warmup_settings
+		ORDER BY setting_key
+	`)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Erro ao carregar configurações"})
+	}
+	defer rows.Close()
+
+	settings := make(map[string]fiber.Map)
+	for rows.Next() {
+		var key, value string
+		var description sql.NullString
+		rows.Scan(&key, &value, &description)
+		settings[key] = fiber.Map{
+			"value":       value,
+			"description": description.String,
+		}
+	}
+
+	return c.JSON(fiber.Map{"settings": settings})
+}
+
+// updateWarmupSettings updates warmup settings
+func (s *Server) updateWarmupSettings(c *fiber.Ctx) error {
+	var req map[string]string
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Requisição inválida"})
+	}
+
+	updated := 0
+	for key, value := range req {
+		result, err := s.db.Exec(`
+			UPDATE warmup_settings
+			SET setting_value = $1, updated_at = NOW()
+			WHERE setting_key = $2
+		`, value, key)
+		if err == nil {
+			if rows, _ := result.RowsAffected(); rows > 0 {
+				updated++
+			}
+		}
+	}
+
+	return c.JSON(fiber.Map{
+		"message": fmt.Sprintf("%d configurações atualizadas", updated),
+		"updated": updated,
+	})
+}
+
+// getWarmupSetting helper to get a single setting value
+func (s *Server) getWarmupSetting(key string, defaultValue string) string {
+	var value string
+	err := s.db.QueryRow(`SELECT setting_value FROM warmup_settings WHERE setting_key = $1`, key).Scan(&value)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
+// getWarmupSettingInt helper to get a single setting as int
+func (s *Server) getWarmupSettingInt(key string, defaultValue int) int {
+	value := s.getWarmupSetting(key, "")
+	if value == "" {
+		return defaultValue
+	}
+	var result int
+	fmt.Sscanf(value, "%d", &result)
+	return result
 }

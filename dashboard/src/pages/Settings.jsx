@@ -1,18 +1,21 @@
 import { useState, useEffect } from 'react'
-import { Settings as SettingsIcon, Save, RefreshCw, Globe, RotateCcw, AlertCircle, Server, Power, Upload, Database } from 'lucide-react'
+import { Settings as SettingsIcon, Save, RefreshCw, Globe, RotateCcw, AlertCircle, Server, Power, Upload, Database, Flame, Clock, Percent, Mail } from 'lucide-react'
 import api from '../services/api'
 import toast from 'react-hot-toast'
 
 function Settings() {
   const [settings, setSettings] = useState({})
+  const [warmupSettings, setWarmupSettings] = useState({})
   const [serverInfo, setServerInfo] = useState({ ip: '' })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [savingWarmup, setSavingWarmup] = useState(false)
   const [restarting, setRestarting] = useState(false)
 
   useEffect(() => {
     fetchSettings()
     fetchServerInfo()
+    fetchWarmupSettings()
   }, [])
 
   const fetchSettings = async () => {
@@ -38,6 +41,38 @@ function Settings() {
       setServerInfo(response.data)
     } catch (error) {
       // Ignore error, IP will just not show
+    }
+  }
+
+  const fetchWarmupSettings = async () => {
+    try {
+      const response = await api.get('/warmup/settings')
+      const formValues = {}
+      Object.keys(response.data.settings || {}).forEach(key => {
+        formValues[key] = response.data.settings[key].value
+      })
+      setWarmupSettings(formValues)
+    } catch (error) {
+      console.error('Error loading warmup settings:', error)
+    }
+  }
+
+  const handleWarmupChange = (key, value) => {
+    setWarmupSettings(prev => ({
+      ...prev,
+      [key]: value
+    }))
+  }
+
+  const handleSaveWarmup = async () => {
+    try {
+      setSavingWarmup(true)
+      await api.put('/warmup/settings', warmupSettings)
+      toast.success('Configuracoes de Warmup salvas!')
+    } catch (error) {
+      toast.error('Erro ao salvar configuracoes de Warmup')
+    } finally {
+      setSavingWarmup(false)
     }
   }
 
@@ -236,6 +271,279 @@ function Settings() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Warmup Settings */}
+      <div className="card">
+        <div className="flex items-center gap-2 mb-4">
+          <Flame className="w-5 h-5 text-orange-500" />
+          <h2 className="text-lg font-semibold">Configuracoes de Warmup</h2>
+        </div>
+        <p className="text-gray-400 text-sm mb-4">
+          Configure taxas de envio, horarios e comportamento do sistema de aquecimento de emails.
+        </p>
+
+        {/* Master Toggle */}
+        <div className="bg-gray-700 rounded-lg p-4 mb-6">
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={warmupSettings.warmup_enabled === 'true'}
+              onChange={(e) => handleWarmupChange('warmup_enabled', e.target.checked ? 'true' : 'false')}
+              className="w-5 h-5 rounded"
+            />
+            <div>
+              <span className="font-medium text-white">Sistema de Warmup Ativo</span>
+              <p className="text-gray-400 text-sm">Ativar/desativar todo o sistema de aquecimento</p>
+            </div>
+          </label>
+        </div>
+
+        {/* Internal Warmup (SMTP → SMTP) */}
+        <div className="mb-6">
+          <h3 className="flex items-center gap-2 text-md font-semibold text-purple-400 mb-3">
+            <Mail className="w-4 h-4" />
+            Aquecimento Interno (SMTP → SMTP)
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1 flex items-center gap-1">
+                <Percent className="w-4 h-4 text-purple-400" />
+                Taxa de Envio (%)
+              </label>
+              <input
+                type="number"
+                value={warmupSettings.internal_send_rate || '30'}
+                onChange={(e) => handleWarmupChange('internal_send_rate', e.target.value)}
+                min="1"
+                max="100"
+                className="input w-full"
+              />
+              <p className="text-gray-500 text-xs mt-1">
+                Chance de envio por ciclo (1-100%)
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1 flex items-center gap-1">
+                <Clock className="w-4 h-4 text-green-400" />
+                Hora Inicio
+              </label>
+              <input
+                type="number"
+                value={warmupSettings.internal_start_hour || '6'}
+                onChange={(e) => handleWarmupChange('internal_start_hour', e.target.value)}
+                min="0"
+                max="23"
+                className="input w-full"
+              />
+              <p className="text-gray-500 text-xs mt-1">
+                Hora de inicio (0-23)
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1 flex items-center gap-1">
+                <Clock className="w-4 h-4 text-red-400" />
+                Hora Fim
+              </label>
+              <input
+                type="number"
+                value={warmupSettings.internal_end_hour || '22'}
+                onChange={(e) => handleWarmupChange('internal_end_hour', e.target.value)}
+                min="0"
+                max="23"
+                className="input w-full"
+              />
+              <p className="text-gray-500 text-xs mt-1">
+                Hora de termino (0-23)
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Intervalo (minutos)
+              </label>
+              <input
+                type="number"
+                value={warmupSettings.internal_cycle_minutes || '2'}
+                onChange={(e) => handleWarmupChange('internal_cycle_minutes', e.target.value)}
+                min="1"
+                max="60"
+                className="input w-full"
+              />
+              <p className="text-gray-500 text-xs mt-1">
+                Entre ciclos de envio
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Taxa de Resposta (%)
+              </label>
+              <input
+                type="number"
+                value={warmupSettings.internal_reply_rate || '40'}
+                onChange={(e) => handleWarmupChange('internal_reply_rate', e.target.value)}
+                min="0"
+                max="100"
+                className="input w-full"
+              />
+              <p className="text-gray-500 text-xs mt-1">
+                Chance de resposta automatica
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Marcar como Lido (%)
+              </label>
+              <input
+                type="number"
+                value={warmupSettings.internal_mark_read_rate || '80'}
+                onChange={(e) => handleWarmupChange('internal_mark_read_rate', e.target.value)}
+                min="0"
+                max="100"
+                className="input w-full"
+              />
+              <p className="text-gray-500 text-xs mt-1">
+                Chance de marcar email como lido
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* External Warmup (SMTP → Seeds) */}
+        <div className="mb-6">
+          <h3 className="flex items-center gap-2 text-md font-semibold text-blue-400 mb-3">
+            <Mail className="w-4 h-4" />
+            Aquecimento Externo (SMTP → Seeds)
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1 flex items-center gap-1">
+                <Percent className="w-4 h-4 text-blue-400" />
+                Taxa de Envio (%)
+              </label>
+              <input
+                type="number"
+                value={warmupSettings.external_send_rate || '50'}
+                onChange={(e) => handleWarmupChange('external_send_rate', e.target.value)}
+                min="1"
+                max="100"
+                className="input w-full"
+              />
+              <p className="text-gray-500 text-xs mt-1">
+                Chance de envio para seeds
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1 flex items-center gap-1">
+                <Clock className="w-4 h-4 text-green-400" />
+                Hora Inicio
+              </label>
+              <input
+                type="number"
+                value={warmupSettings.external_start_hour || '8'}
+                onChange={(e) => handleWarmupChange('external_start_hour', e.target.value)}
+                min="0"
+                max="23"
+                className="input w-full"
+              />
+              <p className="text-gray-500 text-xs mt-1">
+                Hora de inicio (0-23)
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1 flex items-center gap-1">
+                <Clock className="w-4 h-4 text-red-400" />
+                Hora Fim
+              </label>
+              <input
+                type="number"
+                value={warmupSettings.external_end_hour || '18'}
+                onChange={(e) => handleWarmupChange('external_end_hour', e.target.value)}
+                min="0"
+                max="23"
+                className="input w-full"
+              />
+              <p className="text-gray-500 text-xs mt-1">
+                Hora de termino (0-23)
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Intervalo (minutos)
+              </label>
+              <input
+                type="number"
+                value={warmupSettings.external_cycle_minutes || '5'}
+                onChange={(e) => handleWarmupChange('external_cycle_minutes', e.target.value)}
+                min="1"
+                max="60"
+                className="input w-full"
+              />
+              <p className="text-gray-500 text-xs mt-1">
+                Entre ciclos de envio
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Max Emails/SMTP/Dia
+              </label>
+              <input
+                type="number"
+                value={warmupSettings.max_emails_per_smtp_per_day || '50'}
+                onChange={(e) => handleWarmupChange('max_emails_per_smtp_per_day', e.target.value)}
+                min="1"
+                max="500"
+                className="input w-full"
+              />
+              <p className="text-gray-500 text-xs mt-1">
+                Limite diario por SMTP
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* IMAP Check */}
+        <div className="mb-4">
+          <h3 className="flex items-center gap-2 text-md font-semibold text-green-400 mb-3">
+            <Mail className="w-4 h-4" />
+            Verificacao IMAP
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Intervalo de Verificacao (min)
+              </label>
+              <input
+                type="number"
+                value={warmupSettings.imap_check_interval || '5'}
+                onChange={(e) => handleWarmupChange('imap_check_interval', e.target.value)}
+                min="1"
+                max="60"
+                className="input w-full"
+              />
+              <p className="text-gray-500 text-xs mt-1">
+                Frequencia de verificacao de caixa de entrada
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Save Warmup Button */}
+        <button
+          onClick={handleSaveWarmup}
+          disabled={savingWarmup}
+          className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-2 rounded-lg flex items-center gap-2 transition-colors"
+        >
+          {savingWarmup ? (
+            <RefreshCw className="w-5 h-5 animate-spin" />
+          ) : (
+            <Save className="w-5 h-5" />
+          )}
+          Salvar Configuracoes de Warmup
+        </button>
       </div>
 
       {/* Import Settings */}

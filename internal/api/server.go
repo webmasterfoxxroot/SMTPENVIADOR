@@ -365,6 +365,9 @@ func (s *Server) setupRoutes() {
 	// Sender IMAP (for internal warmup)
 	warmup.Post("/senders/:id/imap", s.updateSenderIMAP)
 	warmup.Post("/senders/:id/test-imap", s.testSenderIMAP)
+	// Warmup Settings
+	warmup.Get("/settings", s.getWarmupSettings)
+	warmup.Put("/settings", s.updateWarmupSettings)
 }
 
 // Start starts the API server
