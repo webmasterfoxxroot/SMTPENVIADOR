@@ -1068,6 +1068,26 @@ function Warmup() {
     }
   }
 
+  const toggleSeed = async (id) => {
+    try {
+      const res = await api.post(`/warmup/seeds/${id}/toggle`)
+      toast.success(`Seed ${res.data.status === 'active' ? 'ativada' : 'pausada'}`)
+      fetchAll()
+    } catch (error) {
+      toast.error('Erro ao alterar status')
+    }
+  }
+
+  const triggerSeedSend = async (id) => {
+    try {
+      const res = await api.post(`/warmup/seeds/${id}/trigger`)
+      toast.success(`Email enviado para ${res.data.to}`)
+      fetchAll()
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Erro ao enviar')
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -1303,6 +1323,24 @@ function Warmup() {
                   </span>
                   <div className="flex gap-1">
                     <button
+                      onClick={() => triggerSeedSend(seed.id)}
+                      className="p-1.5 hover:bg-cyan-50 rounded-lg"
+                      title="Enviar email"
+                    >
+                      <Send className="w-4 h-4 text-cyan-500" />
+                    </button>
+                    <button
+                      onClick={() => toggleSeed(seed.id)}
+                      className="p-1.5 hover:bg-gray-100 rounded-lg"
+                      title={seed.status === 'active' ? 'Pausar' : 'Ativar'}
+                    >
+                      {seed.status === 'active' ? (
+                        <Pause className="w-4 h-4 text-gray-400" />
+                      ) : (
+                        <Play className="w-4 h-4 text-green-500" />
+                      )}
+                    </button>
+                    <button
                       onClick={() => testSeed(seed.id)}
                       className="p-1.5 hover:bg-gray-100 rounded-lg"
                       title="Testar conexao"
@@ -1323,6 +1361,10 @@ function Warmup() {
                   {seed.status === 'active' ? (
                     <span className="text-green-600 flex items-center gap-1">
                       <CheckCircle className="w-3 h-3" /> Conectado
+                    </span>
+                  ) : seed.status === 'paused' ? (
+                    <span className="text-orange-600 flex items-center gap-1">
+                      <Pause className="w-3 h-3" /> Pausado
                     </span>
                   ) : (
                     <span className="text-red-600 flex items-center gap-1">
