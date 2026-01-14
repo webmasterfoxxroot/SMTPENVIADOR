@@ -347,6 +347,7 @@ func (s *Server) setupRoutes() {
 	warmup.Post("/smtps/:id/trigger", s.triggerWarmupSMTP)
 	warmup.Get("/smtps/:id/stats", s.getWarmupSMTPStats)
 	warmup.Put("/smtps/:id/schedule", s.updateWarmupSchedule)
+	warmup.Post("/smtps/:id/internal-warmup", s.toggleInternalWarmup)
 	// Warmup Seeds
 	warmup.Get("/seeds", s.listWarmupSeeds)
 	warmup.Post("/seeds", s.createWarmupSeed)
@@ -359,6 +360,9 @@ func (s *Server) setupRoutes() {
 	warmup.Get("/templates", s.listWarmupTemplates)
 	warmup.Post("/templates", s.createWarmupTemplate)
 	warmup.Delete("/templates/:id", s.deleteWarmupTemplate)
+	// Sender IMAP (for internal warmup)
+	warmup.Post("/senders/:id/imap", s.updateSenderIMAP)
+	warmup.Post("/senders/:id/test-imap", s.testSenderIMAP)
 }
 
 // Start starts the API server

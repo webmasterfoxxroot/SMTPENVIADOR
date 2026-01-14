@@ -92,6 +92,7 @@ func (s *Server) initWarmupTables() {
 			total_spam INT DEFAULT 0,
 			total_replies INT DEFAULT 0,
 			custom_schedule TEXT,
+			internal_warmup BOOLEAN DEFAULT false,
 			created_at TIMESTAMP DEFAULT NOW(),
 			updated_at TIMESTAMP DEFAULT NOW()
 		)
@@ -99,6 +100,9 @@ func (s *Server) initWarmupTables() {
 	if err != nil {
 		log.Printf("[Warmup] Error creating warmup_smtps table: %v", err)
 	}
+
+	// Add internal_warmup column if missing (migration)
+	s.db.Exec(`ALTER TABLE warmup_smtps ADD COLUMN IF NOT EXISTS internal_warmup BOOLEAN DEFAULT false`)
 
 	// Create warmup_seeds table
 	_, err = s.db.Exec(`
@@ -151,6 +155,16 @@ func (s *Server) initWarmupTables() {
 	// Add total_sent column to warmup_seeds for tracking sent emails
 	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS total_sent INT DEFAULT 0`)
 
+	// Add IMAP fields to smtp_senders for internal warmup (migration)
+	s.db.Exec(`ALTER TABLE smtp_senders ADD COLUMN IF NOT EXISTS imap_host VARCHAR(255)`)
+	s.db.Exec(`ALTER TABLE smtp_senders ADD COLUMN IF NOT EXISTS imap_port INT DEFAULT 993`)
+	s.db.Exec(`ALTER TABLE smtp_senders ADD COLUMN IF NOT EXISTS imap_password VARCHAR(255)`)
+	s.db.Exec(`ALTER TABLE smtp_senders ADD COLUMN IF NOT EXISTS imap_use_tls BOOLEAN DEFAULT true`)
+	s.db.Exec(`ALTER TABLE smtp_senders ADD COLUMN IF NOT EXISTS imap_tls_mode VARCHAR(20) DEFAULT 'tls'`) // tls, starttls, none
+	s.db.Exec(`ALTER TABLE smtp_senders ADD COLUMN IF NOT EXISTS imap_status VARCHAR(20) DEFAULT 'unchecked'`)
+	s.db.Exec(`ALTER TABLE smtp_senders ADD COLUMN IF NOT EXISTS imap_last_check TIMESTAMP`)
+	s.db.Exec(`ALTER TABLE smtp_senders ADD COLUMN IF NOT EXISTS imap_error TEXT`)
+
 	// Create warmup_templates table
 	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS warmup_templates (
@@ -183,6 +197,29 @@ func (s *Server) initWarmupTables() {
 	`)
 	if err != nil {
 		log.Printf("[Warmup] Error creating warmup_daily_stats table: %v", err)
+	}
+
+	// Create warmup_internal_emails table for internal SMTP-to-SMTP warmup
+	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS warmup_internal_emails (
+			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+			from_smtp_id UUID NOT NULL REFERENCES smtp_servers(id) ON DELETE CASCADE,
+			to_smtp_id UUID NOT NULL REFERENCES smtp_servers(id) ON DELETE CASCADE,
+			from_sender_email VARCHAR(255) NOT NULL,
+			to_sender_id UUID REFERENCES smtp_senders(id) ON DELETE SET NULL,
+			subject VARCHAR(500),
+			message_id VARCHAR(255),
+			status VARCHAR(20) DEFAULT 'sent',
+			received BOOLEAN DEFAULT false,
+			replied BOOLEAN DEFAULT false,
+			sent_at TIMESTAMP DEFAULT NOW(),
+			received_at TIMESTAMP,
+			replied_at TIMESTAMP,
+			created_at TIMESTAMP DEFAULT NOW()
+		)
+	`)
+	if err != nil {
+		log.Printf("[Warmup] Error creating warmup_internal_emails table: %v", err)
 	}
 
 	// Insert default warmup templates
@@ -257,7 +294,7 @@ func (s *Server) listWarmupSMTPs(c *fiber.Ctx) error {
 			w.min_emails_per_day, w.max_emails_per_day, w.reply_rate,
 			w.start_hour, w.end_hour,
 			w.total_sent, w.total_inbox, w.total_spam, w.total_replies,
-			w.custom_schedule, w.created_at, w.updated_at
+			w.custom_schedule, w.internal_warmup, w.created_at, w.updated_at
 		FROM warmup_smtps w
 		JOIN smtp_servers s ON w.smtp_id = s.id
 		ORDER BY w.created_at DESC
@@ -275,6 +312,7 @@ func (s *Server) listWarmupSMTPs(c *fiber.Ctx) error {
 		var currentDay, minEmails, maxEmails, replyRate, startHour, endHour int
 		var totalSent, totalInbox, totalSpam, totalReplies int
 		var customSchedule sql.NullString
+		var internalWarmup bool
 		var createdAt, updatedAt time.Time
 
 		err := rows.Scan(
@@ -283,7 +321,7 @@ func (s *Server) listWarmupSMTPs(c *fiber.Ctx) error {
 			&minEmails, &maxEmails, &replyRate,
 			&startHour, &endHour,
 			&totalSent, &totalInbox, &totalSpam, &totalReplies,
-			&customSchedule, &createdAt, &updatedAt,
+			&customSchedule, &internalWarmup, &createdAt, &updatedAt,
 		)
 		if err != nil {
 			continue
@@ -306,6 +344,7 @@ func (s *Server) listWarmupSMTPs(c *fiber.Ctx) error {
 			"total_inbox":        totalInbox,
 			"total_spam":         totalSpam,
 			"total_replies":      totalReplies,
+			"internal_warmup":    internalWarmup,
 			"created_at":         createdAt,
 			"updated_at":         updatedAt,
 		}
@@ -1210,15 +1249,52 @@ func detectProviderSettings(email string) (provider, imapHost string, imapPort i
 	}
 }
 
+// testIMAPConnection tests IMAP connection with different TLS modes
+// tlsMode can be: "tls" (implicit TLS), "starttls", or "none"
 func testIMAPConnection(host string, port int, email, password string, useTLS bool) error {
+	return testIMAPConnectionWithMode(host, port, email, password, getTLSModeFromBool(useTLS, port))
+}
+
+func getTLSModeFromBool(useTLS bool, port int) string {
+	if useTLS || port == 993 {
+		return "tls"
+	}
+	if port == 143 {
+		return "starttls"
+	}
+	return "none"
+}
+
+func testIMAPConnectionWithMode(host string, port int, email, password, tlsMode string) error {
 	addr := fmt.Sprintf("%s:%d", host, port)
 
 	var c *client.Client
 	var err error
 
-	if useTLS || port == 993 {
-		c, err = client.DialTLS(addr, &tls.Config{ServerName: host})
-	} else {
+	switch tlsMode {
+	case "tls":
+		// Implicit TLS (port 993)
+		c, err = client.DialTLS(addr, &tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: true,
+		})
+	case "starttls":
+		// STARTTLS (typically port 143)
+		c, err = client.Dial(addr)
+		if err != nil {
+			return fmt.Errorf("failed to connect: %v", err)
+		}
+		// Upgrade to TLS
+		tlsConfig := &tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: true,
+		}
+		if err = c.StartTLS(tlsConfig); err != nil {
+			c.Logout()
+			return fmt.Errorf("STARTTLS failed: %v", err)
+		}
+	default: // "none"
+		// Plain connection without TLS
 		c, err = client.Dial(addr)
 	}
 
@@ -1301,6 +1377,14 @@ func (s *Server) startWarmupEngine() {
 	seedToSMTPTicker := time.NewTicker(3 * time.Minute)
 	defer seedToSMTPTicker.Stop()
 
+	// Run internal warmup every 2 minutes
+	internalWarmupTicker := time.NewTicker(2 * time.Minute)
+	defer internalWarmupTicker.Stop()
+
+	// Run internal warmup IMAP check every 5 minutes
+	internalImapTicker := time.NewTicker(5 * time.Minute)
+	defer internalImapTicker.Stop()
+
 	for {
 		select {
 		case <-ticker.C:
@@ -1309,6 +1393,10 @@ func (s *Server) startWarmupEngine() {
 			s.processIMAPInteractions()
 		case <-seedToSMTPTicker.C:
 			s.processSeedToSMTPEmails()
+		case <-internalWarmupTicker.C:
+			s.processInternalWarmup()
+		case <-internalImapTicker.C:
+			s.processInternalWarmupIMAP()
 		}
 	}
 }
@@ -2229,4 +2317,426 @@ func getRandomReplyBody() string {
 		"Obrigado, vou dar seguimento nisso em breve.",
 	}
 	return replies[rand.Intn(len(replies))]
+}
+
+// ============================================
+// INTERNAL WARMUP (SMTP → SMTP)
+// ============================================
+
+// processInternalWarmup sends emails between SMTPs for internal warmup
+func (s *Server) processInternalWarmup() {
+	now := time.Now()
+	currentHour := now.Hour()
+
+	// Only run during business hours (6-22)
+	if currentHour < 6 || currentHour > 22 {
+		return
+	}
+
+	// Get SMTPs with internal warmup enabled
+	rows, err := s.db.Query(`
+		SELECT w.id, w.smtp_id, s.host, s.port, s.username, s.password, s.tls_mode
+		FROM warmup_smtps w
+		JOIN smtp_servers s ON w.smtp_id = s.id
+		WHERE w.status = 'active' AND w.internal_warmup = true AND s.active = true
+	`)
+	if err != nil {
+		log.Printf("[Internal Warmup] Error getting SMTPs: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	var smtps []struct {
+		WarmupID string
+		SMTPID   string
+		Host     string
+		Port     int
+		Username string
+		Password string
+		TLSMode  string
+	}
+
+	for rows.Next() {
+		var smtp struct {
+			WarmupID string
+			SMTPID   string
+			Host     string
+			Port     int
+			Username string
+			Password string
+			TLSMode  string
+		}
+		rows.Scan(&smtp.WarmupID, &smtp.SMTPID, &smtp.Host, &smtp.Port, &smtp.Username, &smtp.Password, &smtp.TLSMode)
+		smtps = append(smtps, smtp)
+	}
+
+	if len(smtps) < 2 {
+		// Need at least 2 SMTPs for internal warmup
+		return
+	}
+
+	log.Printf("[Internal Warmup] Found %d SMTPs with internal warmup enabled", len(smtps))
+
+	// Random chance to send (30% per cycle)
+	if rand.Intn(100) > 30 {
+		return
+	}
+
+	// Pick two different SMTPs: one to send FROM and one to send TO
+	fromIdx := rand.Intn(len(smtps))
+	toIdx := rand.Intn(len(smtps))
+	for toIdx == fromIdx && len(smtps) > 1 {
+		toIdx = rand.Intn(len(smtps))
+	}
+
+	fromSMTP := smtps[fromIdx]
+	toSMTP := smtps[toIdx]
+
+	// Get a sender from the FROM SMTP
+	var fromSenderEmail string
+	var fromSenderName sql.NullString
+	err = s.db.QueryRow(`
+		SELECT email, name FROM smtp_senders
+		WHERE smtp_id = $1 AND active = true
+		ORDER BY RANDOM() LIMIT 1
+	`, fromSMTP.SMTPID).Scan(&fromSenderEmail, &fromSenderName)
+
+	if err != nil {
+		log.Printf("[Internal Warmup] No senders for FROM SMTP: %v", err)
+		return
+	}
+
+	// Get a sender from the TO SMTP (this is where we send the email)
+	var toSenderID, toSenderEmail string
+	err = s.db.QueryRow(`
+		SELECT id, email FROM smtp_senders
+		WHERE smtp_id = $1 AND active = true AND imap_host IS NOT NULL AND imap_host != ''
+		ORDER BY RANDOM() LIMIT 1
+	`, toSMTP.SMTPID).Scan(&toSenderID, &toSenderEmail)
+
+	if err != nil {
+		log.Printf("[Internal Warmup] No senders with IMAP for TO SMTP: %v", err)
+		return
+	}
+
+	// Get a random template
+	var subject, body string
+	err = s.db.QueryRow(`
+		SELECT subject, body FROM warmup_templates
+		WHERE active = true ORDER BY RANDOM() LIMIT 1
+	`).Scan(&subject, &body)
+	if err != nil {
+		return
+	}
+
+	// Add randomization to subject
+	subject = subject + " #" + fmt.Sprintf("%d", rand.Intn(9999))
+
+	// Generate message ID with internal-warmup marker
+	messageID := fmt.Sprintf("<%s@internal-warmup>", uuid.New().String())
+
+	// Format From address with name if available
+	fromAddress := fromSenderEmail
+	if fromSenderName.Valid && fromSenderName.String != "" {
+		fromAddress = fmt.Sprintf("%s <%s>", fromSenderName.String, fromSenderEmail)
+	}
+
+	// Send email from one SMTP to another
+	err = s.sendSMTPEmail(fromSMTP.Host, fromSMTP.Port, fromSMTP.Username, fromSMTP.Password,
+		fromSMTP.TLSMode, fromAddress, toSenderEmail, subject, body, messageID)
+
+	if err != nil {
+		log.Printf("[Internal Warmup] Failed to send from %s to %s: %v", fromSenderEmail, toSenderEmail, err)
+		return
+	}
+
+	// Record the internal warmup email
+	emailID := uuid.New().String()
+	s.db.Exec(`
+		INSERT INTO warmup_internal_emails (id, from_smtp_id, to_smtp_id, from_sender_email, to_sender_id, subject, message_id, status, sent_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'sent', NOW())
+	`, emailID, fromSMTP.SMTPID, toSMTP.SMTPID, fromSenderEmail, toSenderID, subject, messageID)
+
+	log.Printf("[Internal Warmup] ✉️ Sent from %s to %s: %s", fromSenderEmail, toSenderEmail, subject)
+}
+
+// processInternalWarmupIMAP checks IMAP for smtp_senders to receive and reply to internal warmup emails
+func (s *Server) processInternalWarmupIMAP() {
+	// Get smtp_senders with IMAP configured
+	rows, err := s.db.Query(`
+		SELECT ss.id, ss.email, ss.imap_host, ss.imap_port, ss.imap_password, COALESCE(ss.imap_tls_mode, 'tls'),
+		       sm.id as smtp_id, sm.host, sm.port, sm.username, sm.password, sm.tls_mode
+		FROM smtp_senders ss
+		JOIN smtp_servers sm ON ss.smtp_id = sm.id
+		JOIN warmup_smtps w ON w.smtp_id = sm.id
+		WHERE w.internal_warmup = true AND w.status = 'active'
+		AND ss.imap_host IS NOT NULL AND ss.imap_host != ''
+		AND ss.imap_password IS NOT NULL AND ss.imap_password != ''
+	`)
+	if err != nil {
+		log.Printf("[Internal Warmup IMAP] Error: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var senderID, senderEmail, imapHost string
+		var imapPort int
+		var imapPassword string
+		var imapTLSMode string
+		var smtpID, smtpHost, smtpUsername, smtpPassword, smtpTLSMode string
+		var smtpPort int
+
+		rows.Scan(&senderID, &senderEmail, &imapHost, &imapPort, &imapPassword, &imapTLSMode,
+			&smtpID, &smtpHost, &smtpPort, &smtpUsername, &smtpPassword, &smtpTLSMode)
+
+		go s.processOneSenderIMAP(senderID, senderEmail, imapHost, imapPort, imapPassword, imapTLSMode,
+			smtpID, smtpHost, smtpPort, smtpUsername, smtpPassword, smtpTLSMode)
+	}
+}
+
+func (s *Server) processOneSenderIMAP(senderID, senderEmail, imapHost string, imapPort int, imapPassword, imapTLSMode,
+	smtpID, smtpHost string, smtpPort int, smtpUsername, smtpPassword, smtpTLSMode string) {
+
+	addr := fmt.Sprintf("%s:%d", imapHost, imapPort)
+
+	var c *client.Client
+	var err error
+
+	// Connect based on TLS mode
+	switch imapTLSMode {
+	case "tls":
+		c, err = client.DialTLS(addr, &tls.Config{
+			ServerName:         imapHost,
+			InsecureSkipVerify: true,
+		})
+	case "starttls":
+		c, err = client.Dial(addr)
+		if err != nil {
+			log.Printf("[Internal Warmup IMAP] Failed to connect for %s: %v", senderEmail, err)
+			s.db.Exec(`UPDATE smtp_senders SET imap_status = 'error', imap_error = $1, imap_last_check = NOW() WHERE id = $2`,
+				err.Error(), senderID)
+			return
+		}
+		tlsConfig := &tls.Config{
+			ServerName:         imapHost,
+			InsecureSkipVerify: true,
+		}
+		if err = c.StartTLS(tlsConfig); err != nil {
+			c.Logout()
+			log.Printf("[Internal Warmup IMAP] STARTTLS failed for %s: %v", senderEmail, err)
+			s.db.Exec(`UPDATE smtp_senders SET imap_status = 'error', imap_error = $1, imap_last_check = NOW() WHERE id = $2`,
+				err.Error(), senderID)
+			return
+		}
+	default: // "none"
+		c, err = client.Dial(addr)
+	}
+
+	if err != nil {
+		log.Printf("[Internal Warmup IMAP] Failed to connect for %s: %v", senderEmail, err)
+		s.db.Exec(`UPDATE smtp_senders SET imap_status = 'error', imap_error = $1, imap_last_check = NOW() WHERE id = $2`,
+			err.Error(), senderID)
+		return
+	}
+	defer c.Logout()
+
+	if err := c.Login(senderEmail, imapPassword); err != nil {
+		log.Printf("[Internal Warmup IMAP] Login failed for %s: %v", senderEmail, err)
+		s.db.Exec(`UPDATE smtp_senders SET imap_status = 'error', imap_error = $1, imap_last_check = NOW() WHERE id = $2`,
+			err.Error(), senderID)
+		return
+	}
+
+	// Update status to active
+	s.db.Exec(`UPDATE smtp_senders SET imap_status = 'active', imap_error = NULL, imap_last_check = NOW() WHERE id = $1`, senderID)
+
+	// Check INBOX for internal warmup emails
+	mbox, err := c.Select("INBOX", false)
+	if err != nil {
+		return
+	}
+
+	if mbox.Messages == 0 {
+		return
+	}
+
+	// Search for emails from the last 7 days
+	criteria := imap.NewSearchCriteria()
+	criteria.Since = time.Now().AddDate(0, 0, -7)
+
+	ids, err := c.Search(criteria)
+	if err != nil || len(ids) == 0 {
+		return
+	}
+
+	// Limit to last 50 messages
+	if len(ids) > 50 {
+		ids = ids[len(ids)-50:]
+	}
+
+	seqSet := new(imap.SeqSet)
+	seqSet.AddNum(ids...)
+
+	messages := make(chan *imap.Message, 10)
+	section := &imap.BodySectionName{Peek: true}
+	go func() {
+		c.Fetch(seqSet, []imap.FetchItem{imap.FetchEnvelope, section.FetchItem()}, messages)
+	}()
+
+	for msg := range messages {
+		if msg == nil || msg.Envelope == nil {
+			continue
+		}
+
+		messageID := msg.Envelope.MessageId
+		if messageID == "" {
+			continue
+		}
+
+		cleanMessageID := strings.Trim(messageID, "<>")
+
+		// Check if this is an internal warmup email
+		if !strings.Contains(cleanMessageID, "@internal-warmup") {
+			continue
+		}
+
+		log.Printf("[Internal Warmup IMAP] Found internal warmup email for %s: %s", senderEmail, msg.Envelope.Subject)
+
+		// Mark as read
+		item := imap.FormatFlagsOp(imap.AddFlags, true)
+		flags := []interface{}{imap.SeenFlag}
+		singleSeq := new(imap.SeqSet)
+		singleSeq.AddNum(msg.SeqNum)
+		c.Store(singleSeq, item, flags, nil)
+
+		// Check if we should reply (50% chance)
+		if rand.Intn(100) < 50 {
+			// Send reply
+			replySubject := "Re: " + msg.Envelope.Subject
+			replyBody := getRandomReplyBody()
+
+			// Get the sender's email from the original message
+			var fromEmail string
+			if len(msg.Envelope.From) > 0 {
+				fromEmail = msg.Envelope.From[0].Address()
+			}
+
+			if fromEmail == "" {
+				continue
+			}
+
+			replyMessageID := fmt.Sprintf("<%s@internal-warmup-reply>", uuid.New().String())
+
+			// Send reply from this sender
+			err = s.sendSMTPEmail(smtpHost, smtpPort, smtpUsername, smtpPassword, smtpTLSMode,
+				senderEmail, fromEmail, replySubject, replyBody, replyMessageID)
+
+			if err != nil {
+				log.Printf("[Internal Warmup IMAP] Failed to reply from %s: %v", senderEmail, err)
+			} else {
+				log.Printf("[Internal Warmup IMAP] ↩️ Replied from %s to %s", senderEmail, fromEmail)
+			}
+		}
+	}
+}
+
+// testSenderIMAP tests IMAP connection for a smtp_sender
+func (s *Server) testSenderIMAP(c *fiber.Ctx) error {
+	senderID := c.Params("id")
+
+	var email, imapHost string
+	var imapPort int
+	var imapPassword string
+	var imapTLSMode sql.NullString
+
+	err := s.db.QueryRow(`
+		SELECT email, imap_host, imap_port, imap_password, imap_tls_mode
+		FROM smtp_senders WHERE id = $1
+	`, senderID).Scan(&email, &imapHost, &imapPort, &imapPassword, &imapTLSMode)
+
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Sender não encontrado"})
+	}
+
+	if imapHost == "" || imapPassword == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "IMAP não configurado para este sender"})
+	}
+
+	// Get TLS mode, default to "tls" if not set
+	tlsMode := "tls"
+	if imapTLSMode.Valid && imapTLSMode.String != "" {
+		tlsMode = imapTLSMode.String
+	}
+
+	// Test IMAP connection
+	err = testIMAPConnectionWithMode(imapHost, imapPort, email, imapPassword, tlsMode)
+	if err != nil {
+		s.db.Exec(`UPDATE smtp_senders SET imap_status = 'error', imap_error = $1, imap_last_check = NOW() WHERE id = $2`,
+			err.Error(), senderID)
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	s.db.Exec(`UPDATE smtp_senders SET imap_status = 'active', imap_error = NULL, imap_last_check = NOW() WHERE id = $1`, senderID)
+
+	return c.JSON(fiber.Map{"message": "Conexão IMAP bem sucedida"})
+}
+
+// updateSenderIMAP updates IMAP settings for a smtp_sender
+func (s *Server) updateSenderIMAP(c *fiber.Ctx) error {
+	senderID := c.Params("id")
+
+	var req struct {
+		IMAPHost    string `json:"imap_host"`
+		IMAPPort    int    `json:"imap_port"`
+		IMAPPassword string `json:"imap_password"`
+		IMAPTLSMode string `json:"imap_tls_mode"` // tls, starttls, none
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Requisição inválida"})
+	}
+
+	if req.IMAPPort == 0 {
+		req.IMAPPort = 993
+	}
+
+	if req.IMAPTLSMode == "" {
+		// Auto-detect based on port
+		if req.IMAPPort == 993 {
+			req.IMAPTLSMode = "tls"
+		} else if req.IMAPPort == 143 {
+			req.IMAPTLSMode = "starttls"
+		} else {
+			req.IMAPTLSMode = "none"
+		}
+	}
+
+	_, err := s.db.Exec(`
+		UPDATE smtp_senders
+		SET imap_host = $1, imap_port = $2, imap_password = $3, imap_tls_mode = $4, imap_status = 'unchecked'
+		WHERE id = $5
+	`, req.IMAPHost, req.IMAPPort, req.IMAPPassword, req.IMAPTLSMode, senderID)
+
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{"message": "IMAP atualizado"})
+}
+
+// toggleInternalWarmup toggles internal warmup for a warmup SMTP
+func (s *Server) toggleInternalWarmup(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	var current bool
+	err := s.db.QueryRow(`SELECT internal_warmup FROM warmup_smtps WHERE id = $1`, id).Scan(&current)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "SMTP não encontrado"})
+	}
+
+	newValue := !current
+	s.db.Exec(`UPDATE warmup_smtps SET internal_warmup = $1, updated_at = NOW() WHERE id = $2`, newValue, id)
+
+	return c.JSON(fiber.Map{"internal_warmup": newValue, "message": "Aquecimento interno atualizado"})
 }
