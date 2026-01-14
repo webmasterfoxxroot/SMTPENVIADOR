@@ -784,22 +784,56 @@ function AddSeedModal({ onClose, onSave }) {
     provider: '',
     imap_host: '',
     imap_port: 993,
+    imap_tls_mode: 'tls',
     smtp_host: '',
     smtp_port: 587,
-    use_tls: true
+    smtp_tls_mode: 'starttls'
   })
   const [loading, setLoading] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testResults, setTestResults] = useState(null)
 
   const detectProvider = (email) => {
     const domain = email.split('@')[1]?.toLowerCase() || ''
     if (domain.includes('gmail')) {
-      setForm({ ...form, email, provider: 'gmail', imap_host: 'imap.gmail.com', imap_port: 993, smtp_host: 'smtp.gmail.com', smtp_port: 587 })
+      setForm({ ...form, email, provider: 'gmail', imap_host: 'imap.gmail.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.gmail.com', smtp_port: 587, smtp_tls_mode: 'starttls' })
     } else if (domain.includes('yahoo')) {
-      setForm({ ...form, email, provider: 'yahoo', imap_host: 'imap.mail.yahoo.com', imap_port: 993, smtp_host: 'smtp.mail.yahoo.com', smtp_port: 587 })
+      setForm({ ...form, email, provider: 'yahoo', imap_host: 'imap.mail.yahoo.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.mail.yahoo.com', smtp_port: 587, smtp_tls_mode: 'starttls' })
     } else if (domain.includes('outlook') || domain.includes('hotmail') || domain.includes('live')) {
-      setForm({ ...form, email, provider: 'outlook', imap_host: 'outlook.office365.com', imap_port: 993, smtp_host: 'smtp.office365.com', smtp_port: 587 })
+      setForm({ ...form, email, provider: 'outlook', imap_host: 'outlook.office365.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.office365.com', smtp_port: 587, smtp_tls_mode: 'starttls' })
+    } else if (domain.includes('sapo')) {
+      setForm({ ...form, email, provider: 'sapo', imap_host: 'imap.sapo.pt', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.sapo.pt', smtp_port: 587, smtp_tls_mode: 'starttls' })
     } else {
       setForm({ ...form, email, provider: 'other' })
+    }
+  }
+
+  const testConnection = async (testType) => {
+    if (!form.email || !form.password) {
+      toast.error('Preencha email e senha primeiro')
+      return
+    }
+    setTesting(true)
+    setTestResults(null)
+    try {
+      const res = await api.post('/warmup/seeds/test-connection', { ...form, test_type: testType })
+      setTestResults(res.data)
+      if (res.data.imap?.success && (testType === 'imap' || !res.data.smtp)) {
+        toast.success('Conexão IMAP OK!')
+      } else if (res.data.smtp?.success && testType === 'smtp') {
+        toast.success('Conexão SMTP OK!')
+      } else if (res.data.imap?.success && res.data.smtp?.success) {
+        toast.success('Conexões OK!')
+      } else {
+        const errors = []
+        if (res.data.imap?.error) errors.push(`IMAP: ${res.data.imap.error}`)
+        if (res.data.smtp?.error) errors.push(`SMTP: ${res.data.smtp.error}`)
+        toast.error(errors.join('\n') || 'Erro na conexão')
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Erro ao testar')
+    } finally {
+      setTesting(false)
     }
   }
 
@@ -861,54 +895,128 @@ function AddSeedModal({ onClose, onSave }) {
             <p className="text-xs text-gray-400 mt-1">Use "App Password" para Gmail/Yahoo/Outlook com 2FA</p>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">IMAP Host</label>
-              <input
-                type="text"
-                value={form.imap_host}
-                onChange={(e) => setForm({ ...form, imap_host: e.target.value })}
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                placeholder="imap.gmail.com"
-                required
-              />
+          {/* IMAP Settings */}
+          <div className="p-4 bg-blue-50 rounded-xl space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="font-medium text-blue-900">Configurações IMAP</h4>
+              <button
+                type="button"
+                onClick={() => testConnection('imap')}
+                disabled={testing}
+                className="px-3 py-1 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 flex items-center gap-1"
+              >
+                {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <TestTube className="w-4 h-4" />}
+                Testar IMAP
+              </button>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">IMAP Porta</label>
-              <input
-                type="number"
-                value={form.imap_port}
-                onChange={(e) => setForm({ ...form, imap_port: parseInt(e.target.value) })}
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-              />
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-1">
+                <label className="block text-xs font-medium text-gray-600 mb-1">Host</label>
+                <input
+                  type="text"
+                  value={form.imap_host}
+                  onChange={(e) => setForm({ ...form, imap_host: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  placeholder="imap.gmail.com"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Porta</label>
+                <input
+                  type="number"
+                  value={form.imap_port}
+                  onChange={(e) => setForm({ ...form, imap_port: parseInt(e.target.value) })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Protocolo TLS</label>
+                <select
+                  value={form.imap_tls_mode}
+                  onChange={(e) => setForm({ ...form, imap_tls_mode: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                >
+                  <option value="tls">TLS (993)</option>
+                  <option value="starttls">STARTTLS (143)</option>
+                  <option value="none">Nenhum</option>
+                </select>
+              </div>
             </div>
+            {testResults?.imap && (
+              <div className={`text-sm p-2 rounded-lg ${testResults.imap.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                {testResults.imap.success ? '✓ ' + testResults.imap.message : '✗ ' + testResults.imap.error}
+              </div>
+            )}
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">SMTP Host</label>
-              <input
-                type="text"
-                value={form.smtp_host}
-                onChange={(e) => setForm({ ...form, smtp_host: e.target.value })}
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                placeholder="smtp.gmail.com"
-              />
+          {/* SMTP Settings */}
+          <div className="p-4 bg-orange-50 rounded-xl space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="font-medium text-orange-900">Configurações SMTP (Opcional)</h4>
+              <button
+                type="button"
+                onClick={() => testConnection('smtp')}
+                disabled={testing || !form.smtp_host}
+                className="px-3 py-1 bg-orange-600 text-white text-sm rounded-lg hover:bg-orange-700 flex items-center gap-1 disabled:opacity-50"
+              >
+                {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <TestTube className="w-4 h-4" />}
+                Testar SMTP
+              </button>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">SMTP Porta</label>
-              <input
-                type="number"
-                value={form.smtp_port}
-                onChange={(e) => setForm({ ...form, smtp_port: parseInt(e.target.value) })}
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-              />
+            <p className="text-xs text-orange-700">Para seeds que também enviam emails (bidirectional warmup)</p>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-1">
+                <label className="block text-xs font-medium text-gray-600 mb-1">Host</label>
+                <input
+                  type="text"
+                  value={form.smtp_host}
+                  onChange={(e) => setForm({ ...form, smtp_host: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                  placeholder="smtp.gmail.com"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Porta</label>
+                <input
+                  type="number"
+                  value={form.smtp_port}
+                  onChange={(e) => setForm({ ...form, smtp_port: parseInt(e.target.value) })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Protocolo TLS</label>
+                <select
+                  value={form.smtp_tls_mode}
+                  onChange={(e) => setForm({ ...form, smtp_tls_mode: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                >
+                  <option value="tls">TLS (465)</option>
+                  <option value="starttls">STARTTLS (587)</option>
+                  <option value="none">Nenhum</option>
+                </select>
+              </div>
             </div>
+            {testResults?.smtp && (
+              <div className={`text-sm p-2 rounded-lg ${testResults.smtp.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                {testResults.smtp.success ? '✓ ' + testResults.smtp.message : '✗ ' + testResults.smtp.error}
+              </div>
+            )}
           </div>
 
           <div className="flex justify-end gap-3 pt-4 border-t">
             <button type="button" onClick={onClose} className="px-6 py-3 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50">
               Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={() => testConnection('both')}
+              disabled={testing}
+              className="px-6 py-3 bg-gray-600 text-white rounded-xl font-medium hover:bg-gray-700 flex items-center gap-2"
+            >
+              {testing ? <Loader2 className="w-5 h-5 animate-spin" /> : <TestTube className="w-5 h-5" />}
+              Testar Tudo
             </button>
             <button type="submit" disabled={loading} className="px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 flex items-center gap-2">
               {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
