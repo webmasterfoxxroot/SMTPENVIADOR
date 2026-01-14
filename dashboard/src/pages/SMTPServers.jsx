@@ -10,7 +10,11 @@ import {
   Loader2,
   Server,
   Send,
-  X
+  X,
+  Mail,
+  Inbox,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
@@ -27,11 +31,20 @@ function SMTPModal({ smtp, onClose, onSave }) {
     max_per_hour: 50000,
     max_connections: 5,
     active: true,
+    // IMAP configuration
+    imap_host: '',
+    imap_port: 993,
+    imap_password: '',
+    imap_tls_mode: 'tls',
     ...smtp
   })
   const [senders, setSenders] = useState('')
   const [loading, setLoading] = useState(false)
   const [loadingSenders, setLoadingSenders] = useState(false)
+  const [testingSmtp, setTestingSmtp] = useState(false)
+  const [testingImap, setTestingImap] = useState(false)
+  const [smtpTestResult, setSmtpTestResult] = useState(null)
+  const [imapTestResult, setImapTestResult] = useState(null)
 
   // Load existing senders when editing
   useEffect(() => {
@@ -49,8 +62,89 @@ function SMTPModal({ smtp, onClose, onSave }) {
         return s.email
       }).join('\n')
       setSenders(senderText)
+
+      // Load IMAP data from first sender (if exists)
+      if (senderList.length > 0) {
+        const firstSender = senderList[0]
+        if (firstSender.imap_host) {
+          setForm(prev => ({
+            ...prev,
+            imap_host: firstSender.imap_host || '',
+            imap_port: firstSender.imap_port || 993,
+            imap_password: '', // Don't show password for security
+            imap_tls_mode: firstSender.imap_tls_mode || 'tls'
+          }))
+        }
+      }
     } catch (error) {
       console.error('Error loading senders:', error)
+    }
+  }
+
+  // Test SMTP connection
+  const testSmtpConnection = async () => {
+    if (!form.host || !form.username || !form.password) {
+      toast.error('Preencha host, usuário e senha do SMTP')
+      return
+    }
+    setTestingSmtp(true)
+    setSmtpTestResult(null)
+    try {
+      await api.post('/smtp/test-connection', {
+        host: form.host,
+        port: form.port,
+        username: form.username,
+        password: form.password,
+        tls_mode: form.tls_mode
+      })
+      setSmtpTestResult({ success: true, message: 'Conexão SMTP OK!' })
+      toast.success('Conexão SMTP OK!')
+    } catch (error) {
+      const msg = error.response?.data?.details || error.response?.data?.error || 'Falha na conexão SMTP'
+      setSmtpTestResult({ success: false, message: msg })
+      toast.error(msg)
+    } finally {
+      setTestingSmtp(false)
+    }
+  }
+
+  // Test IMAP connection
+  const testImapConnection = async () => {
+    if (!form.imap_host || !form.username) {
+      toast.error('Preencha host IMAP e usuário')
+      return
+    }
+    const imapPassword = form.imap_password || form.password
+    if (!imapPassword) {
+      toast.error('Preencha a senha IMAP ou senha SMTP')
+      return
+    }
+    setTestingImap(true)
+    setImapTestResult(null)
+    try {
+      const response = await api.post('/warmup/seeds/test-connection', {
+        email: form.username,
+        password: imapPassword,
+        imap_host: form.imap_host,
+        imap_port: form.imap_port || 993,
+        imap_tls_mode: form.imap_tls_mode || 'tls',
+        test_type: 'imap'
+      })
+      // Check response for IMAP result
+      if (response.data?.imap?.success) {
+        setImapTestResult({ success: true, message: 'Conexão IMAP OK!' })
+        toast.success('Conexão IMAP OK!')
+      } else {
+        const msg = response.data?.imap?.error || 'Falha na conexão IMAP'
+        setImapTestResult({ success: false, message: msg })
+        toast.error(msg)
+      }
+    } catch (error) {
+      const msg = error.response?.data?.details || error.response?.data?.error || 'Falha na conexão IMAP'
+      setImapTestResult({ success: false, message: msg })
+      toast.error(msg)
+    } finally {
+      setTestingImap(false)
     }
   }
 
@@ -74,7 +168,12 @@ function SMTPModal({ smtp, onClose, onSave }) {
           const parts = line.trim().split('|')
           return {
             email: parts[0].trim(),
-            name: parts[1]?.trim() || ''
+            name: parts[1]?.trim() || '',
+            // Include IMAP config for each sender
+            imap_host: form.imap_host,
+            imap_port: form.imap_port,
+            imap_password: form.imap_password || form.password,
+            imap_tls_mode: form.imap_tls_mode
           }
         })
 
@@ -216,6 +315,136 @@ function SMTPModal({ smtp, onClose, onSave }) {
                 Ativo
               </label>
             </div>
+          </div>
+
+          {/* Botão Testar SMTP */}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={testSmtpConnection}
+              disabled={testingSmtp}
+              className="flex-1 py-2.5 px-4 border-2 border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+            >
+              {testingSmtp ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Testando SMTP...
+                </>
+              ) : (
+                <>
+                  <Mail className="w-4 h-4" />
+                  Testar Conexão SMTP
+                </>
+              )}
+            </button>
+            {smtpTestResult && (
+              <div className={`flex items-center gap-1.5 text-sm ${smtpTestResult.success ? 'text-green-600' : 'text-red-600'}`}>
+                {smtpTestResult.success ? (
+                  <CheckCircle2 className="w-5 h-5" />
+                ) : (
+                  <AlertCircle className="w-5 h-5" />
+                )}
+                <span className="max-w-[150px] truncate">{smtpTestResult.message}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Separador IMAP */}
+          <div className="border-t border-gray-200 pt-4 mt-2">
+            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-3">
+              <Inbox className="w-4 h-4" />
+              Configuração IMAP (para aquecimento interno)
+            </h3>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Host IMAP</label>
+              <input
+                type="text"
+                value={form.imap_host}
+                onChange={(e) => setForm({ ...form, imap_host: e.target.value })}
+                className="input"
+                placeholder="imap.servidor.com"
+              />
+            </div>
+            <div>
+              <label className="label">Porta IMAP</label>
+              <input
+                type="number"
+                value={form.imap_port}
+                onChange={(e) => setForm({ ...form, imap_port: parseInt(e.target.value) })}
+                className="input"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Senha IMAP</label>
+              <input
+                type="password"
+                value={form.imap_password}
+                onChange={(e) => setForm({ ...form, imap_password: e.target.value })}
+                className="input"
+                placeholder="(usar mesma senha SMTP)"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Deixe vazio para usar a senha SMTP
+              </p>
+            </div>
+            <div>
+              <label className="label">Modo TLS IMAP</label>
+              <select
+                value={form.imap_tls_mode}
+                onChange={(e) => setForm({ ...form, imap_tls_mode: e.target.value })}
+                className="input"
+              >
+                <option value="none">Nenhum (porta 143)</option>
+                <option value="starttls">STARTTLS (porta 143)</option>
+                <option value="tls">TLS Implícito (porta 993)</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Botão Testar IMAP */}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={testImapConnection}
+              disabled={testingImap}
+              className="flex-1 py-2.5 px-4 border-2 border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+            >
+              {testingImap ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Testando IMAP...
+                </>
+              ) : (
+                <>
+                  <Inbox className="w-4 h-4" />
+                  Testar Conexão IMAP
+                </>
+              )}
+            </button>
+            {imapTestResult && (
+              <div className={`flex items-center gap-1.5 text-sm ${imapTestResult.success ? 'text-green-600' : 'text-red-600'}`}>
+                {imapTestResult.success ? (
+                  <CheckCircle2 className="w-5 h-5" />
+                ) : (
+                  <AlertCircle className="w-5 h-5" />
+                )}
+                <span className="max-w-[150px] truncate">{imapTestResult.message}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Separador Remetentes */}
+          <div className="border-t border-gray-200 pt-4 mt-2">
+            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-3">
+              <Send className="w-4 h-4" />
+              Remetentes
+            </h3>
           </div>
 
           <div>
