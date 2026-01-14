@@ -1118,37 +1118,62 @@ func (s *Server) getWarmupStats(c *fiber.Ctx) error {
 	})
 }
 
-// getWarmupActivity returns recent warmup activity
+// getWarmupActivity returns recent warmup activity (including internal warmup)
 func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
+	// Query both regular warmup emails and internal warmup emails
 	rows, err := s.db.Query(`
-		SELECT e.id, e.subject, e.status, e.sent_at, s.email as seed_email,
-			   sm.name as smtp_name
-		FROM warmup_emails e
-		JOIN warmup_seeds s ON e.seed_id = s.id
-		JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
-		JOIN smtp_servers sm ON w.smtp_id = sm.id
-		ORDER BY e.sent_at DESC
+		(
+			SELECT e.id, e.subject, e.status, e.sent_at, s.email as target_email,
+				   sm.name as smtp_name, 'seed' as warmup_type
+			FROM warmup_emails e
+			JOIN warmup_seeds s ON e.seed_id = s.id
+			JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
+			JOIN smtp_servers sm ON w.smtp_id = sm.id
+		)
+		UNION ALL
+		(
+			SELECT ie.id, ie.subject, ie.status, ie.from_sender_email as target_email,
+				   CONCAT(sm_from.name, ' → ', sm_to.name) as smtp_name, 'internal' as warmup_type
+			FROM warmup_internal_emails ie
+			JOIN smtp_servers sm_from ON ie.from_smtp_id = sm_from.id
+			JOIN smtp_servers sm_to ON ie.to_smtp_id = sm_to.id
+		)
+		ORDER BY sent_at DESC
 		LIMIT 50
 	`)
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		// If warmup_internal_emails table doesn't exist yet, fall back to original query
+		rows, err = s.db.Query(`
+			SELECT e.id, e.subject, e.status, e.sent_at, s.email as seed_email,
+				   sm.name as smtp_name, 'seed' as warmup_type
+			FROM warmup_emails e
+			JOIN warmup_seeds s ON e.seed_id = s.id
+			JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
+			JOIN smtp_servers sm ON w.smtp_id = sm.id
+			ORDER BY e.sent_at DESC
+			LIMIT 50
+		`)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
 	}
 	defer rows.Close()
 
 	var activities []fiber.Map
 	for rows.Next() {
-		var id, subject, status, seedEmail, smtpName string
+		var id, subject, status, targetEmail, smtpName, warmupType string
 		var sentAt time.Time
 
-		rows.Scan(&id, &subject, &status, &sentAt, &seedEmail, &smtpName)
+		rows.Scan(&id, &subject, &status, &sentAt, &targetEmail, &smtpName, &warmupType)
 
 		activities = append(activities, fiber.Map{
-			"id":         id,
-			"subject":    subject,
-			"status":     status,
-			"sent_at":    sentAt,
-			"seed_email": seedEmail,
-			"smtp_name":  smtpName,
+			"id":          id,
+			"subject":     subject,
+			"status":      status,
+			"sent_at":     sentAt,
+			"seed_email":  targetEmail,
+			"smtp_name":   smtpName,
+			"warmup_type": warmupType,
 		})
 	}
 
