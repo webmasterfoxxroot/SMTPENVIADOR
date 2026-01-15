@@ -1220,20 +1220,21 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 	// Query both regular warmup emails and internal warmup emails
 	rows, err := s.db.Query(`
 		(
-			SELECT e.id, e.subject, e.status, e.sent_at, s.email as target_email,
-				   sm.name as smtp_name, 'seed' as warmup_type
+			SELECT e.id, e.subject, e.status, e.sent_at,
+				   '' as from_email, s.email as to_email,
+				   'seed' as warmup_type
 			FROM warmup_emails e
 			JOIN warmup_seeds s ON e.seed_id = s.id
 			JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
-			JOIN smtp_servers sm ON w.smtp_id = sm.id
 		)
 		UNION ALL
 		(
-			SELECT ie.id, ie.subject, ie.status, ie.sent_at, ie.from_sender_email as target_email,
-				   CONCAT(sm_from.name, ' → ', sm_to.name) as smtp_name, 'internal' as warmup_type
+			SELECT ie.id, ie.subject, ie.status, ie.sent_at,
+				   ie.from_sender_email as from_email,
+				   COALESCE(ss.email, '') as to_email,
+				   'internal' as warmup_type
 			FROM warmup_internal_emails ie
-			JOIN smtp_servers sm_from ON ie.from_smtp_id = sm_from.id
-			JOIN smtp_servers sm_to ON ie.to_smtp_id = sm_to.id
+			LEFT JOIN smtp_senders ss ON ie.to_sender_id = ss.id
 		)
 		ORDER BY sent_at DESC
 		LIMIT 50
@@ -1241,12 +1242,12 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 	if err != nil {
 		// If warmup_internal_emails table doesn't exist yet, fall back to original query
 		rows, err = s.db.Query(`
-			SELECT e.id, e.subject, e.status, e.sent_at, s.email as seed_email,
-				   sm.name as smtp_name, 'seed' as warmup_type
+			SELECT e.id, e.subject, e.status, e.sent_at,
+				   '' as from_email, s.email as to_email,
+				   'seed' as warmup_type
 			FROM warmup_emails e
 			JOIN warmup_seeds s ON e.seed_id = s.id
 			JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
-			JOIN smtp_servers sm ON w.smtp_id = sm.id
 			ORDER BY e.sent_at DESC
 			LIMIT 50
 		`)
@@ -1258,18 +1259,18 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 
 	var activities []fiber.Map
 	for rows.Next() {
-		var id, subject, status, targetEmail, smtpName, warmupType string
+		var id, subject, status, fromEmail, toEmail, warmupType string
 		var sentAt time.Time
 
-		rows.Scan(&id, &subject, &status, &sentAt, &targetEmail, &smtpName, &warmupType)
+		rows.Scan(&id, &subject, &status, &sentAt, &fromEmail, &toEmail, &warmupType)
 
 		activities = append(activities, fiber.Map{
 			"id":          id,
 			"subject":     subject,
 			"status":      status,
 			"sent_at":     sentAt,
-			"seed_email":  targetEmail,
-			"smtp_name":   smtpName,
+			"from_email":  fromEmail,
+			"to_email":    toEmail,
 			"warmup_type": warmupType,
 		})
 	}
@@ -2716,20 +2717,18 @@ func (s *Server) processInternalWarmup() {
 		}
 	}
 
-	if len(activeSmtps) < 2 {
-		log.Printf("[Internal Warmup] Only %d SMTPs within active hours, need 2", len(activeSmtps))
+	if len(activeSmtps) < 1 {
+		log.Printf("[Internal Warmup] No SMTPs within active hours")
 		return
 	}
 
-	// Pick two different SMTPs: one to send FROM and one to send TO
+	// Pick an SMTP to use for warmup
+	// For self-warmup (same SMTP), we send from one sender to another sender of the SAME SMTP
 	fromIdx := rand.Intn(len(activeSmtps))
-	toIdx := rand.Intn(len(activeSmtps))
-	for toIdx == fromIdx && len(activeSmtps) > 1 {
-		toIdx = rand.Intn(len(activeSmtps))
-	}
-
 	fromSMTP := activeSmtps[fromIdx]
-	toSMTP := activeSmtps[toIdx]
+
+	// Use the same SMTP for both FROM and TO (self-warmup within same SMTP)
+	toSMTP := fromSMTP
 
 	// Random chance to send based on FROM SMTP's send_rate
 	sendRate := fromSMTP.SendRate
@@ -2741,30 +2740,31 @@ func (s *Server) processInternalWarmup() {
 		return
 	}
 
-	// Get a sender from the FROM SMTP
-	var fromSenderEmail string
+	// Get TWO DIFFERENT senders from the SAME SMTP
+	var fromSenderID, fromSenderEmail string
 	var fromSenderName sql.NullString
 	err = s.db.QueryRow(`
-		SELECT email, name FROM smtp_senders
+		SELECT id, email, name FROM smtp_senders
 		WHERE smtp_id = $1 AND active = true
 		ORDER BY RANDOM() LIMIT 1
-	`, fromSMTP.SMTPID).Scan(&fromSenderEmail, &fromSenderName)
+	`, fromSMTP.SMTPID).Scan(&fromSenderID, &fromSenderEmail, &fromSenderName)
 
 	if err != nil {
-		log.Printf("[Internal Warmup] No senders for FROM SMTP: %v", err)
+		log.Printf("[Internal Warmup] No senders for SMTP %s: %v", fromSMTP.Host, err)
 		return
 	}
 
-	// Get a sender from the TO SMTP (this is where we send the email)
+	// Get a DIFFERENT sender from the same SMTP (must have IMAP configured)
 	var toSenderID, toSenderEmail string
 	err = s.db.QueryRow(`
 		SELECT id, email FROM smtp_senders
-		WHERE smtp_id = $1 AND active = true AND imap_host IS NOT NULL AND imap_host != ''
+		WHERE smtp_id = $1 AND active = true AND id != $2
+		AND imap_host IS NOT NULL AND imap_host != ''
 		ORDER BY RANDOM() LIMIT 1
-	`, toSMTP.SMTPID).Scan(&toSenderID, &toSenderEmail)
+	`, toSMTP.SMTPID, fromSenderID).Scan(&toSenderID, &toSenderEmail)
 
 	if err != nil {
-		log.Printf("[Internal Warmup] No senders with IMAP for TO SMTP: %v", err)
+		log.Printf("[Internal Warmup] No other senders with IMAP for SMTP %s (need at least 2 senders): %v", toSMTP.Host, err)
 		return
 	}
 
