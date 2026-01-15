@@ -2709,7 +2709,18 @@ func (s *Server) processInternalWarmup() {
 		TLSMode   string
 	}
 	for _, smtp := range smtps {
-		if currentHour >= smtp.StartHour && currentHour <= smtp.EndHour {
+		// Check if current hour is within the SMTP's active hours
+		// Handle wrap-around midnight (e.g., 23-22 means almost all day)
+		isWithinHours := false
+		if smtp.StartHour <= smtp.EndHour {
+			// Normal range (e.g., 6-22)
+			isWithinHours = currentHour >= smtp.StartHour && currentHour <= smtp.EndHour
+		} else {
+			// Wraps around midnight (e.g., 23-6 means 23:00 to 06:59)
+			isWithinHours = currentHour >= smtp.StartHour || currentHour <= smtp.EndHour
+		}
+
+		if isWithinHours {
 			activeSmtps = append(activeSmtps, smtp)
 		} else {
 			log.Printf("[Internal Warmup] SMTP %s outside hours (current: %d, range: %d-%d)",
