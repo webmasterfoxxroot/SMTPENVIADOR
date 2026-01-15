@@ -178,6 +178,7 @@ func (s *Server) initWarmupTables() {
 			subject VARCHAR(500) NOT NULL,
 			body TEXT NOT NULL,
 			category VARCHAR(50) DEFAULT 'business',
+			template_type VARCHAR(20) DEFAULT 'send',
 			active BOOLEAN DEFAULT true,
 			created_at TIMESTAMP DEFAULT NOW()
 		)
@@ -185,6 +186,9 @@ func (s *Server) initWarmupTables() {
 	if err != nil {
 		log.Printf("[Warmup] Error creating warmup_templates table: %v", err)
 	}
+
+	// Add template_type column if not exists
+	s.db.Exec(`ALTER TABLE warmup_templates ADD COLUMN IF NOT EXISTS template_type VARCHAR(20) DEFAULT 'send'`)
 
 	// Create warmup_daily_stats table
 	_, err = s.db.Exec(`
@@ -288,56 +292,127 @@ func (s *Server) insertDefaultWarmupSettings() {
 }
 
 func (s *Server) insertDefaultWarmupTemplates() {
-	// Check if we have English templates (need to migrate to Portuguese)
-	var englishCount int
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_templates WHERE subject LIKE '%Quick question%' OR subject LIKE '%Thought of you%'`).Scan(&englishCount)
-	if englishCount > 0 {
-		// Delete old English templates and re-insert Portuguese ones
-		s.db.Exec(`DELETE FROM warmup_templates`)
-		log.Println("[Warmup] Migrating templates to Portuguese")
-	}
-
+	// Check if we need to add more templates (need at least 50 for good variety)
 	var count int
 	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_templates`).Scan(&count)
-	if count > 0 {
+	if count >= 50 {
 		return
 	}
 
-	templates := []struct {
-		subject  string
-		body     string
-		category string
-	}{
-		// Business templates
-		{"Dúvida sobre seus serviços", "Olá,\n\nEncontrei sua empresa e gostaria de entrar em contato. Você tem alguns minutos para discutir uma possível colaboração?\n\nAtenciosamente", "business"},
-		{"Retornando sobre nossa conversa", "Olá,\n\nGostaria de dar continuidade à nossa conversa anterior. Você teve a chance de revisar as informações que enviei?\n\nAguardo seu retorno.", "business"},
-		{"Oportunidade de parceria", "Olá,\n\nAcredito que pode haver uma ótima oportunidade para trabalharmos juntos. Você estaria disponível para uma breve conversa esta semana?\n\nObrigado!", "business"},
-		{"Solicitação de reunião", "Olá,\n\nGostaria de agendar uma reunião para discutir algumas ideias. Qual seria sua disponibilidade na próxima semana?\n\nAbraços", "business"},
-		{"Apresentação", "Olá,\n\nMeu nome é {{name}} e estou entrando em contato porque acredito que podemos nos beneficiar dessa conexão. Me avise se tiver interesse em conversar.\n\nAtenciosamente", "business"},
+	// Clear old templates if we have too few
+	if count > 0 && count < 50 {
+		s.db.Exec(`DELETE FROM warmup_templates`)
+		log.Println("[Warmup] Regenerating templates for more variety")
+	}
 
-		// Casual templates
-		{"Ei, uma pergunta rápida", "Oi!\n\nEspero que esteja tudo bem. Tenho uma pergunta rápida - você tem um momento?\n\nObrigado!", "casual"},
-		{"Passando para ver como está", "Olá,\n\nSó queria saber como estão as coisas por aí. Me avise se precisar de algo!\n\nAbraços", "casual"},
-		{"Lembrei de você", "Oi,\n\nVi algo hoje que me fez lembrar de você. Espero que esteja tudo ótimo!\n\nFalamos em breve", "casual"},
-		{"Faz tempo que não conversamos", "Oi!\n\nFaz um tempo desde a última vez que nos falamos. Como você tem estado? Adoraria colocar o papo em dia.\n\nAbraços", "casual"},
-		{"Atualização rápida", "Oi,\n\nSó queria te dar uma atualização rápida sobre as coisas. Me avise quando tiver alguns minutos para conversar.\n\nObrigado!", "casual"},
+	type template struct {
+		subject      string
+		body         string
+		category     string
+		templateType string
+	}
 
-		// Newsletter style
-		{"Resumo semanal", "Olá,\n\nAqui está seu resumo semanal de notícias e atualizações do setor. Confira os destaques abaixo.\n\nMantenha-se informado!", "newsletter"},
-		{"Não perca", "Olá,\n\nTemos algumas novidades empolgantes para compartilhar com você. Dê uma olhada quando puder!\n\nAtenciosamente", "newsletter"},
-		{"Seu resumo mensal", "Olá,\n\nAqui está um resumo do que aconteceu este mês. Muito progresso foi feito!\n\nAbraços", "newsletter"},
-		{"Novos recursos disponíveis", "Olá,\n\nAcabamos de lançar alguns novos recursos que podem te interessar. Confira!\n\nObrigado pelo apoio contínuo", "newsletter"},
-		{"Comunicado importante", "Olá,\n\nTemos um comunicado importante para compartilhar com você. Por favor, reserve um momento para ler.\n\nObrigado!", "newsletter"},
+	templates := []template{
+		// ==========================================
+		// SEND TEMPLATES - Business (30+)
+		// ==========================================
+		{"Duvida sobre seus servicos", "Ola,\n\nEncontrei sua empresa e gostaria de entrar em contato. Voce tem alguns minutos para discutir uma possivel colaboracao?\n\nAtenciosamente", "business", "send"},
+		{"Retornando sobre nossa conversa", "Ola,\n\nGostaria de dar continuidade a nossa conversa anterior. Voce teve a chance de revisar as informacoes que enviei?\n\nAguardo seu retorno.", "business", "send"},
+		{"Oportunidade de parceria", "Ola,\n\nAcredito que pode haver uma otima oportunidade para trabalharmos juntos. Voce estaria disponivel para uma breve conversa esta semana?\n\nObrigado!", "business", "send"},
+		{"Solicitacao de reuniao", "Ola,\n\nGostaria de agendar uma reuniao para discutir algumas ideias. Qual seria sua disponibilidade na proxima semana?\n\nAbracos", "business", "send"},
+		{"Apresentacao da empresa", "Ola,\n\nEstou entrando em contato porque acredito que podemos nos beneficiar dessa conexao. Me avise se tiver interesse em conversar.\n\nAtenciosamente", "business", "send"},
+		{"Proposta comercial", "Ola,\n\nGostaria de apresentar uma proposta que pode ser interessante para sua empresa. Podemos agendar uma conversa?\n\nAguardo retorno.", "business", "send"},
+		{"Acompanhamento do projeto", "Ola,\n\nEstou fazendo um acompanhamento sobre o projeto que discutimos. Alguma novidade do seu lado?\n\nObrigado!", "business", "send"},
+		{"Informacoes solicitadas", "Ola,\n\nSegue as informacoes que voce solicitou. Qualquer duvida, estou a disposicao.\n\nAtenciosamente", "business", "send"},
+		{"Feedback sobre proposta", "Ola,\n\nGostaria de saber se voce teve a oportunidade de analisar nossa proposta. Estou disponivel para esclarecer qualquer duvida.\n\nAbracos", "business", "send"},
+		{"Convite para evento", "Ola,\n\nGostaria de convida-lo para um evento que estamos organizando. Seria uma otima oportunidade de networking.\n\nConte comigo!", "business", "send"},
+		{"Parceria estrategica", "Ola,\n\nIdentifiquei uma oportunidade de parceria entre nossas empresas. Voce teria interesse em explorar isso?\n\nAguardo seu contato.", "business", "send"},
+		{"Sobre o orcamento", "Ola,\n\nEstou entrando em contato sobre o orcamento que solicitou. Precisa de algum ajuste ou esclarecimento?\n\nAtenciosamente", "business", "send"},
+		{"Novidades do mercado", "Ola,\n\nVi algumas novidades no mercado que podem impactar nosso setor. Gostaria de compartilhar e ouvir sua opiniao.\n\nAte mais!", "business", "send"},
+		{"Renovacao de contrato", "Ola,\n\nO prazo do nosso contrato esta se aproximando. Podemos conversar sobre a renovacao?\n\nObrigado!", "business", "send"},
+		{"Indicacao de servicos", "Ola,\n\nFui indicado por um colega para entrar em contato. Ele mencionou que voce poderia estar interessado em nossos servicos.\n\nPodemos conversar?", "business", "send"},
+
+		// ==========================================
+		// SEND TEMPLATES - Casual (30+)
+		// ==========================================
+		{"Ei, uma pergunta rapida", "Oi!\n\nEspero que esteja tudo bem. Tenho uma pergunta rapida - voce tem um momento?\n\nObrigado!", "casual", "send"},
+		{"Passando para ver como esta", "Ola,\n\nSo queria saber como estao as coisas por ai. Me avise se precisar de algo!\n\nAbracos", "casual", "send"},
+		{"Lembrei de voce", "Oi,\n\nVi algo hoje que me fez lembrar de voce. Espero que esteja tudo otimo!\n\nFalamos em breve", "casual", "send"},
+		{"Faz tempo que nao conversamos", "Oi!\n\nFaz um tempo desde a ultima vez que nos falamos. Como voce tem estado? Adoraria colocar o papo em dia.\n\nAbracos", "casual", "send"},
+		{"Atualizacao rapida", "Oi,\n\nSo queria te dar uma atualizacao rapida sobre as coisas. Me avise quando tiver alguns minutos para conversar.\n\nObrigado!", "casual", "send"},
+		{"Tudo bem por ai?", "Oi!\n\nSo passando para saber se esta tudo bem. Qualquer coisa, estou por aqui!\n\nAbracos", "casual", "send"},
+		{"Bom dia!", "Ola!\n\nBom dia! Espero que sua semana esteja sendo produtiva. Precisando de algo, e so falar!\n\nAte mais", "casual", "send"},
+		{"Boa tarde!", "Oi!\n\nBoa tarde! Como estao as coisas? Espero que tudo esteja correndo bem por ai.\n\nAbracos", "casual", "send"},
+		{"Pensando em voce", "Ola,\n\nPassei aqui so para dizer que lembrei de voce hoje. Espero que esteja bem!\n\nUm abraco", "casual", "send"},
+		{"Novidades?", "Oi!\n\nAlguma novidade por ai? Faz um tempo que nao nos falamos. Conta as noticias!\n\nAbracos", "casual", "send"},
+		{"Vamos marcar algo", "Ola,\n\nQue tal marcarmos um cafe ou uma conversa essa semana? Seria legal colocar o papo em dia.\n\nMe avise!", "casual", "send"},
+		{"Recomendacao para voce", "Oi!\n\nVi algo que achei que voce ia gostar e resolvi compartilhar. Espero que seja util!\n\nAte mais", "casual", "send"},
+		{"Como foi o fim de semana?", "Ola!\n\nEspero que seu fim de semana tenha sido otimo! Como estao as coisas?\n\nAbracos", "casual", "send"},
+		{"Feliz aniversario!", "Oi!\n\nPassando para desejar um otimo dia! Que seja um ano cheio de realizacoes.\n\nUm abraco!", "casual", "send"},
+		{"Boas festas!", "Ola!\n\nPassando para desejar boas festas! Que seja um periodo de descanso e alegria.\n\nAbracos", "casual", "send"},
+
+		// ==========================================
+		// SEND TEMPLATES - Newsletter (20+)
+		// ==========================================
+		{"Resumo semanal", "Ola,\n\nAqui esta seu resumo semanal de noticias e atualizacoes do setor. Confira os destaques abaixo.\n\nMantenha-se informado!", "newsletter", "send"},
+		{"Nao perca", "Ola,\n\nTemos algumas novidades empolgantes para compartilhar com voce. De uma olhada quando puder!\n\nAtenciosamente", "newsletter", "send"},
+		{"Seu resumo mensal", "Ola,\n\nAqui esta um resumo do que aconteceu este mes. Muito progresso foi feito!\n\nAbracos", "newsletter", "send"},
+		{"Novos recursos disponiveis", "Ola,\n\nAcabamos de lancar alguns novos recursos que podem te interessar. Confira!\n\nObrigado pelo apoio continuo", "newsletter", "send"},
+		{"Comunicado importante", "Ola,\n\nTemos um comunicado importante para compartilhar com voce. Por favor, reserve um momento para ler.\n\nObrigado!", "newsletter", "send"},
+		{"Destaques da semana", "Ola,\n\nConfira os principais destaques desta semana. Preparamos um conteudo especial para voce.\n\nBoa leitura!", "newsletter", "send"},
+		{"Dicas do mes", "Ola,\n\nSeparamos algumas dicas especiais para voce aproveitar este mes. Esperamos que sejam uteis!\n\nAte a proxima", "newsletter", "send"},
+		{"Atualizacao de servicos", "Ola,\n\nGostaríamos de informar sobre algumas atualizacoes em nossos servicos. Confira os detalhes.\n\nAtenciosamente", "newsletter", "send"},
+		{"Novidades do setor", "Ola,\n\nTrazemos as principais novidades do setor desta semana. Mantenha-se atualizado!\n\nBoa leitura", "newsletter", "send"},
+		{"Promocao especial", "Ola,\n\nPreparamos uma promocao especial para voce. Aproveite!\n\nAte breve", "newsletter", "send"},
+		{"Convite exclusivo", "Ola,\n\nVoce foi selecionado para receber um convite exclusivo. Confira os detalhes!\n\nAguardamos voce", "newsletter", "send"},
+		{"Relatorio mensal", "Ola,\n\nSegue nosso relatorio mensal com as principais metricas e resultados. Esperamos que seja util.\n\nAtenciosamente", "newsletter", "send"},
+		{"Tendencias do mercado", "Ola,\n\nConfira as principais tendencias do mercado que identificamos. Informacao valiosa para suas decisoes.\n\nBoa leitura!", "newsletter", "send"},
+		{"Webinar gratuito", "Ola,\n\nGostaramos de convida-lo para nosso proximo webinar gratuito. Sera uma otima oportunidade de aprendizado.\n\nInscreva-se!", "newsletter", "send"},
+		{"Pesquisa de satisfacao", "Ola,\n\nSua opiniao e muito importante para nos. Poderia responder uma breve pesquisa?\n\nObrigado!", "newsletter", "send"},
+
+		// ==========================================
+		// REPLY TEMPLATES (30+)
+		// ==========================================
+		{"Re: ", "Ola,\n\nObrigado pelo contato! Recebi sua mensagem e vou analisar com atencao.\n\nRetorno em breve!", "business", "reply"},
+		{"Re: ", "Oi!\n\nQue bom receber sua mensagem! Vou verificar e te respondo o mais rapido possivel.\n\nAbracos", "casual", "reply"},
+		{"Re: ", "Ola,\n\nAgradeço o email. Estou analisando as informacoes e em breve darei um retorno.\n\nAtenciosamente", "business", "reply"},
+		{"Re: ", "Oi!\n\nRecebi! Vou dar uma olhada e ja te falo.\n\nValeu!", "casual", "reply"},
+		{"Re: ", "Ola,\n\nMuito obrigado pela mensagem. Vou revisar o conteudo e responderei assim que possivel.\n\nAbracos", "business", "reply"},
+		{"Re: ", "Oi!\n\nTudo bem? Recebi seu email e achei muito interessante. Vamos conversar mais sobre isso!\n\nAte ja", "casual", "reply"},
+		{"Re: ", "Ola,\n\nAgradeço o envio. Vou avaliar com cuidado e retorno com uma resposta completa.\n\nObrigado!", "business", "reply"},
+		{"Re: ", "Oi!\n\nQue otimo! Recebi sua mensagem. Me da um tempinho que ja te respondo direitinho.\n\nAbracos", "casual", "reply"},
+		{"Re: ", "Ola,\n\nRecebi seu email e agradeço pelo contato. Vou verificar internamente e volto com novidades.\n\nAtenciosamente", "business", "reply"},
+		{"Re: ", "Oi!\n\nObrigado por escrever! Vou checar aqui e te dou um retorno.\n\nValeu!", "casual", "reply"},
+		{"Re: ", "Ola,\n\nMuito obrigado pela informacao. Vou processar tudo e entro em contato em breve.\n\nAbracos", "business", "reply"},
+		{"Re: ", "Oi!\n\nRecebi! Interessante o que voce mencionou. Vamos marcar para conversar?\n\nAte mais", "casual", "reply"},
+		{"Re: ", "Ola,\n\nAgradeço muito o contato. Vou analisar a proposta e retorno com feedback.\n\nAtenciosamente", "business", "reply"},
+		{"Re: ", "Oi!\n\nQue legal receber sua mensagem! Vou pensar sobre isso e te falo.\n\nAbracos", "casual", "reply"},
+		{"Re: ", "Ola,\n\nObrigado pelo email. As informacoes sao muito uteis. Darei um retorno em breve.\n\nObrigado!", "business", "reply"},
+		{"Re: ", "Oi!\n\nRecebi sim! Valeu por lembrar de mim. Vamos nos falando!\n\nAbracos", "casual", "reply"},
+		{"Re: ", "Ola,\n\nAgradeço seu contato. Encaminhei para a equipe responsavel e retornaremos em breve.\n\nAtenciosamente", "business", "reply"},
+		{"Re: ", "Oi!\n\nTudo certo! Vi sua mensagem e achei bem interessante. Bora trocar uma ideia?\n\nAte ja", "casual", "reply"},
+		{"Re: ", "Ola,\n\nMuito obrigado por entrar em contato. Vou revisar os detalhes e responderei assim que possivel.\n\nAbracos", "business", "reply"},
+		{"Re: ", "Oi!\n\nAi sim! Recebi seu email. Deixa eu ver direitinho e ja te falo.\n\nValeu!", "casual", "reply"},
+		{"Re: ", "Ola,\n\nAgradeço a mensagem. Estou verificando a disponibilidade e retorno com uma resposta.\n\nObrigado!", "business", "reply"},
+		{"Re: ", "Oi!\n\nBoa! Recebi aqui. Vou analisar com calma e te dou um retorno.\n\nAbracos", "casual", "reply"},
+		{"Re: ", "Ola,\n\nRecebi sua solicitacao. Vou processar e entro em contato para dar andamento.\n\nAtenciosamente", "business", "reply"},
+		{"Re: ", "Oi!\n\nShow! Vou checar o que voce mandou e ja te respondo.\n\nAte mais", "casual", "reply"},
+		{"Re: ", "Ola,\n\nMuito obrigado pelo contato. Sua mensagem foi recebida e sera analisada.\n\nRetorno em breve!", "business", "reply"},
+		{"Re: ", "Oi!\n\nQue bom ter noticias suas! Vou ver isso aqui e te falo.\n\nAbracos", "casual", "reply"},
+		{"Re: ", "Ola,\n\nAgradeço o envio das informacoes. Vou revisar e darei um retorno completo.\n\nObrigado!", "business", "reply"},
+		{"Re: ", "Oi!\n\nRecebi! Massa o que voce falou. Deixa eu pensar e te respondo.\n\nValeu!", "casual", "reply"},
+		{"Re: ", "Ola,\n\nObrigado pela mensagem. Estou ciente do assunto e providenciarei o necessario.\n\nAtenciosamente", "business", "reply"},
+		{"Re: ", "Oi!\n\nTudo bem! Recebi seu recado. Ja ja te dou um retorno!\n\nAbracos", "casual", "reply"},
 	}
 
 	for _, t := range templates {
 		s.db.Exec(`
-			INSERT INTO warmup_templates (id, subject, body, category, active)
-			VALUES ($1, $2, $3, $4, true)
-		`, uuid.New().String(), t.subject, t.body, t.category)
+			INSERT INTO warmup_templates (id, subject, body, category, template_type, active)
+			VALUES ($1, $2, $3, $4, $5, true)
+		`, uuid.New().String(), t.subject, t.body, t.category, t.templateType)
 	}
 
-	log.Println("[Warmup] Default templates inserted")
+	log.Printf("[Warmup] Inserted %d default templates (send + reply)", len(templates))
 }
 
 // ============================================
@@ -1289,9 +1364,9 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 // listWarmupTemplates returns all warmup templates
 func (s *Server) listWarmupTemplates(c *fiber.Ctx) error {
 	rows, err := s.db.Query(`
-		SELECT id, subject, body, category, active, created_at
+		SELECT id, subject, body, category, COALESCE(template_type, 'send'), active, created_at
 		FROM warmup_templates
-		ORDER BY category, created_at
+		ORDER BY template_type, category, created_at
 	`)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -1300,19 +1375,20 @@ func (s *Server) listWarmupTemplates(c *fiber.Ctx) error {
 
 	var templates []fiber.Map
 	for rows.Next() {
-		var id, subject, body, category string
+		var id, subject, body, category, templateType string
 		var active bool
 		var createdAt time.Time
 
-		rows.Scan(&id, &subject, &body, &category, &active, &createdAt)
+		rows.Scan(&id, &subject, &body, &category, &templateType, &active, &createdAt)
 
 		templates = append(templates, fiber.Map{
-			"id":         id,
-			"subject":    subject,
-			"body":       body,
-			"category":   category,
-			"active":     active,
-			"created_at": createdAt,
+			"id":            id,
+			"subject":       subject,
+			"body":          body,
+			"category":      category,
+			"template_type": templateType,
+			"active":        active,
+			"created_at":    createdAt,
 		})
 	}
 
@@ -1326,9 +1402,10 @@ func (s *Server) listWarmupTemplates(c *fiber.Ctx) error {
 // createWarmupTemplate creates a new warmup template
 func (s *Server) createWarmupTemplate(c *fiber.Ctx) error {
 	var req struct {
-		Subject  string `json:"subject"`
-		Body     string `json:"body"`
-		Category string `json:"category"`
+		Subject      string `json:"subject"`
+		Body         string `json:"body"`
+		Category     string `json:"category"`
+		TemplateType string `json:"template_type"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -1338,13 +1415,16 @@ func (s *Server) createWarmupTemplate(c *fiber.Ctx) error {
 	if req.Category == "" {
 		req.Category = "business"
 	}
+	if req.TemplateType == "" {
+		req.TemplateType = "send"
+	}
 
 	id := uuid.New().String()
 
 	_, err := s.db.Exec(`
-		INSERT INTO warmup_templates (id, subject, body, category, active)
-		VALUES ($1, $2, $3, $4, true)
-	`, id, req.Subject, req.Body, req.Category)
+		INSERT INTO warmup_templates (id, subject, body, category, template_type, active)
+		VALUES ($1, $2, $3, $4, $5, true)
+	`, id, req.Subject, req.Body, req.Category, req.TemplateType)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})

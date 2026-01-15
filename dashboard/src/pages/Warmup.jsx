@@ -27,7 +27,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Send,
-  Link2
+  Link2,
+  FileText,
+  Reply
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
@@ -1072,6 +1074,10 @@ function Warmup() {
   const [showAddSMTP, setShowAddSMTP] = useState(false)
   const [showAddSeed, setShowAddSeed] = useState(false)
   const [editingWarmup, setEditingWarmup] = useState(null)
+  const [activeTab, setActiveTab] = useState('dashboard')
+  const [templates, setTemplates] = useState([])
+  const [showAddTemplate, setShowAddTemplate] = useState(false)
+  const [newTemplate, setNewTemplate] = useState({ subject: '', body: '', category: 'business', template_type: 'send' })
 
   useEffect(() => {
     fetchAll()
@@ -1091,16 +1097,18 @@ function Warmup() {
       setAvailableSMTPs(availableRes.data?.data || [])
 
       try {
-        const [statsRes, smtpsRes, seedsRes, activityRes] = await Promise.all([
+        const [statsRes, smtpsRes, seedsRes, activityRes, templatesRes] = await Promise.all([
           api.get('/warmup/stats'),
           api.get('/warmup/smtps'),
           api.get('/warmup/seeds'),
-          api.get('/warmup/activity')
+          api.get('/warmup/activity'),
+          api.get('/warmup/templates')
         ])
         setStats(statsRes.data || {})
         setWarmupSMTPs(smtpsRes.data || [])
         setSeeds(seedsRes.data || [])
         setActivity(activityRes.data || [])
+        setTemplates(templatesRes.data || [])
       } catch (warmupError) {
         // Silent fail for auto-refresh
       }
@@ -1118,16 +1126,18 @@ function Warmup() {
 
       // Fetch warmup data (may fail if tables don't exist yet)
       try {
-        const [statsRes, smtpsRes, seedsRes, activityRes] = await Promise.all([
+        const [statsRes, smtpsRes, seedsRes, activityRes, templatesRes] = await Promise.all([
           api.get('/warmup/stats'),
           api.get('/warmup/smtps'),
           api.get('/warmup/seeds'),
-          api.get('/warmup/activity')
+          api.get('/warmup/activity'),
+          api.get('/warmup/templates')
         ])
         setStats(statsRes.data || {})
         setWarmupSMTPs(smtpsRes.data || [])
         setSeeds(seedsRes.data || [])
         setActivity(activityRes.data || [])
+        setTemplates(templatesRes.data || [])
       } catch (warmupError) {
         console.log('Warmup data not available yet:', warmupError)
         // Set defaults
@@ -1135,6 +1145,7 @@ function Warmup() {
         setWarmupSMTPs([])
         setSeeds([])
         setActivity([])
+        setTemplates([])
       }
     } catch (error) {
       console.error('Error fetching data:', error)
@@ -1239,6 +1250,33 @@ function Warmup() {
     }
   }
 
+  const addTemplate = async () => {
+    if (!newTemplate.subject || !newTemplate.body) {
+      toast.error('Preencha assunto e corpo')
+      return
+    }
+    try {
+      await api.post('/warmup/templates', newTemplate)
+      toast.success('Template adicionado!')
+      setNewTemplate({ subject: '', body: '', category: 'business', template_type: 'send' })
+      setShowAddTemplate(false)
+      fetchAll()
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Erro ao adicionar')
+    }
+  }
+
+  const deleteTemplate = async (id) => {
+    if (!confirm('Remover este template?')) return
+    try {
+      await api.delete(`/warmup/templates/${id}`)
+      toast.success('Template removido')
+      fetchAll()
+    } catch (error) {
+      toast.error('Erro ao remover')
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -1246,6 +1284,9 @@ function Warmup() {
       </div>
     )
   }
+
+  const sendTemplates = templates.filter(t => t.template_type !== 'reply')
+  const replyTemplates = templates.filter(t => t.template_type === 'reply')
 
   return (
     <div>
@@ -1259,23 +1300,70 @@ function Warmup() {
           <p className="text-sm text-gray-500 mt-1">Aquecimento automatico com interacao simulada</p>
         </div>
         <div className="flex gap-3">
-          <button
-            onClick={() => setShowAddSeed(true)}
-            className="btn btn-secondary flex items-center gap-2"
-          >
-            <Mail className="w-4 h-4" />
-            Nova Seed
-          </button>
-          <button
-            onClick={() => setShowAddSMTP(true)}
-            className="btn btn-primary flex items-center gap-2"
-          >
-            <Plus className="w-4 h-4" />
-            Adicionar SMTP
-          </button>
+          {activeTab === 'dashboard' && (
+            <>
+              <button
+                onClick={() => setShowAddSeed(true)}
+                className="btn btn-secondary flex items-center gap-2"
+              >
+                <Mail className="w-4 h-4" />
+                Nova Seed
+              </button>
+              <button
+                onClick={() => setShowAddSMTP(true)}
+                className="btn btn-primary flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                Adicionar SMTP
+              </button>
+            </>
+          )}
+          {activeTab === 'templates' && (
+            <button
+              onClick={() => setShowAddTemplate(true)}
+              className="btn btn-primary flex items-center gap-2"
+            >
+              <Plus className="w-4 h-4" />
+              Novo Template
+            </button>
+          )}
         </div>
       </div>
 
+      {/* Tabs */}
+      <div className="flex gap-2 mb-6 border-b border-gray-200">
+        <button
+          onClick={() => setActiveTab('dashboard')}
+          className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${
+            activeTab === 'dashboard'
+              ? 'text-orange-600 border-orange-600'
+              : 'text-gray-500 border-transparent hover:text-gray-700'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <BarChart3 className="w-4 h-4" />
+            Dashboard
+          </div>
+        </button>
+        <button
+          onClick={() => setActiveTab('templates')}
+          className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${
+            activeTab === 'templates'
+              ? 'text-orange-600 border-orange-600'
+              : 'text-gray-500 border-transparent hover:text-gray-700'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <FileText className="w-4 h-4" />
+            Templates
+            <span className="px-2 py-0.5 text-xs bg-gray-100 rounded-full">{templates.length}</span>
+          </div>
+        </button>
+      </div>
+
+      {/* Dashboard Tab */}
+      {activeTab === 'dashboard' && (
+        <>
       {/* Stats Cards */}
       <div className="grid grid-cols-4 gap-4 mb-6">
         <div className="bg-white rounded-2xl p-6 border border-gray-100">
@@ -1621,6 +1709,181 @@ function Warmup() {
           </div>
         )}
       </div>
+        </>
+      )}
+
+      {/* Templates Tab */}
+      {activeTab === 'templates' && (
+        <div className="space-y-6">
+          {/* Send Templates */}
+          <div className="bg-white rounded-2xl p-6 border border-gray-100">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-blue-100 rounded-lg">
+                  <Send className="w-5 h-5 text-blue-600" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-900">Templates de Envio</h3>
+                  <p className="text-sm text-gray-500">Usados para enviar emails de warmup</p>
+                </div>
+              </div>
+              <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-medium">
+                {sendTemplates.length} templates
+              </span>
+            </div>
+            {sendTemplates.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <FileText className="w-12 h-12 mx-auto mb-4 opacity-30" />
+                <p>Nenhum template de envio</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-4">
+                {sendTemplates.map(template => (
+                  <div key={template.id} className="p-4 border border-gray-100 rounded-xl hover:border-blue-200 transition-colors">
+                    <div className="flex items-start justify-between mb-2">
+                      <span className={`px-2 py-1 text-xs font-medium rounded ${
+                        template.category === 'business' ? 'bg-blue-100 text-blue-700' :
+                        template.category === 'casual' ? 'bg-green-100 text-green-700' :
+                        'bg-purple-100 text-purple-700'
+                      }`}>
+                        {template.category}
+                      </span>
+                      <button
+                        onClick={() => deleteTemplate(template.id)}
+                        className="p-1 hover:bg-red-50 rounded"
+                      >
+                        <Trash2 className="w-4 h-4 text-red-400" />
+                      </button>
+                    </div>
+                    <h4 className="font-medium text-gray-900 mb-2">{template.subject}</h4>
+                    <p className="text-sm text-gray-500 line-clamp-3">{template.body}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Reply Templates */}
+          <div className="bg-white rounded-2xl p-6 border border-gray-100">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-purple-100 rounded-lg">
+                  <Reply className="w-5 h-5 text-purple-600" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-900">Templates de Resposta</h3>
+                  <p className="text-sm text-gray-500">Usados para responder emails recebidos</p>
+                </div>
+              </div>
+              <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-sm font-medium">
+                {replyTemplates.length} templates
+              </span>
+            </div>
+            {replyTemplates.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <Reply className="w-12 h-12 mx-auto mb-4 opacity-30" />
+                <p>Nenhum template de resposta</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-4">
+                {replyTemplates.map(template => (
+                  <div key={template.id} className="p-4 border border-gray-100 rounded-xl hover:border-purple-200 transition-colors">
+                    <div className="flex items-start justify-between mb-2">
+                      <span className="px-2 py-1 text-xs font-medium rounded bg-purple-100 text-purple-700">
+                        resposta
+                      </span>
+                      <button
+                        onClick={() => deleteTemplate(template.id)}
+                        className="p-1 hover:bg-red-50 rounded"
+                      >
+                        <Trash2 className="w-4 h-4 text-red-400" />
+                      </button>
+                    </div>
+                    <h4 className="font-medium text-gray-900 mb-2">{template.subject}</h4>
+                    <p className="text-sm text-gray-500 line-clamp-3">{template.body}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Add Template Modal */}
+      {showAddTemplate && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-lg">
+            <div className="flex items-center justify-between p-6 border-b border-gray-100">
+              <h2 className="text-lg font-bold text-gray-900">Novo Template</h2>
+              <button onClick={() => setShowAddTemplate(false)} className="p-2 hover:bg-gray-100 rounded-lg">
+                <X className="w-5 h-5 text-gray-400" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Tipo</label>
+                  <select
+                    value={newTemplate.template_type}
+                    onChange={(e) => setNewTemplate({ ...newTemplate, template_type: e.target.value })}
+                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+                  >
+                    <option value="send">Envio</option>
+                    <option value="reply">Resposta</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Categoria</label>
+                  <select
+                    value={newTemplate.category}
+                    onChange={(e) => setNewTemplate({ ...newTemplate, category: e.target.value })}
+                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+                  >
+                    <option value="business">Business</option>
+                    <option value="casual">Casual</option>
+                    <option value="newsletter">Newsletter</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Assunto</label>
+                <input
+                  type="text"
+                  value={newTemplate.subject}
+                  onChange={(e) => setNewTemplate({ ...newTemplate, subject: e.target.value })}
+                  className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+                  placeholder="Ex: Duvida sobre seus servicos"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Corpo do Email</label>
+                <textarea
+                  value={newTemplate.body}
+                  onChange={(e) => setNewTemplate({ ...newTemplate, body: e.target.value })}
+                  rows={6}
+                  className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none resize-none"
+                  placeholder="Ola,&#10;&#10;Escreva o conteudo do email aqui...&#10;&#10;Atenciosamente"
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-4 border-t">
+                <button
+                  onClick={() => setShowAddTemplate(false)}
+                  className="px-6 py-3 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={addTemplate}
+                  className="px-6 py-3 bg-orange-600 text-white rounded-xl font-medium hover:bg-orange-700 flex items-center gap-2"
+                >
+                  <Plus className="w-5 h-5" />
+                  Adicionar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modals */}
       {showAddSMTP && (
