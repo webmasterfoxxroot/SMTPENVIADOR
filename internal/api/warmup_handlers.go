@@ -386,6 +386,13 @@ func (s *Server) listWarmupSMTPs(c *fiber.Ctx) error {
 			continue
 		}
 
+		// Get internal email count for this SMTP
+		var internalSent int
+		s.db.QueryRow(`
+			SELECT COUNT(*) FROM warmup_internal_emails WHERE from_smtp_id = $1
+		`, smtpID).Scan(&internalSent)
+		totalSent += internalSent
+
 		smtp := fiber.Map{
 			"id":                 id,
 			"smtp_id":            smtpID,
@@ -802,24 +809,35 @@ func (s *Server) getWarmupSMTPStats(c *fiber.Ctx) error {
 		})
 	}
 
-	// Get recent emails
+	// Get recent emails (including internal warmup)
 	emailRows, _ := s.db.Query(`
-		SELECT e.id, e.subject, e.status, e.landed_in_spam, e.sent_at, s.email as seed_email
-		FROM warmup_emails e
-		JOIN warmup_seeds s ON e.seed_id = s.id
-		WHERE e.warmup_smtp_id = $1
-		ORDER BY e.sent_at DESC
+		(
+			SELECT e.id, e.subject, e.status, e.landed_in_spam, e.sent_at, s.email as target_email, 'seed' as email_type
+			FROM warmup_emails e
+			JOIN warmup_seeds s ON e.seed_id = s.id
+			WHERE e.warmup_smtp_id = $1
+		)
+		UNION ALL
+		(
+			SELECT ie.id, ie.subject, ie.status, false as landed_in_spam, ie.sent_at,
+				   ss.email as target_email, 'internal' as email_type
+			FROM warmup_internal_emails ie
+			JOIN smtp_senders ss ON ie.to_sender_id = ss.id
+			JOIN warmup_smtps w ON w.smtp_id = ie.from_smtp_id
+			WHERE w.id = $1
+		)
+		ORDER BY sent_at DESC
 		LIMIT 20
 	`, id)
 	defer emailRows.Close()
 
 	var recentEmails []fiber.Map
 	for emailRows.Next() {
-		var emailID, subject, status, seedEmail string
+		var emailID, subject, status, targetEmail, emailType string
 		var landedInSpam bool
 		var sentAt time.Time
 
-		emailRows.Scan(&emailID, &subject, &status, &landedInSpam, &sentAt, &seedEmail)
+		emailRows.Scan(&emailID, &subject, &status, &landedInSpam, &sentAt, &targetEmail, &emailType)
 
 		recentEmails = append(recentEmails, fiber.Map{
 			"id":             emailID,
@@ -827,13 +845,23 @@ func (s *Server) getWarmupSMTPStats(c *fiber.Ctx) error {
 			"status":         status,
 			"landed_in_spam": landedInSpam,
 			"sent_at":        sentAt,
-			"seed_email":     seedEmail,
+			"seed_email":     targetEmail,
+			"email_type":     emailType,
 		})
 	}
+
+	// Get internal email count for this SMTP
+	var internalSent int
+	s.db.QueryRow(`
+		SELECT COUNT(*) FROM warmup_internal_emails ie
+		JOIN warmup_smtps w ON w.smtp_id = ie.from_smtp_id
+		WHERE w.id = $1
+	`, id).Scan(&internalSent)
 
 	return c.JSON(fiber.Map{
 		"daily_stats":   dailyStats,
 		"recent_emails": recentEmails,
+		"internal_sent": internalSent,
 	})
 }
 
@@ -1161,6 +1189,13 @@ func (s *Server) getWarmupStats(c *fiber.Ctx) error {
 		FROM warmup_smtps
 	`).Scan(&totalSent, &totalInbox, &totalSpam, &totalReplies)
 
+	// Add internal warmup email counts
+	var internalSent, internalReplies int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_internal_emails`).Scan(&internalSent)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_internal_emails WHERE replied = true`).Scan(&internalReplies)
+	totalSent += internalSent
+	totalReplies += internalReplies
+
 	var spamRate, inboxRate float64
 	if totalSent > 0 {
 		spamRate = float64(totalSpam) / float64(totalSent) * 100
@@ -1168,15 +1203,15 @@ func (s *Server) getWarmupStats(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"total_smtps":       totalSMTPs,
-		"active_smtps":      activeSMTPs,
-		"total_seeds":       totalSeeds,
-		"active_seeds":      activeSeeds,
-		"total_sent":        totalSent,
+		"total_smtps":        totalSMTPs,
+		"active_smtps":       activeSMTPs,
+		"total_seeds":        totalSeeds,
+		"active_seeds":       activeSeeds,
+		"total_sent":         totalSent,
 		"total_interactions": totalInbox + totalReplies,
-		"total_replies":     totalReplies,
-		"spam_rate":         spamRate,
-		"inbox_rate":        inboxRate,
+		"total_replies":      totalReplies,
+		"spam_rate":          spamRate,
+		"inbox_rate":         inboxRate,
 	})
 }
 
@@ -1194,7 +1229,7 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 		)
 		UNION ALL
 		(
-			SELECT ie.id, ie.subject, ie.status, ie.from_sender_email as target_email,
+			SELECT ie.id, ie.subject, ie.status, ie.sent_at, ie.from_sender_email as target_email,
 				   CONCAT(sm_from.name, ' → ', sm_to.name) as smtp_name, 'internal' as warmup_type
 			FROM warmup_internal_emails ie
 			JOIN smtp_servers sm_from ON ie.from_smtp_id = sm_from.id
