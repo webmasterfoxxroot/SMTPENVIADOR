@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/smtp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/emersion/go-imap"
@@ -2952,20 +2953,56 @@ func (s *Server) processInternalWarmupIMAP() {
 	}
 	defer rows.Close()
 
-	for rows.Next() {
-		var senderID, senderEmail, imapHost string
-		var imapPort int
-		var imapPassword string
-		var imapTLSMode string
-		var smtpID, smtpHost, smtpUsername, smtpPassword, smtpTLSMode string
-		var smtpPort int
-
-		rows.Scan(&senderID, &senderEmail, &imapHost, &imapPort, &imapPassword, &imapTLSMode,
-			&smtpID, &smtpHost, &smtpPort, &smtpUsername, &smtpPassword, &smtpTLSMode)
-
-		go s.processOneSenderIMAP(senderID, senderEmail, imapHost, imapPort, imapPassword, imapTLSMode,
-			smtpID, smtpHost, smtpPort, smtpUsername, smtpPassword, smtpTLSMode)
+	// Collect all senders first
+	type senderInfo struct {
+		senderID, senderEmail, imapHost    string
+		imapPort                           int
+		imapPassword, imapTLSMode          string
+		smtpID, smtpHost                   string
+		smtpPort                           int
+		smtpUsername, smtpPassword, smtpTLSMode string
 	}
+	var senders []senderInfo
+
+	for rows.Next() {
+		var s senderInfo
+		rows.Scan(&s.senderID, &s.senderEmail, &s.imapHost, &s.imapPort, &s.imapPassword, &s.imapTLSMode,
+			&s.smtpID, &s.smtpHost, &s.smtpPort, &s.smtpUsername, &s.smtpPassword, &s.smtpTLSMode)
+		senders = append(senders, s)
+	}
+
+	if len(senders) == 0 {
+		return
+	}
+
+	// Limit concurrent IMAP connections to 3 to avoid overloading mail servers
+	const maxConcurrentIMAP = 3
+	semaphore := make(chan struct{}, maxConcurrentIMAP)
+	var wg sync.WaitGroup
+
+	log.Printf("[Internal Warmup IMAP] Processing %d senders with max %d concurrent connections", len(senders), maxConcurrentIMAP)
+
+	for i, sender := range senders {
+		wg.Add(1)
+		semaphore <- struct{}{} // Acquire semaphore slot
+
+		// Small delay between starting connections to prevent burst
+		if i > 0 {
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		go func(sender senderInfo) {
+			defer wg.Done()
+			defer func() { <-semaphore }() // Release semaphore slot
+
+			s.processOneSenderIMAP(sender.senderID, sender.senderEmail, sender.imapHost, sender.imapPort,
+				sender.imapPassword, sender.imapTLSMode, sender.smtpID, sender.smtpHost, sender.smtpPort,
+				sender.smtpUsername, sender.smtpPassword, sender.smtpTLSMode)
+		}(sender)
+	}
+
+	wg.Wait()
+	log.Printf("[Internal Warmup IMAP] Finished processing all senders")
 }
 
 func (s *Server) processOneSenderIMAP(senderID, senderEmail, imapHost string, imapPort int, imapPassword, imapTLSMode,
