@@ -2852,10 +2852,12 @@ func (s *Server) processInternalWarmup() {
 	if sendRate <= 0 {
 		sendRate = 30 // default
 	}
-	if rand.Intn(100) > sendRate {
-		log.Printf("[Internal Warmup] Skipped by rate (rate: %d%%)", sendRate)
+	randomValue := rand.Intn(100)
+	if randomValue >= sendRate {
+		log.Printf("[Internal Warmup] Skipped by rate (rate: %d%%, roll: %d)", sendRate, randomValue)
 		return
 	}
+	log.Printf("[Internal Warmup] Proceeding with send (rate: %d%%, roll: %d)", sendRate, randomValue)
 
 	// Get a sender from the FROM SMTP
 	var fromSenderID, fromSenderEmail string
@@ -3094,6 +3096,13 @@ func (s *Server) processOneSenderIMAP(senderID, senderEmail, imapHost string, im
 		c.Fetch(seqSet, []imap.FetchItem{imap.FetchEnvelope, section.FetchItem()}, messages)
 	}()
 
+	// Get reply_rate from warmup_smtps for this SMTP
+	var replyRate int
+	err = s.db.QueryRow(`SELECT COALESCE(reply_rate, 30) FROM warmup_smtps WHERE smtp_id = $1`, smtpID).Scan(&replyRate)
+	if err != nil {
+		replyRate = 30 // default
+	}
+
 	for msg := range messages {
 		if msg == nil || msg.Envelope == nil {
 			continue
@@ -3123,8 +3132,9 @@ func (s *Server) processOneSenderIMAP(senderID, senderEmail, imapHost string, im
 		singleSeq.AddNum(msg.SeqNum)
 		c.Store(singleSeq, item, flags, nil)
 
-		// Check if we should reply (50% chance)
-		if rand.Intn(100) < 50 {
+		// Check if we should reply based on SMTP's reply_rate setting
+		randomValue := rand.Intn(100)
+		if randomValue < replyRate {
 			// Send reply
 			replySubject := "Re: " + msg.Envelope.Subject
 			replyBody := getRandomReplyBody()
@@ -3148,11 +3158,13 @@ func (s *Server) processOneSenderIMAP(senderID, senderEmail, imapHost string, im
 			if err != nil {
 				log.Printf("[Internal Warmup IMAP] Failed to reply from %s: %v", senderEmail, err)
 			} else {
-				log.Printf("[Internal Warmup IMAP] ↩️ Replied from %s to %s", senderEmail, fromEmail)
+				log.Printf("[Internal Warmup IMAP] ↩️ Replied from %s to %s (rate: %d%%, roll: %d)", senderEmail, fromEmail, replyRate, randomValue)
 
 				// Update the original email as replied
 				s.db.Exec(`UPDATE warmup_internal_emails SET replied = true, replied_at = NOW() WHERE message_id = $1`, messageID)
 			}
+		} else {
+			log.Printf("[Internal Warmup IMAP] Skipped reply for %s (rate: %d%%, roll: %d)", senderEmail, replyRate, randomValue)
 		}
 	}
 }
