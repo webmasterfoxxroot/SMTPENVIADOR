@@ -1265,10 +1265,12 @@ func (s *Server) getWarmupStats(c *fiber.Ctx) error {
 	`).Scan(&totalSent, &totalInbox, &totalSpam, &totalReplies)
 
 	// Add internal warmup email counts
-	var internalSent, internalReplies int
+	var internalSent, internalReceived, internalReplies int
 	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_internal_emails`).Scan(&internalSent)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_internal_emails WHERE received = true`).Scan(&internalReceived)
 	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_internal_emails WHERE replied = true`).Scan(&internalReplies)
 	totalSent += internalSent
+	totalInbox += internalReceived // Internal received = inbox (found in INBOX, not spam)
 	totalReplies += internalReplies
 
 	var spamRate, inboxRate float64
@@ -3074,7 +3076,10 @@ func (s *Server) processOneSenderIMAP(senderID, senderEmail, imapHost string, im
 
 		log.Printf("[Internal Warmup IMAP] Found internal warmup email for %s: %s", senderEmail, msg.Envelope.Subject)
 
-		// Mark as read
+		// Mark as received in database (this counts as "inbox" since it wasn't in spam)
+		s.db.Exec(`UPDATE warmup_internal_emails SET received = true, received_at = NOW() WHERE message_id = $1 AND received = false`, messageID)
+
+		// Mark as read in IMAP
 		item := imap.FormatFlagsOp(imap.AddFlags, true)
 		flags := []interface{}{imap.SeenFlag}
 		singleSeq := new(imap.SeqSet)
@@ -3107,6 +3112,9 @@ func (s *Server) processOneSenderIMAP(senderID, senderEmail, imapHost string, im
 				log.Printf("[Internal Warmup IMAP] Failed to reply from %s: %v", senderEmail, err)
 			} else {
 				log.Printf("[Internal Warmup IMAP] ↩️ Replied from %s to %s", senderEmail, fromEmail)
+
+				// Update the original email as replied
+				s.db.Exec(`UPDATE warmup_internal_emails SET replied = true, replied_at = NOW() WHERE message_id = $1`, messageID)
 			}
 		}
 	}
