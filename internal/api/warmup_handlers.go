@@ -2716,20 +2716,18 @@ func (s *Server) processInternalWarmup() {
 		}
 	}
 
-	if len(activeSmtps) < 2 {
-		log.Printf("[Internal Warmup] Only %d SMTPs within active hours, need 2", len(activeSmtps))
+	if len(activeSmtps) < 1 {
+		log.Printf("[Internal Warmup] No SMTPs within active hours")
 		return
 	}
 
-	// Pick two different SMTPs: one to send FROM and one to send TO
+	// Pick an SMTP to use for warmup
+	// For self-warmup (same SMTP), we send from one sender to another sender of the SAME SMTP
 	fromIdx := rand.Intn(len(activeSmtps))
-	toIdx := rand.Intn(len(activeSmtps))
-	for toIdx == fromIdx && len(activeSmtps) > 1 {
-		toIdx = rand.Intn(len(activeSmtps))
-	}
-
 	fromSMTP := activeSmtps[fromIdx]
-	toSMTP := activeSmtps[toIdx]
+
+	// Use the same SMTP for both FROM and TO (self-warmup within same SMTP)
+	toSMTP := fromSMTP
 
 	// Random chance to send based on FROM SMTP's send_rate
 	sendRate := fromSMTP.SendRate
@@ -2741,30 +2739,31 @@ func (s *Server) processInternalWarmup() {
 		return
 	}
 
-	// Get a sender from the FROM SMTP
-	var fromSenderEmail string
+	// Get TWO DIFFERENT senders from the SAME SMTP
+	var fromSenderID, fromSenderEmail string
 	var fromSenderName sql.NullString
 	err = s.db.QueryRow(`
-		SELECT email, name FROM smtp_senders
+		SELECT id, email, name FROM smtp_senders
 		WHERE smtp_id = $1 AND active = true
 		ORDER BY RANDOM() LIMIT 1
-	`, fromSMTP.SMTPID).Scan(&fromSenderEmail, &fromSenderName)
+	`, fromSMTP.SMTPID).Scan(&fromSenderID, &fromSenderEmail, &fromSenderName)
 
 	if err != nil {
-		log.Printf("[Internal Warmup] No senders for FROM SMTP: %v", err)
+		log.Printf("[Internal Warmup] No senders for SMTP %s: %v", fromSMTP.Host, err)
 		return
 	}
 
-	// Get a sender from the TO SMTP (this is where we send the email)
+	// Get a DIFFERENT sender from the same SMTP (must have IMAP configured)
 	var toSenderID, toSenderEmail string
 	err = s.db.QueryRow(`
 		SELECT id, email FROM smtp_senders
-		WHERE smtp_id = $1 AND active = true AND imap_host IS NOT NULL AND imap_host != ''
+		WHERE smtp_id = $1 AND active = true AND id != $2
+		AND imap_host IS NOT NULL AND imap_host != ''
 		ORDER BY RANDOM() LIMIT 1
-	`, toSMTP.SMTPID).Scan(&toSenderID, &toSenderEmail)
+	`, toSMTP.SMTPID, fromSenderID).Scan(&toSenderID, &toSenderEmail)
 
 	if err != nil {
-		log.Printf("[Internal Warmup] No senders with IMAP for TO SMTP: %v", err)
+		log.Printf("[Internal Warmup] No other senders with IMAP for SMTP %s (need at least 2 senders): %v", toSMTP.Host, err)
 		return
 	}
 
