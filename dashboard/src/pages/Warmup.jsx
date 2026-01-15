@@ -1607,8 +1607,10 @@ function Warmup() {
                       <span className="px-1.5 py-0.5 text-xs font-medium bg-purple-100 text-purple-700 rounded">Interno</span>
                     )}
                   </div>
-                  <p className="text-xs text-gray-500">
-                    {item.warmup_type === 'internal' ? item.smtp_name : `${item.seed_email} via ${item.smtp_name}`}
+                  <p className="text-xs text-gray-500 truncate">
+                    {item.warmup_type === 'internal'
+                      ? `${item.from_email} → ${item.to_email}`
+                      : item.to_email || item.seed_email}
                   </p>
                 </div>
                 <div className="text-xs text-gray-400">
