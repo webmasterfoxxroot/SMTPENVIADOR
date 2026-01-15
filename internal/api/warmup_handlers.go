@@ -103,6 +103,8 @@ func (s *Server) initWarmupTables() {
 
 	// Add internal_warmup column if missing (migration)
 	s.db.Exec(`ALTER TABLE warmup_smtps ADD COLUMN IF NOT EXISTS internal_warmup BOOLEAN DEFAULT false`)
+	// Add send_rate column if missing (migration)
+	s.db.Exec(`ALTER TABLE warmup_smtps ADD COLUMN IF NOT EXISTS send_rate INT DEFAULT 30`)
 
 	// Create warmup_seeds table
 	_, err = s.db.Exec(`
@@ -348,7 +350,7 @@ func (s *Server) listWarmupSMTPs(c *fiber.Ctx) error {
 		SELECT
 			w.id, w.smtp_id, s.name as smtp_name, w.status, w.recipe_type,
 			w.start_date, w.end_date, w.current_day,
-			w.min_emails_per_day, w.max_emails_per_day, w.reply_rate,
+			w.min_emails_per_day, w.max_emails_per_day, w.send_rate, w.reply_rate,
 			w.start_hour, w.end_hour,
 			w.total_sent, w.total_inbox, w.total_spam, w.total_replies,
 			w.custom_schedule, w.internal_warmup, w.created_at, w.updated_at
@@ -366,7 +368,7 @@ func (s *Server) listWarmupSMTPs(c *fiber.Ctx) error {
 		var id, smtpID, smtpName, status, recipeType string
 		var startDate time.Time
 		var endDate sql.NullTime
-		var currentDay, minEmails, maxEmails, replyRate, startHour, endHour int
+		var currentDay, minEmails, maxEmails, sendRate, replyRate, startHour, endHour int
 		var totalSent, totalInbox, totalSpam, totalReplies int
 		var customSchedule sql.NullString
 		var internalWarmup bool
@@ -375,7 +377,7 @@ func (s *Server) listWarmupSMTPs(c *fiber.Ctx) error {
 		err := rows.Scan(
 			&id, &smtpID, &smtpName, &status, &recipeType,
 			&startDate, &endDate, &currentDay,
-			&minEmails, &maxEmails, &replyRate,
+			&minEmails, &maxEmails, &sendRate, &replyRate,
 			&startHour, &endHour,
 			&totalSent, &totalInbox, &totalSpam, &totalReplies,
 			&customSchedule, &internalWarmup, &createdAt, &updatedAt,
@@ -394,6 +396,7 @@ func (s *Server) listWarmupSMTPs(c *fiber.Ctx) error {
 			"current_day":        currentDay,
 			"min_emails_per_day": minEmails,
 			"max_emails_per_day": maxEmails,
+			"send_rate":          sendRate,
 			"reply_rate":         replyRate,
 			"start_hour":         startHour,
 			"end_hour":           endHour,
@@ -441,6 +444,7 @@ func (s *Server) createWarmupSMTP(c *fiber.Ctx) error {
 		EndDate         string `json:"end_date"`
 		MinEmailsPerDay int    `json:"min_emails_per_day"`
 		MaxEmailsPerDay int    `json:"max_emails_per_day"`
+		SendRate        int    `json:"send_rate"`
 		ReplyRate       int    `json:"reply_rate"`
 		StartHour       int    `json:"start_hour"`
 		EndHour         int    `json:"end_hour"`
@@ -473,6 +477,9 @@ func (s *Server) createWarmupSMTP(c *fiber.Ctx) error {
 	}
 	if req.MaxEmailsPerDay == 0 {
 		req.MaxEmailsPerDay = 40
+	}
+	if req.SendRate == 0 {
+		req.SendRate = 30
 	}
 	if req.ReplyRate == 0 {
 		req.ReplyRate = 30
@@ -512,11 +519,11 @@ func (s *Server) createWarmupSMTP(c *fiber.Ctx) error {
 	_, err := s.db.Exec(`
 		INSERT INTO warmup_smtps (
 			id, smtp_id, status, recipe_type, start_date, end_date,
-			min_emails_per_day, max_emails_per_day, reply_rate,
+			min_emails_per_day, max_emails_per_day, send_rate, reply_rate,
 			start_hour, end_hour, custom_schedule
-		) VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		) VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`, id, req.SMTPID, req.RecipeType, startDate, endDate,
-		req.MinEmailsPerDay, req.MaxEmailsPerDay, req.ReplyRate,
+		req.MinEmailsPerDay, req.MaxEmailsPerDay, req.SendRate, req.ReplyRate,
 		req.StartHour, req.EndHour, customScheduleJSON)
 
 	if err != nil {
@@ -540,6 +547,7 @@ func (s *Server) updateWarmupSMTP(c *fiber.Ctx) error {
 		RecipeType      string `json:"recipe_type"`
 		MinEmailsPerDay int    `json:"min_emails_per_day"`
 		MaxEmailsPerDay int    `json:"max_emails_per_day"`
+		SendRate        int    `json:"send_rate"`
 		ReplyRate       int    `json:"reply_rate"`
 		StartHour       int    `json:"start_hour"`
 		EndHour         int    `json:"end_hour"`
@@ -564,14 +572,15 @@ func (s *Server) updateWarmupSMTP(c *fiber.Ctx) error {
 			recipe_type = COALESCE(NULLIF($2, ''), recipe_type),
 			min_emails_per_day = CASE WHEN $3 > 0 THEN $3 ELSE min_emails_per_day END,
 			max_emails_per_day = CASE WHEN $4 > 0 THEN $4 ELSE max_emails_per_day END,
-			reply_rate = CASE WHEN $5 > 0 THEN $5 ELSE reply_rate END,
-			start_hour = CASE WHEN $6 >= 0 THEN $6 ELSE start_hour END,
-			end_hour = CASE WHEN $7 > 0 THEN $7 ELSE end_hour END,
-			custom_schedule = COALESCE($8, custom_schedule),
+			send_rate = CASE WHEN $5 > 0 THEN $5 ELSE send_rate END,
+			reply_rate = CASE WHEN $6 > 0 THEN $6 ELSE reply_rate END,
+			start_hour = CASE WHEN $7 >= 0 THEN $7 ELSE start_hour END,
+			end_hour = CASE WHEN $8 > 0 THEN $8 ELSE end_hour END,
+			custom_schedule = COALESCE($9, custom_schedule),
 			updated_at = NOW()
-		WHERE id = $9
+		WHERE id = $10
 	`, req.Status, req.RecipeType, req.MinEmailsPerDay, req.MaxEmailsPerDay,
-		req.ReplyRate, req.StartHour, req.EndHour, customScheduleJSON, id)
+		req.SendRate, req.ReplyRate, req.StartHour, req.EndHour, customScheduleJSON, id)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -2608,7 +2617,7 @@ func (s *Server) processInternalWarmup() {
 
 	// Get SMTPs with internal warmup enabled
 	rows, err := s.db.Query(`
-		SELECT w.id, w.smtp_id, s.host, s.port, s.username, s.password, s.tls_mode
+		SELECT w.id, w.smtp_id, w.send_rate, s.host, s.port, s.username, s.password, s.tls_mode
 		FROM warmup_smtps w
 		JOIN smtp_servers s ON w.smtp_id = s.id
 		WHERE w.status = 'active' AND w.internal_warmup = true AND s.active = true
@@ -2622,6 +2631,7 @@ func (s *Server) processInternalWarmup() {
 	var smtps []struct {
 		WarmupID string
 		SMTPID   string
+		SendRate int
 		Host     string
 		Port     int
 		Username string
@@ -2633,13 +2643,14 @@ func (s *Server) processInternalWarmup() {
 		var smtp struct {
 			WarmupID string
 			SMTPID   string
+			SendRate int
 			Host     string
 			Port     int
 			Username string
 			Password string
 			TLSMode  string
 		}
-		rows.Scan(&smtp.WarmupID, &smtp.SMTPID, &smtp.Host, &smtp.Port, &smtp.Username, &smtp.Password, &smtp.TLSMode)
+		rows.Scan(&smtp.WarmupID, &smtp.SMTPID, &smtp.SendRate, &smtp.Host, &smtp.Port, &smtp.Username, &smtp.Password, &smtp.TLSMode)
 		smtps = append(smtps, smtp)
 	}
 
@@ -2650,13 +2661,6 @@ func (s *Server) processInternalWarmup() {
 
 	log.Printf("[Internal Warmup] Found %d SMTPs with internal warmup enabled", len(smtps))
 
-	// Random chance to send based on settings
-	sendRate := s.getWarmupSettingInt("internal_send_rate", 30)
-	if rand.Intn(100) > sendRate {
-		log.Printf("[Internal Warmup] Skipped (rate: %d%%)", sendRate)
-		return
-	}
-
 	// Pick two different SMTPs: one to send FROM and one to send TO
 	fromIdx := rand.Intn(len(smtps))
 	toIdx := rand.Intn(len(smtps))
@@ -2666,6 +2670,16 @@ func (s *Server) processInternalWarmup() {
 
 	fromSMTP := smtps[fromIdx]
 	toSMTP := smtps[toIdx]
+
+	// Random chance to send based on FROM SMTP's send_rate
+	sendRate := fromSMTP.SendRate
+	if sendRate <= 0 {
+		sendRate = 30 // default
+	}
+	if rand.Intn(100) > sendRate {
+		log.Printf("[Internal Warmup] Skipped (rate: %d%%)", sendRate)
+		return
+	}
 
 	// Get a sender from the FROM SMTP
 	var fromSenderEmail string
