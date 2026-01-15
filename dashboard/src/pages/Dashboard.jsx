@@ -11,7 +11,16 @@ import {
   ArrowUp,
   ArrowDown,
   Activity,
-  Globe
+  Globe,
+  Flame,
+  AlertTriangle,
+  Plus,
+  PlayCircle,
+  ListPlus,
+  XCircle,
+  Percent,
+  MessageSquare,
+  Inbox
 } from 'lucide-react'
 import {
   AreaChart,
@@ -27,6 +36,7 @@ import {
   Pie,
   Cell
 } from 'recharts'
+import { useNavigate } from 'react-router-dom'
 import api from '../services/api'
 
 // Main Stat Card with gradient
@@ -100,6 +110,7 @@ function CustomTooltip({ active, payload, label }) {
 }
 
 function Dashboard() {
+  const navigate = useNavigate()
   const [stats, setStats] = useState({
     today_sent: 0,
     today_failed: 0,
@@ -115,6 +126,14 @@ function Dashboard() {
     hourly: [],
     by_domain: []
   })
+  const [warmupStats, setWarmupStats] = useState({
+    total_sent: 0,
+    total_replies: 0,
+    total_interactions: 0,
+    inbox_rate: 0,
+    active_smtps: 0
+  })
+  const [smtpHealth, setSmtpHealth] = useState([])
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState('today')
   const [activities, setActivities] = useState([])
@@ -122,11 +141,15 @@ function Dashboard() {
   useEffect(() => {
     fetchStats()
     fetchActivities()
+    fetchWarmupStats()
+    fetchSmtpHealth()
     const statsInterval = setInterval(fetchStats, 5000)
     const activityInterval = setInterval(fetchActivities, 3000)
+    const warmupInterval = setInterval(fetchWarmupStats, 10000)
     return () => {
       clearInterval(statsInterval)
       clearInterval(activityInterval)
+      clearInterval(warmupInterval)
     }
   }, [period])
 
@@ -147,6 +170,29 @@ function Dashboard() {
       setActivities(response.data.activities || [])
     } catch (error) {
       console.error('Failed to fetch activities:', error)
+    }
+  }
+
+  const fetchWarmupStats = async () => {
+    try {
+      const response = await api.get('/warmup/stats')
+      setWarmupStats(response.data || {})
+    } catch (error) {
+      // Warmup might not be set up yet
+    }
+  }
+
+  const fetchSmtpHealth = async () => {
+    try {
+      const response = await api.get('/smtp')
+      const smtps = response.data?.data || []
+      // Check for SMTPs with issues
+      const healthIssues = smtps.filter(s =>
+        s.status === 'error' || s.status === 'disabled' || s.fail_count > 10
+      )
+      setSmtpHealth(healthIssues)
+    } catch (error) {
+      // Silent fail
     }
   }
 
@@ -182,8 +228,33 @@ function Dashboard() {
     value: d.sent
   }))
 
+  const deliveryRate = stats.today_sent > 0
+    ? Math.round(((stats.today_sent - stats.today_failed) / stats.today_sent) * 100)
+    : 100
+
   return (
     <div className="space-y-6">
+      {/* System Health Alerts */}
+      {smtpHealth.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-4">
+          <div className="p-2 bg-red-100 rounded-lg">
+            <AlertTriangle className="h-5 w-5 text-red-600" />
+          </div>
+          <div className="flex-1">
+            <h3 className="font-semibold text-red-800">Atencao: {smtpHealth.length} SMTP(s) com problemas</h3>
+            <p className="text-sm text-red-600">
+              {smtpHealth.map(s => s.host).join(', ')}
+            </p>
+          </div>
+          <button
+            onClick={() => navigate('/smtp')}
+            className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700"
+          >
+            Ver detalhes
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -191,6 +262,21 @@ function Dashboard() {
           <p className="text-sm text-gray-500 mt-1">Visao geral do desempenho de email marketing</p>
         </div>
         <div className="flex items-center gap-3">
+          {/* Quick Actions */}
+          <button
+            onClick={() => navigate('/campaigns')}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+          >
+            <PlayCircle className="h-4 w-4" />
+            Nova Campanha
+          </button>
+          <button
+            onClick={() => navigate('/lists')}
+            className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
+          >
+            <ListPlus className="h-4 w-4" />
+            Nova Lista
+          </button>
           <div className="flex items-center gap-2 bg-green-50 text-green-700 px-4 py-2 rounded-full text-sm font-medium">
             <Activity className="h-4 w-4" />
             <span>{stats.sending_rate}/seg</span>
@@ -261,6 +347,84 @@ function Dashboard() {
           value={formatNumber(stats.today_failed)}
           iconBg="bg-red-500"
         />
+      </div>
+
+      {/* Warmup & Delivery Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Delivery Rate */}
+        <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-green-100 rounded-lg">
+                <Percent className="h-5 w-5 text-green-600" />
+              </div>
+              <span className="text-sm font-medium text-gray-600">Taxa de Entrega</span>
+            </div>
+          </div>
+          <div className="flex items-end gap-2">
+            <span className="text-3xl font-bold text-gray-800">{deliveryRate}%</span>
+            <span className="text-sm text-gray-500 mb-1">sucesso</span>
+          </div>
+          <div className="mt-3 w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all ${deliveryRate >= 95 ? 'bg-green-500' : deliveryRate >= 80 ? 'bg-yellow-500' : 'bg-red-500'}`}
+              style={{ width: `${deliveryRate}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Warmup Stats */}
+        <div
+          className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl p-5 shadow-sm cursor-pointer hover:shadow-md transition-shadow"
+          onClick={() => navigate('/warmup')}
+        >
+          <div className="flex items-center gap-2 mb-3">
+            <Flame className="h-5 w-5 text-white" />
+            <span className="text-sm font-medium text-white/90">Warmup Ativo</span>
+          </div>
+          <div className="flex items-end gap-2">
+            <span className="text-3xl font-bold text-white">{formatNumber(warmupStats.total_sent || 0)}</span>
+            <span className="text-sm text-white/80 mb-1">enviados</span>
+          </div>
+          <div className="flex items-center gap-4 mt-3 text-white/80 text-sm">
+            <span>{warmupStats.active_smtps || 0} SMTPs</span>
+            <span>•</span>
+            <span>{warmupStats.inbox_rate?.toFixed(0) || 0}% inbox</span>
+          </div>
+        </div>
+
+        {/* Warmup Replies */}
+        <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="p-2 bg-purple-100 rounded-lg">
+              <MessageSquare className="h-5 w-5 text-purple-600" />
+            </div>
+            <span className="text-sm font-medium text-gray-600">Respostas Warmup</span>
+          </div>
+          <div className="flex items-end gap-2">
+            <span className="text-3xl font-bold text-gray-800">{formatNumber(warmupStats.total_replies || 0)}</span>
+          </div>
+          <p className="text-xs text-gray-500 mt-2">Respostas automaticas recebidas</p>
+        </div>
+
+        {/* Warmup Inbox */}
+        <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="p-2 bg-blue-100 rounded-lg">
+              <Inbox className="h-5 w-5 text-blue-600" />
+            </div>
+            <span className="text-sm font-medium text-gray-600">Inbox Rate</span>
+          </div>
+          <div className="flex items-end gap-2">
+            <span className="text-3xl font-bold text-gray-800">{warmupStats.inbox_rate?.toFixed(1) || 0}%</span>
+          </div>
+          <div className="mt-3 w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-500 rounded-full transition-all"
+              style={{ width: `${warmupStats.inbox_rate || 0}%` }}
+            />
+          </div>
+        </div>
       </div>
 
       {/* Charts Section */}
