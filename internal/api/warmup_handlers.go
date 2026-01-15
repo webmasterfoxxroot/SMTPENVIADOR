@@ -2600,24 +2600,17 @@ func getRandomReplyBody() string {
 func (s *Server) processInternalWarmup() {
 	// Check if warmup is enabled
 	if s.getWarmupSetting("warmup_enabled", "true") != "true" {
+		log.Printf("[Internal Warmup] Disabled globally")
 		return
 	}
 
 	now := time.Now()
 	currentHour := now.Hour()
 
-	// Get hours from settings
-	startHour := s.getWarmupSettingInt("internal_start_hour", 6)
-	endHour := s.getWarmupSettingInt("internal_end_hour", 22)
-
-	// Only run during configured hours
-	if currentHour < startHour || currentHour > endHour {
-		return
-	}
-
-	// Get SMTPs with internal warmup enabled
+	// Get SMTPs with internal warmup enabled (include hour settings)
 	rows, err := s.db.Query(`
-		SELECT w.id, w.smtp_id, w.send_rate, s.host, s.port, s.username, s.password, s.tls_mode
+		SELECT w.id, w.smtp_id, w.send_rate, w.start_hour, w.end_hour,
+		       s.host, s.port, s.username, s.password, s.tls_mode
 		FROM warmup_smtps w
 		JOIN smtp_servers s ON w.smtp_id = s.id
 		WHERE w.status = 'active' AND w.internal_warmup = true AND s.active = true
@@ -2629,47 +2622,79 @@ func (s *Server) processInternalWarmup() {
 	defer rows.Close()
 
 	var smtps []struct {
-		WarmupID string
-		SMTPID   string
-		SendRate int
-		Host     string
-		Port     int
-		Username string
-		Password string
-		TLSMode  string
+		WarmupID  string
+		SMTPID    string
+		SendRate  int
+		StartHour int
+		EndHour   int
+		Host      string
+		Port      int
+		Username  string
+		Password  string
+		TLSMode   string
 	}
 
 	for rows.Next() {
 		var smtp struct {
-			WarmupID string
-			SMTPID   string
-			SendRate int
-			Host     string
-			Port     int
-			Username string
-			Password string
-			TLSMode  string
+			WarmupID  string
+			SMTPID    string
+			SendRate  int
+			StartHour int
+			EndHour   int
+			Host      string
+			Port      int
+			Username  string
+			Password  string
+			TLSMode   string
 		}
-		rows.Scan(&smtp.WarmupID, &smtp.SMTPID, &smtp.SendRate, &smtp.Host, &smtp.Port, &smtp.Username, &smtp.Password, &smtp.TLSMode)
+		rows.Scan(&smtp.WarmupID, &smtp.SMTPID, &smtp.SendRate, &smtp.StartHour, &smtp.EndHour,
+			&smtp.Host, &smtp.Port, &smtp.Username, &smtp.Password, &smtp.TLSMode)
 		smtps = append(smtps, smtp)
 	}
 
+	log.Printf("[Internal Warmup] Found %d SMTPs with internal warmup enabled (hour %d)", len(smtps), currentHour)
+
 	if len(smtps) < 2 {
-		// Need at least 2 SMTPs for internal warmup
+		log.Printf("[Internal Warmup] Need at least 2 SMTPs, have %d", len(smtps))
 		return
 	}
 
-	log.Printf("[Internal Warmup] Found %d SMTPs with internal warmup enabled", len(smtps))
-
-	// Pick two different SMTPs: one to send FROM and one to send TO
-	fromIdx := rand.Intn(len(smtps))
-	toIdx := rand.Intn(len(smtps))
-	for toIdx == fromIdx && len(smtps) > 1 {
-		toIdx = rand.Intn(len(smtps))
+	// Filter SMTPs that are within their configured hours
+	var activeSmtps []struct {
+		WarmupID  string
+		SMTPID    string
+		SendRate  int
+		StartHour int
+		EndHour   int
+		Host      string
+		Port      int
+		Username  string
+		Password  string
+		TLSMode   string
+	}
+	for _, smtp := range smtps {
+		if currentHour >= smtp.StartHour && currentHour <= smtp.EndHour {
+			activeSmtps = append(activeSmtps, smtp)
+		} else {
+			log.Printf("[Internal Warmup] SMTP %s outside hours (current: %d, range: %d-%d)",
+				smtp.Host, currentHour, smtp.StartHour, smtp.EndHour)
+		}
 	}
 
-	fromSMTP := smtps[fromIdx]
-	toSMTP := smtps[toIdx]
+	if len(activeSmtps) < 2 {
+		log.Printf("[Internal Warmup] Only %d SMTPs within active hours, need 2", len(activeSmtps))
+		return
+	}
+
+	// Pick two different SMTPs: one to send FROM and one to send TO
+	fromIdx := rand.Intn(len(activeSmtps))
+	toIdx := rand.Intn(len(activeSmtps))
+	for toIdx == fromIdx && len(activeSmtps) > 1 {
+		toIdx = rand.Intn(len(activeSmtps))
+	}
+
+	fromSMTP := activeSmtps[fromIdx]
+	toSMTP := activeSmtps[toIdx]
 
 	// Random chance to send based on FROM SMTP's send_rate
 	sendRate := fromSMTP.SendRate
@@ -2677,7 +2702,7 @@ func (s *Server) processInternalWarmup() {
 		sendRate = 30 // default
 	}
 	if rand.Intn(100) > sendRate {
-		log.Printf("[Internal Warmup] Skipped (rate: %d%%)", sendRate)
+		log.Printf("[Internal Warmup] Skipped by rate (rate: %d%%)", sendRate)
 		return
 	}
 
