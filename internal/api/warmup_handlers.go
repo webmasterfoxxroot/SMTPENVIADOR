@@ -2717,18 +2717,22 @@ func (s *Server) processInternalWarmup() {
 		}
 	}
 
-	if len(activeSmtps) < 1 {
-		log.Printf("[Internal Warmup] No SMTPs within active hours")
+	if len(activeSmtps) < 2 {
+		log.Printf("[Internal Warmup] Need at least 2 SMTPs within active hours, have %d", len(activeSmtps))
 		return
 	}
 
-	// Pick an SMTP to use for warmup
-	// For self-warmup (same SMTP), we send from one sender to another sender of the SAME SMTP
+	// Pick two DIFFERENT SMTPs for cross-SMTP warmup
+	// SMTP1 sends to SMTP2 (different domains won't be blocked by PowerMTA loop prevention)
 	fromIdx := rand.Intn(len(activeSmtps))
 	fromSMTP := activeSmtps[fromIdx]
 
-	// Use the same SMTP for both FROM and TO (self-warmup within same SMTP)
-	toSMTP := fromSMTP
+	// Pick a DIFFERENT SMTP for TO
+	toIdx := rand.Intn(len(activeSmtps))
+	for toIdx == fromIdx {
+		toIdx = rand.Intn(len(activeSmtps))
+	}
+	toSMTP := activeSmtps[toIdx]
 
 	// Random chance to send based on FROM SMTP's send_rate
 	sendRate := fromSMTP.SendRate
@@ -2740,7 +2744,7 @@ func (s *Server) processInternalWarmup() {
 		return
 	}
 
-	// Get TWO DIFFERENT senders from the SAME SMTP
+	// Get a sender from the FROM SMTP
 	var fromSenderID, fromSenderEmail string
 	var fromSenderName sql.NullString
 	err = s.db.QueryRow(`
@@ -2754,17 +2758,17 @@ func (s *Server) processInternalWarmup() {
 		return
 	}
 
-	// Get a DIFFERENT sender from the same SMTP (must have IMAP configured)
+	// Get a sender from the TO SMTP (must have IMAP configured to receive replies)
 	var toSenderID, toSenderEmail string
 	err = s.db.QueryRow(`
 		SELECT id, email FROM smtp_senders
-		WHERE smtp_id = $1 AND active = true AND id != $2
+		WHERE smtp_id = $1 AND active = true
 		AND imap_host IS NOT NULL AND imap_host != ''
 		ORDER BY RANDOM() LIMIT 1
-	`, toSMTP.SMTPID, fromSenderID).Scan(&toSenderID, &toSenderEmail)
+	`, toSMTP.SMTPID).Scan(&toSenderID, &toSenderEmail)
 
 	if err != nil {
-		log.Printf("[Internal Warmup] No other senders with IMAP for SMTP %s (need at least 2 senders): %v", toSMTP.Host, err)
+		log.Printf("[Internal Warmup] No senders with IMAP for SMTP %s: %v", toSMTP.Host, err)
 		return
 	}
 
@@ -2790,9 +2794,10 @@ func (s *Server) processInternalWarmup() {
 		fromAddress = fmt.Sprintf("%s <%s>", fromSenderName.String, fromSenderEmail)
 	}
 
-	// Log detailed info before sending
-	log.Printf("[Internal Warmup] Attempting to send:")
-	log.Printf("[Internal Warmup]   SMTP: %s:%d (TLS: %s)", fromSMTP.Host, fromSMTP.Port, fromSMTP.TLSMode)
+	// Log detailed info before sending (cross-SMTP warmup)
+	log.Printf("[Internal Warmup] Cross-SMTP warmup:")
+	log.Printf("[Internal Warmup]   FROM SMTP: %s:%d (TLS: %s)", fromSMTP.Host, fromSMTP.Port, fromSMTP.TLSMode)
+	log.Printf("[Internal Warmup]   TO SMTP: %s:%d", toSMTP.Host, toSMTP.Port)
 	log.Printf("[Internal Warmup]   From: %s", fromAddress)
 	log.Printf("[Internal Warmup]   To: %s", toSenderEmail)
 	log.Printf("[Internal Warmup]   Subject: %s", subject)
@@ -2813,7 +2818,7 @@ func (s *Server) processInternalWarmup() {
 		VALUES ($1, $2, $3, $4, $5, $6, $7, 'sent', NOW())
 	`, emailID, fromSMTP.SMTPID, toSMTP.SMTPID, fromSenderEmail, toSenderID, subject, messageID)
 
-	log.Printf("[Internal Warmup] ✉️ Sent successfully from %s to %s", fromSenderEmail, toSenderEmail)
+	log.Printf("[Internal Warmup] ✉️ Cross-SMTP sent: %s (%s) → %s (%s)", fromSenderEmail, fromSMTP.Host, toSenderEmail, toSMTP.Host)
 }
 
 // processInternalWarmupIMAP checks IMAP for smtp_senders to receive and reply to internal warmup emails
