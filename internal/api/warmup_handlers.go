@@ -2790,12 +2790,19 @@ func (s *Server) processInternalWarmup() {
 		fromAddress = fmt.Sprintf("%s <%s>", fromSenderName.String, fromSenderEmail)
 	}
 
+	// Log detailed info before sending
+	log.Printf("[Internal Warmup] Attempting to send:")
+	log.Printf("[Internal Warmup]   SMTP: %s:%d (TLS: %s)", fromSMTP.Host, fromSMTP.Port, fromSMTP.TLSMode)
+	log.Printf("[Internal Warmup]   From: %s", fromAddress)
+	log.Printf("[Internal Warmup]   To: %s", toSenderEmail)
+	log.Printf("[Internal Warmup]   Subject: %s", subject)
+
 	// Send email from one SMTP to another
 	err = s.sendSMTPEmail(fromSMTP.Host, fromSMTP.Port, fromSMTP.Username, fromSMTP.Password,
 		fromSMTP.TLSMode, fromAddress, toSenderEmail, subject, body, messageID)
 
 	if err != nil {
-		log.Printf("[Internal Warmup] Failed to send from %s to %s: %v", fromSenderEmail, toSenderEmail, err)
+		log.Printf("[Internal Warmup] ❌ Failed to send from %s to %s: %v", fromSenderEmail, toSenderEmail, err)
 		return
 	}
 
@@ -2806,7 +2813,7 @@ func (s *Server) processInternalWarmup() {
 		VALUES ($1, $2, $3, $4, $5, $6, $7, 'sent', NOW())
 	`, emailID, fromSMTP.SMTPID, toSMTP.SMTPID, fromSenderEmail, toSenderID, subject, messageID)
 
-	log.Printf("[Internal Warmup] ✉️ Sent from %s to %s: %s", fromSenderEmail, toSenderEmail, subject)
+	log.Printf("[Internal Warmup] ✉️ Sent successfully from %s to %s", fromSenderEmail, toSenderEmail)
 }
 
 // processInternalWarmupIMAP checks IMAP for smtp_senders to receive and reply to internal warmup emails
