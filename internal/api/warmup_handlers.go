@@ -1761,21 +1761,27 @@ func (s *Server) startWarmupEngine() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
-	// Also run IMAP check every 5 minutes
-	imapTicker := time.NewTicker(5 * time.Minute)
+	// Get configurable intervals from settings
+	imapInterval := s.getWarmupSettingInt("imap_check_interval", 5)
+	internalCycleInterval := s.getWarmupSettingInt("internal_cycle_minutes", 2)
+
+	// Also run IMAP check (configurable, default 5 minutes)
+	imapTicker := time.NewTicker(time.Duration(imapInterval) * time.Minute)
 	defer imapTicker.Stop()
 
 	// Run seed-to-SMTP emails every 3 minutes
 	seedToSMTPTicker := time.NewTicker(3 * time.Minute)
 	defer seedToSMTPTicker.Stop()
 
-	// Run internal warmup every 2 minutes
-	internalWarmupTicker := time.NewTicker(2 * time.Minute)
+	// Run internal warmup (configurable, default 2 minutes)
+	internalWarmupTicker := time.NewTicker(time.Duration(internalCycleInterval) * time.Minute)
 	defer internalWarmupTicker.Stop()
 
-	// Run internal warmup IMAP check every 5 minutes
-	internalImapTicker := time.NewTicker(5 * time.Minute)
+	// Run internal warmup IMAP check (same as IMAP interval)
+	internalImapTicker := time.NewTicker(time.Duration(imapInterval) * time.Minute)
 	defer internalImapTicker.Stop()
+
+	log.Printf("[Warmup Engine] Started with intervals: IMAP=%dm, Internal=%dm", imapInterval, internalCycleInterval)
 
 	for {
 		select {
@@ -2747,7 +2753,7 @@ func (s *Server) processInternalWarmup() {
 
 	// Get SMTPs with internal warmup enabled (include hour settings)
 	rows, err := s.db.Query(`
-		SELECT w.id, w.smtp_id, w.send_rate, w.start_hour, w.end_hour,
+		SELECT w.id, w.smtp_id, COALESCE(w.send_rate, 30), w.start_hour, w.end_hour,
 		       s.host, s.port, s.username, s.password, s.tls_mode
 		FROM warmup_smtps w
 		JOIN smtp_servers s ON w.smtp_id = s.id
@@ -2787,6 +2793,7 @@ func (s *Server) processInternalWarmup() {
 		}
 		rows.Scan(&smtp.WarmupID, &smtp.SMTPID, &smtp.SendRate, &smtp.StartHour, &smtp.EndHour,
 			&smtp.Host, &smtp.Port, &smtp.Username, &smtp.Password, &smtp.TLSMode)
+		log.Printf("[Internal Warmup] Loaded SMTP %s with send_rate=%d%%", smtp.Host, smtp.SendRate)
 		smtps = append(smtps, smtp)
 	}
 
@@ -2835,105 +2842,113 @@ func (s *Server) processInternalWarmup() {
 		return
 	}
 
-	// Pick two DIFFERENT SMTPs for cross-SMTP warmup
-	// SMTP1 sends to SMTP2 (different domains won't be blocked by PowerMTA loop prevention)
-	fromIdx := rand.Intn(len(activeSmtps))
-	fromSMTP := activeSmtps[fromIdx]
+	// Send emails for each SMTP based on its send_rate
+	// Higher rate = more emails per cycle
+	emailsSent := 0
+	for _, fromSMTP := range activeSmtps {
+		sendRate := fromSMTP.SendRate
+		if sendRate <= 0 {
+			sendRate = 30 // default
+		}
 
-	// Pick a DIFFERENT SMTP for TO
-	toIdx := rand.Intn(len(activeSmtps))
-	for toIdx == fromIdx {
-		toIdx = rand.Intn(len(activeSmtps))
+		// Check if we should send based on send_rate percentage
+		randomValue := rand.Intn(100)
+		if randomValue >= sendRate {
+			log.Printf("[Internal Warmup] Skipped %s by rate (rate: %d%%, roll: %d)", fromSMTP.Host, sendRate, randomValue)
+			continue
+		}
+
+		// Pick a DIFFERENT SMTP as destination
+		var toSMTP = activeSmtps[0]
+		for i := 0; i < 10; i++ { // Try up to 10 times to find a different SMTP
+			idx := rand.Intn(len(activeSmtps))
+			if activeSmtps[idx].SMTPID != fromSMTP.SMTPID {
+				toSMTP = activeSmtps[idx]
+				break
+			}
+		}
+		if toSMTP.SMTPID == fromSMTP.SMTPID {
+			continue // Skip if we can't find a different SMTP
+		}
+
+		// Get a sender from the FROM SMTP
+		var fromSenderID, fromSenderEmail string
+		var fromSenderName sql.NullString
+		err = s.db.QueryRow(`
+			SELECT id, email, name FROM smtp_senders
+			WHERE smtp_id = $1 AND active = true
+			ORDER BY RANDOM() LIMIT 1
+		`, fromSMTP.SMTPID).Scan(&fromSenderID, &fromSenderEmail, &fromSenderName)
+
+		if err != nil {
+			log.Printf("[Internal Warmup] No senders for SMTP %s: %v", fromSMTP.Host, err)
+			continue
+		}
+
+		// Get a sender from the TO SMTP (must have IMAP configured to receive replies)
+		var toSenderID, toSenderEmail string
+		err = s.db.QueryRow(`
+			SELECT id, email FROM smtp_senders
+			WHERE smtp_id = $1 AND active = true
+			AND imap_host IS NOT NULL AND imap_host != ''
+			ORDER BY RANDOM() LIMIT 1
+		`, toSMTP.SMTPID).Scan(&toSenderID, &toSenderEmail)
+
+		if err != nil {
+			log.Printf("[Internal Warmup] No senders with IMAP for SMTP %s: %v", toSMTP.Host, err)
+			continue
+		}
+
+		// Get a random template
+		var subject, body string
+		err = s.db.QueryRow(`
+			SELECT subject, body FROM warmup_templates
+			WHERE active = true ORDER BY RANDOM() LIMIT 1
+		`).Scan(&subject, &body)
+		if err != nil {
+			continue
+		}
+
+		// Add randomization to subject
+		subject = subject + " #" + fmt.Sprintf("%d", rand.Intn(9999))
+
+		// Generate message ID with internal-warmup marker
+		messageID := fmt.Sprintf("<%s@internal-warmup>", uuid.New().String())
+
+		// Format From address with name if available
+		fromAddress := fromSenderEmail
+		if fromSenderName.Valid && fromSenderName.String != "" {
+			fromAddress = fmt.Sprintf("%s <%s>", fromSenderName.String, fromSenderEmail)
+		}
+
+		// Log detailed info before sending (cross-SMTP warmup)
+		log.Printf("[Internal Warmup] Cross-SMTP: %s → %s (rate: %d%%, roll: %d)", fromSMTP.Host, toSMTP.Host, sendRate, randomValue)
+
+		// Send email from one SMTP to another
+		err = s.sendSMTPEmail(fromSMTP.Host, fromSMTP.Port, fromSMTP.Username, fromSMTP.Password,
+			fromSMTP.TLSMode, fromAddress, toSenderEmail, subject, body, messageID)
+
+		if err != nil {
+			log.Printf("[Internal Warmup] ❌ Failed to send from %s to %s: %v", fromSenderEmail, toSenderEmail, err)
+			continue
+		}
+
+		emailsSent++
+
+		// Record the internal warmup email
+		emailID := uuid.New().String()
+		s.db.Exec(`
+			INSERT INTO warmup_internal_emails (id, from_smtp_id, to_smtp_id, from_sender_email, to_sender_id, subject, message_id, status, sent_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, 'sent', NOW())
+		`, emailID, fromSMTP.SMTPID, toSMTP.SMTPID, fromSenderEmail, toSenderID, subject, messageID)
+
+		log.Printf("[Internal Warmup] ✉️ Cross-SMTP sent: %s (%s) → %s (%s)", fromSenderEmail, fromSMTP.Host, toSenderEmail, toSMTP.Host)
+
+		// Small delay between sends to avoid overwhelming servers
+		time.Sleep(500 * time.Millisecond)
 	}
-	toSMTP := activeSmtps[toIdx]
 
-	// Random chance to send based on FROM SMTP's send_rate
-	sendRate := fromSMTP.SendRate
-	if sendRate <= 0 {
-		sendRate = 30 // default
-	}
-	randomValue := rand.Intn(100)
-	if randomValue >= sendRate {
-		log.Printf("[Internal Warmup] Skipped by rate (rate: %d%%, roll: %d)", sendRate, randomValue)
-		return
-	}
-	log.Printf("[Internal Warmup] Proceeding with send (rate: %d%%, roll: %d)", sendRate, randomValue)
-
-	// Get a sender from the FROM SMTP
-	var fromSenderID, fromSenderEmail string
-	var fromSenderName sql.NullString
-	err = s.db.QueryRow(`
-		SELECT id, email, name FROM smtp_senders
-		WHERE smtp_id = $1 AND active = true
-		ORDER BY RANDOM() LIMIT 1
-	`, fromSMTP.SMTPID).Scan(&fromSenderID, &fromSenderEmail, &fromSenderName)
-
-	if err != nil {
-		log.Printf("[Internal Warmup] No senders for SMTP %s: %v", fromSMTP.Host, err)
-		return
-	}
-
-	// Get a sender from the TO SMTP (must have IMAP configured to receive replies)
-	var toSenderID, toSenderEmail string
-	err = s.db.QueryRow(`
-		SELECT id, email FROM smtp_senders
-		WHERE smtp_id = $1 AND active = true
-		AND imap_host IS NOT NULL AND imap_host != ''
-		ORDER BY RANDOM() LIMIT 1
-	`, toSMTP.SMTPID).Scan(&toSenderID, &toSenderEmail)
-
-	if err != nil {
-		log.Printf("[Internal Warmup] No senders with IMAP for SMTP %s: %v", toSMTP.Host, err)
-		return
-	}
-
-	// Get a random template
-	var subject, body string
-	err = s.db.QueryRow(`
-		SELECT subject, body FROM warmup_templates
-		WHERE active = true ORDER BY RANDOM() LIMIT 1
-	`).Scan(&subject, &body)
-	if err != nil {
-		return
-	}
-
-	// Add randomization to subject
-	subject = subject + " #" + fmt.Sprintf("%d", rand.Intn(9999))
-
-	// Generate message ID with internal-warmup marker
-	messageID := fmt.Sprintf("<%s@internal-warmup>", uuid.New().String())
-
-	// Format From address with name if available
-	fromAddress := fromSenderEmail
-	if fromSenderName.Valid && fromSenderName.String != "" {
-		fromAddress = fmt.Sprintf("%s <%s>", fromSenderName.String, fromSenderEmail)
-	}
-
-	// Log detailed info before sending (cross-SMTP warmup)
-	log.Printf("[Internal Warmup] Cross-SMTP warmup:")
-	log.Printf("[Internal Warmup]   FROM SMTP: %s:%d (TLS: %s)", fromSMTP.Host, fromSMTP.Port, fromSMTP.TLSMode)
-	log.Printf("[Internal Warmup]   TO SMTP: %s:%d", toSMTP.Host, toSMTP.Port)
-	log.Printf("[Internal Warmup]   From: %s", fromAddress)
-	log.Printf("[Internal Warmup]   To: %s", toSenderEmail)
-	log.Printf("[Internal Warmup]   Subject: %s", subject)
-
-	// Send email from one SMTP to another
-	err = s.sendSMTPEmail(fromSMTP.Host, fromSMTP.Port, fromSMTP.Username, fromSMTP.Password,
-		fromSMTP.TLSMode, fromAddress, toSenderEmail, subject, body, messageID)
-
-	if err != nil {
-		log.Printf("[Internal Warmup] ❌ Failed to send from %s to %s: %v", fromSenderEmail, toSenderEmail, err)
-		return
-	}
-
-	// Record the internal warmup email
-	emailID := uuid.New().String()
-	s.db.Exec(`
-		INSERT INTO warmup_internal_emails (id, from_smtp_id, to_smtp_id, from_sender_email, to_sender_id, subject, message_id, status, sent_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'sent', NOW())
-	`, emailID, fromSMTP.SMTPID, toSMTP.SMTPID, fromSenderEmail, toSenderID, subject, messageID)
-
-	log.Printf("[Internal Warmup] ✉️ Cross-SMTP sent: %s (%s) → %s (%s)", fromSenderEmail, fromSMTP.Host, toSenderEmail, toSMTP.Host)
+	log.Printf("[Internal Warmup] Cycle complete: sent %d emails from %d active SMTPs", emailsSent, len(activeSmtps))
 }
 
 // processInternalWarmupIMAP checks IMAP for smtp_senders to receive and reply to internal warmup emails
