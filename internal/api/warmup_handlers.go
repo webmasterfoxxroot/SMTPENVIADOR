@@ -2128,13 +2128,32 @@ func (s *Server) authenticateSMTP(client *smtp.Client, host, username, password 
 
 // sendSMTPMessage sends the email message after authentication
 func (s *Server) sendSMTPMessage(client *smtp.Client, from, to string, msg []byte) error {
-	if err := client.Mail(from); err != nil {
-		return fmt.Errorf("MAIL error: %v", err)
+	// Send MAIL FROM without SMTPUTF8 extension (Go adds it automatically, causing issues)
+	// Use raw command like the campaign engine does
+	id, err := client.Text.Cmd("MAIL FROM:<%s>", from)
+	if err != nil {
+		return fmt.Errorf("MAIL FROM error: %v", err)
 	}
-	if err := client.Rcpt(to); err != nil {
-		return fmt.Errorf("RCPT error: %v", err)
+	client.Text.StartResponse(id)
+	code, message, err := client.Text.ReadResponse(250)
+	client.Text.EndResponse(id)
+	if err != nil {
+		return fmt.Errorf("MAIL FROM failed (%d): %s - %v", code, message, err)
 	}
 
+	// Send RCPT TO
+	id, err = client.Text.Cmd("RCPT TO:<%s>", to)
+	if err != nil {
+		return fmt.Errorf("RCPT TO error: %v", err)
+	}
+	client.Text.StartResponse(id)
+	code, message, err = client.Text.ReadResponse(250)
+	client.Text.EndResponse(id)
+	if err != nil {
+		return fmt.Errorf("RCPT TO failed (%d): %s - %v", code, message, err)
+	}
+
+	// Send DATA
 	w, err := client.Data()
 	if err != nil {
 		return fmt.Errorf("DATA error: %v", err)
