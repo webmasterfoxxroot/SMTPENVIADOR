@@ -832,19 +832,64 @@ function AddSeedModal({ onClose, onSave }) {
   const [testing, setTesting] = useState(false)
   const [testResults, setTestResults] = useState(null)
 
+  // Configurações pré-definidas por provedor
+  const providerConfigs = {
+    gmail: { provider: 'gmail', imap_host: 'imap.gmail.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.gmail.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    googlemail: { provider: 'gmail', imap_host: 'imap.gmail.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.gmail.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    yahoo: { provider: 'yahoo', imap_host: 'imap.mail.yahoo.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.mail.yahoo.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    outlook: { provider: 'outlook', imap_host: 'outlook.office365.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.office365.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    hotmail: { provider: 'outlook', imap_host: 'outlook.office365.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.office365.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    live: { provider: 'outlook', imap_host: 'outlook.office365.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.office365.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    msn: { provider: 'outlook', imap_host: 'outlook.office365.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.office365.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    aol: { provider: 'aol', imap_host: 'imap.aol.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.aol.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    gmx: { provider: 'gmx', imap_host: 'imap.gmx.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'mail.gmx.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    icloud: { provider: 'icloud', imap_host: 'imap.mail.me.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.mail.me.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    me: { provider: 'icloud', imap_host: 'imap.mail.me.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.mail.me.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    mac: { provider: 'icloud', imap_host: 'imap.mail.me.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.mail.me.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    zoho: { provider: 'zoho', imap_host: 'imap.zoho.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.zoho.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    zohomail: { provider: 'zoho', imap_host: 'imap.zoho.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.zoho.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    yandex: { provider: 'yandex', imap_host: 'imap.yandex.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.yandex.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    mail: { provider: 'mail.com', imap_host: 'imap.mail.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.mail.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    protonmail: { provider: 'protonmail', imap_host: '127.0.0.1', imap_port: 1143, imap_tls_mode: 'starttls', smtp_host: '127.0.0.1', smtp_port: 1025, smtp_tls_mode: 'starttls' },
+    proton: { provider: 'protonmail', imap_host: '127.0.0.1', imap_port: 1143, imap_tls_mode: 'starttls', smtp_host: '127.0.0.1', smtp_port: 1025, smtp_tls_mode: 'starttls' },
+    fastmail: { provider: 'fastmail', imap_host: 'imap.fastmail.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.fastmail.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    // Brasil
+    uol: { provider: 'uol', imap_host: 'imap.uol.com.br', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtps.uol.com.br', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    bol: { provider: 'bol', imap_host: 'imap.bol.com.br', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtps.bol.com.br', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    terra: { provider: 'terra', imap_host: 'imap.terra.com.br', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.terra.com.br', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    ig: { provider: 'ig', imap_host: 'imap.ig.com.br', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.ig.com.br', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    globo: { provider: 'globo', imap_host: 'imap.globo.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.globo.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    r7: { provider: 'r7', imap_host: 'imap.r7.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.r7.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    // Portugal
+    sapo: { provider: 'sapo', imap_host: 'imap.sapo.pt', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.sapo.pt', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    // Outros
+    mailru: { provider: 'mail.ru', imap_host: 'imap.mail.ru', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.mail.ru', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    seznam: { provider: 'seznam', imap_host: 'imap.seznam.cz', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.seznam.cz', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    web: { provider: 'web.de', imap_host: 'imap.web.de', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.web.de', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    t_online: { provider: 't-online', imap_host: 'secureimap.t-online.de', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'securesmtp.t-online.de', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    freenet: { provider: 'freenet', imap_host: 'mx.freenet.de', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'mx.freenet.de', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    // Empresariais
+    office365: { provider: 'office365', imap_host: 'outlook.office365.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.office365.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    godaddy: { provider: 'godaddy', imap_host: 'imap.secureserver.net', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtpout.secureserver.net', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    bluehost: { provider: 'bluehost', imap_host: 'mail.bluehost.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'mail.bluehost.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    hostgator: { provider: 'hostgator', imap_host: 'mail.hostgator.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'mail.hostgator.com', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    locaweb: { provider: 'locaweb', imap_host: 'imap.email.locaweb.com.br', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.email.locaweb.com.br', smtp_port: 587, smtp_tls_mode: 'starttls' },
+    kinghost: { provider: 'kinghost', imap_host: 'imap.kinghost.net', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.kinghost.net', smtp_port: 587, smtp_tls_mode: 'starttls' }
+  }
+
   const detectProvider = (email) => {
     const domain = email.split('@')[1]?.toLowerCase() || ''
-    if (domain.includes('gmail')) {
-      setForm({ ...form, email, provider: 'gmail', imap_host: 'imap.gmail.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.gmail.com', smtp_port: 587, smtp_tls_mode: 'starttls' })
-    } else if (domain.includes('yahoo')) {
-      setForm({ ...form, email, provider: 'yahoo', imap_host: 'imap.mail.yahoo.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.mail.yahoo.com', smtp_port: 587, smtp_tls_mode: 'starttls' })
-    } else if (domain.includes('outlook') || domain.includes('hotmail') || domain.includes('live')) {
-      setForm({ ...form, email, provider: 'outlook', imap_host: 'outlook.office365.com', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.office365.com', smtp_port: 587, smtp_tls_mode: 'starttls' })
-    } else if (domain.includes('sapo')) {
-      setForm({ ...form, email, provider: 'sapo', imap_host: 'imap.sapo.pt', imap_port: 993, imap_tls_mode: 'tls', smtp_host: 'smtp.sapo.pt', smtp_port: 587, smtp_tls_mode: 'starttls' })
-    } else {
-      setForm({ ...form, email, provider: 'other' })
+
+    // Procura match direto por nome de domínio
+    for (const [key, config] of Object.entries(providerConfigs)) {
+      if (domain.includes(key.replace('_', '-'))) {
+        setForm({ ...form, email, ...config })
+        return
+      }
     }
+
+    // Se não encontrar, mantém como 'other' mas não limpa os campos (caso o usuário já tenha preenchido)
+    setForm(prev => ({ ...prev, email, provider: 'other' }))
   }
 
   const testConnection = async (testType) => {
