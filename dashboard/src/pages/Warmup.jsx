@@ -1121,6 +1121,297 @@ function AddSeedModal({ onClose, onSave }) {
   )
 }
 
+// Modal para editar conta seed existente
+function EditSeedModal({ seed, onClose, onSave }) {
+  const [form, setForm] = useState({
+    email: seed.email || '',
+    password: '',
+    provider: seed.provider || 'other',
+    imap_host: seed.imap_host || '',
+    imap_port: seed.imap_port || 993,
+    imap_tls_mode: seed.imap_tls_mode || 'tls',
+    smtp_host: seed.smtp_host || '',
+    smtp_port: seed.smtp_port || 587,
+    smtp_tls_mode: seed.smtp_tls_mode || 'starttls',
+    send_rate: seed.send_rate ?? 50,
+    reply_rate: seed.reply_rate ?? 50,
+    emails_per_day: seed.emails_per_day ?? 20,
+    auto_reply: seed.auto_reply ?? true
+  })
+  const [loading, setLoading] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testResults, setTestResults] = useState(null)
+
+  const testConnection = async (testType) => {
+    if (!form.email) {
+      toast.error('Email é obrigatório')
+      return
+    }
+    setTesting(true)
+    setTestResults(null)
+    try {
+      const testData = { ...form }
+      if (!testData.password) {
+        testData.password = '__KEEP_EXISTING__'
+      }
+      const res = await api.post('/warmup/seeds/test-connection', { ...testData, test_type: testType })
+      setTestResults(res.data)
+      if (res.data.imap?.success && (testType === 'imap' || !res.data.smtp)) {
+        toast.success('Conexão IMAP OK!')
+      } else if (res.data.smtp?.success && testType === 'smtp') {
+        toast.success('Conexão SMTP OK!')
+      } else if (res.data.imap?.success && res.data.smtp?.success) {
+        toast.success('Conexões OK!')
+      } else {
+        const errors = []
+        if (res.data.imap?.error) errors.push(`IMAP: ${res.data.imap.error}`)
+        if (res.data.smtp?.error) errors.push(`SMTP: ${res.data.smtp.error}`)
+        toast.error(errors.join('\n') || 'Erro na conexão')
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Erro ao testar')
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    try {
+      const updateData = { ...form }
+      if (!updateData.password) {
+        delete updateData.password
+      }
+      await api.put(`/warmup/seeds/${seed.id}`, updateData)
+      toast.success('Conta seed atualizada!')
+      onSave()
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Erro ao atualizar')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-6 border-b border-gray-100">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-green-100 rounded-xl">
+              <Settings className="w-6 h-6 text-green-600" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Editar Conta Seed</h2>
+              <p className="text-sm text-gray-500">{seed.email}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg">
+            <X className="w-5 h-5 text-gray-400" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
+            <input
+              type="email"
+              value={form.email}
+              disabled
+              className="w-full px-4 py-3 border border-gray-200 rounded-xl bg-gray-50 text-gray-500 cursor-not-allowed"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Nova Senha (deixe vazio para manter)</label>
+            <input
+              type="password"
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+              className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none"
+              placeholder="Deixe vazio para manter a senha atual"
+            />
+          </div>
+
+          {/* IMAP Settings */}
+          <div className="p-4 bg-blue-50 rounded-xl space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="font-medium text-blue-900">Configurações IMAP</h4>
+              <button
+                type="button"
+                onClick={() => testConnection('imap')}
+                disabled={testing}
+                className="px-3 py-1 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 flex items-center gap-1"
+              >
+                {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <TestTube className="w-4 h-4" />}
+                Testar IMAP
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-1">
+                <label className="block text-xs font-medium text-gray-600 mb-1">Host</label>
+                <input
+                  type="text"
+                  value={form.imap_host}
+                  onChange={(e) => setForm({ ...form, imap_host: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Porta</label>
+                <input
+                  type="number"
+                  value={form.imap_port}
+                  onChange={(e) => setForm({ ...form, imap_port: parseInt(e.target.value) })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">TLS</label>
+                <select
+                  value={form.imap_tls_mode}
+                  onChange={(e) => setForm({ ...form, imap_tls_mode: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                >
+                  <option value="tls">TLS (993)</option>
+                  <option value="starttls">STARTTLS</option>
+                  <option value="none">Nenhum</option>
+                </select>
+              </div>
+            </div>
+            {testResults?.imap && (
+              <div className={`text-sm p-2 rounded-lg ${testResults.imap.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                {testResults.imap.success ? '✓ ' + testResults.imap.message : '✗ ' + testResults.imap.error}
+              </div>
+            )}
+          </div>
+
+          {/* SMTP Settings */}
+          <div className="p-4 bg-orange-50 rounded-xl space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="font-medium text-orange-900">Configurações SMTP</h4>
+              <button
+                type="button"
+                onClick={() => testConnection('smtp')}
+                disabled={testing || !form.smtp_host}
+                className="px-3 py-1 bg-orange-600 text-white text-sm rounded-lg hover:bg-orange-700 flex items-center gap-1 disabled:opacity-50"
+              >
+                {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <TestTube className="w-4 h-4" />}
+                Testar SMTP
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-1">
+                <label className="block text-xs font-medium text-gray-600 mb-1">Host</label>
+                <input
+                  type="text"
+                  value={form.smtp_host}
+                  onChange={(e) => setForm({ ...form, smtp_host: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Porta</label>
+                <input
+                  type="number"
+                  value={form.smtp_port}
+                  onChange={(e) => setForm({ ...form, smtp_port: parseInt(e.target.value) })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">TLS</label>
+                <select
+                  value={form.smtp_tls_mode}
+                  onChange={(e) => setForm({ ...form, smtp_tls_mode: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                >
+                  <option value="tls">TLS (465)</option>
+                  <option value="starttls">STARTTLS (587)</option>
+                  <option value="none">Nenhum</option>
+                </select>
+              </div>
+            </div>
+            {testResults?.smtp && (
+              <div className={`text-sm p-2 rounded-lg ${testResults.smtp.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                {testResults.smtp.success ? '✓ ' + testResults.smtp.message : '✗ ' + testResults.smtp.error}
+              </div>
+            )}
+          </div>
+
+          {/* Configurações de Warmup */}
+          <div className="p-4 bg-purple-50 rounded-xl space-y-3">
+            <h4 className="font-medium text-purple-900">Configurações de Warmup</h4>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Envio %</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={form.send_rate}
+                  onChange={(e) => setForm({ ...form, send_rate: parseInt(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                />
+                <p className="text-xs text-gray-400 mt-0.5">Chance de enviar</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Resposta %</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={form.reply_rate}
+                  onChange={(e) => setForm({ ...form, reply_rate: parseInt(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                />
+                <p className="text-xs text-gray-400 mt-0.5">Chance de responder</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Emails/dia</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={form.emails_per_day}
+                  onChange={(e) => setForm({ ...form, emails_per_day: parseInt(e.target.value) || 1 })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                />
+                <p className="text-xs text-gray-400 mt-0.5">Limite diário</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 pt-2">
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.auto_reply}
+                  onChange={(e) => setForm({ ...form, auto_reply: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-purple-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+              </label>
+              <span className="text-sm text-gray-700">Resposta automática ativada</span>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-3 pt-4 border-t">
+            <button type="button" onClick={onClose} className="px-6 py-3 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50">
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="px-6 py-3 bg-green-600 text-white rounded-xl font-medium hover:bg-green-700 flex items-center gap-2"
+            >
+              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
+              Salvar
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 // Componente principal
 function Warmup() {
   const [loading, setLoading] = useState(true)
@@ -1131,6 +1422,7 @@ function Warmup() {
   const [availableSMTPs, setAvailableSMTPs] = useState([])
   const [showAddSMTP, setShowAddSMTP] = useState(false)
   const [showAddSeed, setShowAddSeed] = useState(false)
+  const [editingSeed, setEditingSeed] = useState(null)
   const [editingWarmup, setEditingWarmup] = useState(null)
   const [activeTab, setActiveTab] = useState('dashboard')
   const [templates, setTemplates] = useState([])
@@ -1621,7 +1913,7 @@ function Warmup() {
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 gap-4">
             {seeds.map(seed => (
               <div key={seed.id} className="p-4 border border-gray-100 rounded-xl">
                 <div className="flex items-center justify-between mb-2">
@@ -1648,6 +1940,13 @@ function Warmup() {
                       ) : (
                         <Play className="w-4 h-4 text-green-500" />
                       )}
+                    </button>
+                    <button
+                      onClick={() => setEditingSeed(seed)}
+                      className="p-1.5 hover:bg-blue-50 rounded-lg"
+                      title="Editar configurações"
+                    >
+                      <Settings className="w-4 h-4 text-blue-500" />
                     </button>
                     <button
                       onClick={() => testSeed(seed.id)}
@@ -1681,6 +1980,23 @@ function Warmup() {
                     </span>
                   )}
                 </p>
+                {/* Seed Config */}
+                <div className="mt-2 flex gap-2 text-xs">
+                  <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded">
+                    Envio: {seed.send_rate || 50}%
+                  </span>
+                  <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded">
+                    Resp: {seed.reply_rate || 50}%
+                  </span>
+                  <span className="px-2 py-0.5 bg-gray-100 text-gray-700 rounded">
+                    {seed.emails_per_day || 20}/dia
+                  </span>
+                  {seed.auto_reply === false && (
+                    <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded">
+                      Auto-resp OFF
+                    </span>
+                  )}
+                </div>
                 {/* Seed Statistics */}
                 <div className="mt-3 pt-3 border-t border-gray-100">
                   <div className="grid grid-cols-2 gap-2 text-xs">
@@ -1709,7 +2025,7 @@ function Warmup() {
                       <span className="text-gray-600">Movidos:</span>
                       <span className="font-medium text-orange-600">{seed.total_moved || 0}</span>
                     </div>
-                    <div className="flex items-center gap-1 col-span-2">
+                    <div className="flex items-center gap-1">
                       <MessageSquare className="w-3 h-3 text-purple-500" />
                       <span className="text-gray-600">Respondidos:</span>
                       <span className="font-medium text-purple-600">{seed.total_replied || 0}</span>
@@ -1956,6 +2272,14 @@ function Warmup() {
         <AddSeedModal
           onClose={() => setShowAddSeed(false)}
           onSave={() => { setShowAddSeed(false); fetchAll() }}
+        />
+      )}
+
+      {editingSeed && (
+        <EditSeedModal
+          seed={editingSeed}
+          onClose={() => setEditingSeed(null)}
+          onSave={() => { setEditingSeed(null); fetchAll() }}
         />
       )}
 
