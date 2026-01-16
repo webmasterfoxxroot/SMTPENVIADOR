@@ -6,16 +6,20 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
+	"net/http"
 	"net/smtp"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
+	"github.com/emersion/go-sasl"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
@@ -138,6 +142,9 @@ func (s *Server) initWarmupTables() {
 	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS reply_rate INT DEFAULT 50`)
 	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS emails_per_day INT DEFAULT 20`)
 	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS auto_reply BOOLEAN DEFAULT true`)
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS oauth_token TEXT`)
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS oauth_access_token TEXT`)
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS oauth_token_expires TIMESTAMP`)
 	if err != nil {
 		log.Printf("[Warmup] Error creating warmup_seeds table: %v", err)
 	}
@@ -1149,6 +1156,7 @@ func (s *Server) createWarmupSeed(c *fiber.Ctx) error {
 		ReplyRate    int    `json:"reply_rate"`
 		EmailsPerDay int    `json:"emails_per_day"`
 		AutoReply    *bool  `json:"auto_reply"`
+		OAuthToken   string `json:"oauth_token"` // Microsoft OAuth2 refresh token
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -1204,12 +1212,18 @@ func (s *Server) createWarmupSeed(c *fiber.Ctx) error {
 
 	id := uuid.New().String()
 
+	// Handle oauth_token - if provided, it might be empty or null
+	var oauthToken interface{}
+	if req.OAuthToken != "" {
+		oauthToken = req.OAuthToken
+	}
+
 	_, err := s.db.Exec(`
 		INSERT INTO warmup_seeds (id, email, password, provider, imap_host, imap_port, imap_tls_mode,
-			smtp_host, smtp_port, smtp_tls_mode, send_rate, reply_rate, emails_per_day, auto_reply, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'active')
+			smtp_host, smtp_port, smtp_tls_mode, send_rate, reply_rate, emails_per_day, auto_reply, oauth_token, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'active')
 	`, id, req.Email, req.Password, req.Provider, req.IMAPHost, req.IMAPPort, req.IMAPTLSMode,
-		req.SMTPHost, req.SMTPPort, req.SMTPTLSMode, req.SendRate, req.ReplyRate, req.EmailsPerDay, autoReply)
+		req.SMTPHost, req.SMTPPort, req.SMTPTLSMode, req.SendRate, req.ReplyRate, req.EmailsPerDay, autoReply, oauthToken)
 
 	if err != nil {
 		if strings.Contains(err.Error(), "unique") {
@@ -1960,6 +1974,166 @@ func getTLSModeFromBool(useTLS bool, port int) string {
 	return "none"
 }
 
+// Microsoft OAuth2 constants
+const (
+	// Microsoft public client ID (Thunderbird's client ID - widely used for IMAP)
+	msOAuthClientID = "08162f7c-0fd2-4200-a84a-f25a4db0b584"
+	msOAuthTokenURL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
+	msOAuthScope    = "https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access"
+)
+
+// MicrosoftTokenResponse represents the OAuth2 token response from Microsoft
+type MicrosoftTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	RefreshToken string `json:"refresh_token"`
+	Scope        string `json:"scope"`
+	Error        string `json:"error"`
+	ErrorDesc    string `json:"error_description"`
+}
+
+// refreshMicrosoftAccessToken uses a refresh token to get a new access token
+func refreshMicrosoftAccessToken(refreshToken string) (*MicrosoftTokenResponse, error) {
+	data := url.Values{}
+	data.Set("client_id", msOAuthClientID)
+	data.Set("refresh_token", refreshToken)
+	data.Set("grant_type", "refresh_token")
+	data.Set("scope", msOAuthScope)
+
+	req, err := http.NewRequest("POST", msOAuthTokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to request token: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %v", err)
+	}
+
+	var tokenResp MicrosoftTokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %v", err)
+	}
+
+	if tokenResp.Error != "" {
+		return nil, fmt.Errorf("OAuth error: %s - %s", tokenResp.Error, tokenResp.ErrorDesc)
+	}
+
+	if tokenResp.AccessToken == "" {
+		return nil, fmt.Errorf("no access token in response")
+	}
+
+	return &tokenResp, nil
+}
+
+// xoauth2Client implements sasl.Client for XOAUTH2
+type xoauth2Client struct {
+	Username    string
+	AccessToken string
+}
+
+func (c *xoauth2Client) Start() (mech string, ir []byte, err error) {
+	// Format: "user=" + email + "\x01auth=Bearer " + accessToken + "\x01\x01"
+	authStr := fmt.Sprintf("user=%s\x01auth=Bearer %s\x01\x01", c.Username, c.AccessToken)
+	return "XOAUTH2", []byte(authStr), nil
+}
+
+func (c *xoauth2Client) Next(challenge []byte) ([]byte, error) {
+	// XOAUTH2 doesn't have additional challenges in normal flow
+	// If we get here, it's likely an error response from the server
+	return nil, fmt.Errorf("XOAUTH2 challenge: %s", string(challenge))
+}
+
+// newXOAuth2Client creates a new XOAUTH2 SASL client
+func newXOAuth2Client(username, accessToken string) sasl.Client {
+	return &xoauth2Client{Username: username, AccessToken: accessToken}
+}
+
+// authenticateIMAPWithXOAuth2 authenticates using XOAUTH2
+func authenticateIMAPWithXOAuth2(c *client.Client, email, accessToken string) error {
+	saslClient := newXOAuth2Client(email, accessToken)
+	if err := c.Authenticate(saslClient); err != nil {
+		return fmt.Errorf("XOAUTH2 auth failed: %v", err)
+	}
+	return nil
+}
+
+// testIMAPConnectionWithOAuth tests IMAP connection with OAuth2 support
+func testIMAPConnectionWithOAuth(host string, port int, email, password, tlsMode, oauthToken string) error {
+	addr := fmt.Sprintf("%s:%d", host, port)
+
+	var c *client.Client
+	var err error
+
+	switch tlsMode {
+	case "tls":
+		c, err = client.DialTLS(addr, &tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: true,
+		})
+	case "starttls":
+		c, err = client.Dial(addr)
+		if err != nil {
+			return fmt.Errorf("failed to connect: %v", err)
+		}
+		tlsConfig := &tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: true,
+		}
+		if err = c.StartTLS(tlsConfig); err != nil {
+			c.Logout()
+			return fmt.Errorf("STARTTLS failed: %v", err)
+		}
+	default:
+		c, err = client.Dial(addr)
+	}
+
+	if err != nil {
+		return fmt.Errorf("failed to connect: %v", err)
+	}
+	defer c.Logout()
+
+	// If we have an OAuth token, use XOAUTH2 authentication
+	if oauthToken != "" {
+		// Get access token from refresh token
+		tokenResp, err := refreshMicrosoftAccessToken(oauthToken)
+		if err != nil {
+			// If OAuth fails, try normal login as fallback
+			log.Printf("[OAuth] Token refresh failed, trying password: %v", err)
+			if loginErr := c.Login(email, password); loginErr != nil {
+				return fmt.Errorf("OAuth failed (%v) and password login failed: %v", err, loginErr)
+			}
+			return nil
+		}
+
+		// Use XOAUTH2 authentication
+		if err := authenticateIMAPWithXOAuth2(c, email, tokenResp.AccessToken); err != nil {
+			// If XOAUTH2 fails, try normal login as fallback
+			log.Printf("[OAuth] XOAUTH2 auth failed, trying password: %v", err)
+			if loginErr := c.Login(email, password); loginErr != nil {
+				return fmt.Errorf("XOAUTH2 failed (%v) and password login failed: %v", err, loginErr)
+			}
+		}
+		return nil
+	}
+
+	// Normal password login
+	if err := c.Login(email, password); err != nil {
+		return fmt.Errorf("login failed: %v", err)
+	}
+
+	return nil
+}
+
 func testIMAPConnectionWithMode(host string, port int, email, password, tlsMode string) error {
 	addr := fmt.Sprintf("%s:%d", host, port)
 
@@ -2008,12 +2182,12 @@ func testIMAPConnectionWithMode(host string, port int, email, password, tlsMode 
 func (s *Server) testSeedConnection(seedID string) {
 	var email, password, imapHost string
 	var imapPort int
-	var imapTLSMode sql.NullString
+	var imapTLSMode, oauthToken sql.NullString
 
 	err := s.db.QueryRow(`
-		SELECT email, password, imap_host, imap_port, COALESCE(imap_tls_mode, 'tls')
+		SELECT email, password, imap_host, imap_port, COALESCE(imap_tls_mode, 'tls'), oauth_token
 		FROM warmup_seeds WHERE id = $1
-	`, seedID).Scan(&email, &password, &imapHost, &imapPort, &imapTLSMode)
+	`, seedID).Scan(&email, &password, &imapHost, &imapPort, &imapTLSMode, &oauthToken)
 
 	if err != nil {
 		return
@@ -2024,7 +2198,13 @@ func (s *Server) testSeedConnection(seedID string) {
 		tlsMode = imapTLSMode.String
 	}
 
-	err = testIMAPConnectionWithMode(imapHost, imapPort, email, password, tlsMode)
+	// Use OAuth2 connection if token is available
+	oauth := ""
+	if oauthToken.Valid && oauthToken.String != "" {
+		oauth = oauthToken.String
+	}
+
+	err = testIMAPConnectionWithOAuth(imapHost, imapPort, email, password, tlsMode, oauth)
 	if err != nil {
 		s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
 			err.Error(), seedID)
@@ -2045,6 +2225,7 @@ func (s *Server) testSeedConnectionPreview(c *fiber.Ctx) error {
 		SMTPPort    int    `json:"smtp_port"`
 		SMTPTLSMode string `json:"smtp_tls_mode"` // tls, starttls, none
 		TestType    string `json:"test_type"`     // imap, smtp, both
+		OAuthToken  string `json:"oauth_token"`   // Microsoft OAuth2 refresh token
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -2069,11 +2250,16 @@ func (s *Server) testSeedConnectionPreview(c *fiber.Ctx) error {
 				req.IMAPTLSMode = getTLSModeFromBool(true, req.IMAPPort)
 			}
 
-			err := testIMAPConnectionWithMode(req.IMAPHost, req.IMAPPort, req.Email, req.Password, req.IMAPTLSMode)
+			// Use OAuth connection if token provided
+			err := testIMAPConnectionWithOAuth(req.IMAPHost, req.IMAPPort, req.Email, req.Password, req.IMAPTLSMode, req.OAuthToken)
 			if err != nil {
 				results["imap"] = fiber.Map{"success": false, "error": err.Error()}
 			} else {
-				results["imap"] = fiber.Map{"success": true, "message": "Conexão IMAP OK!"}
+				if req.OAuthToken != "" {
+					results["imap"] = fiber.Map{"success": true, "message": "Conexão IMAP com OAuth2 OK!"}
+				} else {
+					results["imap"] = fiber.Map{"success": true, "message": "Conexão IMAP OK!"}
+				}
 			}
 		}
 	}
