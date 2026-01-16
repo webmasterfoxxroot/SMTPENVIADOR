@@ -2103,9 +2103,9 @@ function Warmup() {
                     )}
                   </div>
                   <p className="text-xs text-gray-500 truncate">
-                    {item.warmup_type === 'internal'
+                    {item.from_email && item.to_email
                       ? `${item.from_email} → ${item.to_email}`
-                      : item.to_email || item.seed_email}
+                      : item.to_email || item.from_email || item.seed_email}
                   </p>
                 </div>
                 <div className="text-xs text-gray-400">
