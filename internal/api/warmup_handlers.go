@@ -440,17 +440,20 @@ func (s *Server) insertDefaultWarmupTemplates() {
 func (s *Server) listWarmupSMTPs(c *fiber.Ctx) error {
 	rows, err := s.db.Query(`
 		SELECT
-			w.id, w.smtp_id, s.name as smtp_name, w.status, w.recipe_type,
-			w.start_date, w.end_date, w.current_day,
-			w.min_emails_per_day, w.max_emails_per_day, w.send_rate, w.reply_rate,
-			w.start_hour, w.end_hour,
-			w.total_sent, w.total_inbox, w.total_spam, w.total_replies,
-			w.custom_schedule, w.internal_warmup, w.created_at, w.updated_at
+			w.id, w.smtp_id, s.name as smtp_name, w.status, COALESCE(w.recipe_type, 'progressive'),
+			w.start_date, w.end_date, COALESCE(w.current_day, 1),
+			COALESCE(w.min_emails_per_day, 5), COALESCE(w.max_emails_per_day, 40),
+			COALESCE(w.send_rate, 30), COALESCE(w.reply_rate, 30),
+			COALESCE(w.start_hour, 8), COALESCE(w.end_hour, 18),
+			COALESCE(w.total_sent, 0), COALESCE(w.total_inbox, 0),
+			COALESCE(w.total_spam, 0), COALESCE(w.total_replies, 0),
+			w.custom_schedule, COALESCE(w.internal_warmup, false), w.created_at, w.updated_at
 		FROM warmup_smtps w
 		JOIN smtp_servers s ON w.smtp_id = s.id
 		ORDER BY w.created_at DESC
 	`)
 	if err != nil {
+		log.Printf("[Warmup API] listWarmupSMTPs query error: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
 	defer rows.Close()
@@ -475,6 +478,7 @@ func (s *Server) listWarmupSMTPs(c *fiber.Ctx) error {
 			&customSchedule, &internalWarmup, &createdAt, &updatedAt,
 		)
 		if err != nil {
+			log.Printf("[Warmup API] listWarmupSMTPs scan error: %v", err)
 			continue
 		}
 
@@ -992,8 +996,9 @@ func (s *Server) updateWarmupSchedule(c *fiber.Ctx) error {
 func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 	rows, err := s.db.Query(`
 		SELECT
-			ws.id, ws.email, ws.provider, ws.imap_host, ws.imap_port, ws.smtp_host, ws.smtp_port,
-			ws.use_tls, ws.status, ws.last_check, ws.error_message, ws.created_at,
+			ws.id, ws.email, COALESCE(ws.provider, 'other'), ws.imap_host, COALESCE(ws.imap_port, 993),
+			COALESCE(ws.smtp_host, ''), COALESCE(ws.smtp_port, 587),
+			COALESCE(ws.use_tls, true), COALESCE(ws.status, 'active'), ws.last_check, ws.error_message, ws.created_at,
 			COALESCE(ws.send_rate, 50), COALESCE(ws.reply_rate, 50),
 			COALESCE(ws.emails_per_day, 20), COALESCE(ws.auto_reply, true),
 			COALESCE(ws.imap_tls_mode, 'tls'), COALESCE(ws.smtp_tls_mode, 'starttls'),
@@ -1018,6 +1023,7 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 		ORDER BY ws.created_at DESC
 	`)
 	if err != nil {
+		log.Printf("[Warmup API] listWarmupSeeds query error: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
 	defer rows.Close()
@@ -1034,11 +1040,15 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 		var createdAt time.Time
 		var totalSent, totalReceived, totalInbox, totalSpam, totalMoved, totalReplied int
 
-		rows.Scan(&id, &email, &provider, &imapHost, &imapPort, &smtpHost, &smtpPort,
+		err := rows.Scan(&id, &email, &provider, &imapHost, &imapPort, &smtpHost, &smtpPort,
 			&useTLS, &status, &lastCheck, &errorMsg, &createdAt,
 			&sendRate, &replyRate, &emailsPerDay, &autoReply,
 			&imapTLSMode, &smtpTLSMode,
 			&totalSent, &totalReceived, &totalInbox, &totalSpam, &totalMoved, &totalReplied)
+		if err != nil {
+			log.Printf("[Warmup API] listWarmupSeeds scan error: %v", err)
+			continue
+		}
 
 		seed := fiber.Map{
 			"id":             id,
