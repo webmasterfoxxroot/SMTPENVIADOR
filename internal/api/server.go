@@ -352,6 +352,7 @@ func (s *Server) setupRoutes() {
 	// Warmup Seeds
 	warmup.Get("/seeds", s.listWarmupSeeds)
 	warmup.Post("/seeds", s.createWarmupSeed)
+	warmup.Put("/seeds/:id", s.updateWarmupSeed)
 	warmup.Post("/seeds/test-connection", s.testSeedConnectionPreview) // Test before saving
 	warmup.Delete("/seeds/:id", s.deleteWarmupSeed)
 	warmup.Post("/seeds/:id/test", s.testWarmupSeed)

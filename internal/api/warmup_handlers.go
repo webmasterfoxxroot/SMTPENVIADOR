@@ -120,12 +120,21 @@ func (s *Server) initWarmupTables() {
 			smtp_port INT DEFAULT 587,
 			use_tls BOOLEAN DEFAULT true,
 			status VARCHAR(20) DEFAULT 'active',
+			send_rate INT DEFAULT 50,
+			reply_rate INT DEFAULT 50,
+			emails_per_day INT DEFAULT 20,
+			auto_reply BOOLEAN DEFAULT true,
 			last_check TIMESTAMP,
 			error_message TEXT,
 			created_at TIMESTAMP DEFAULT NOW(),
 			updated_at TIMESTAMP DEFAULT NOW()
 		)
 	`)
+	// Add new columns if they don't exist (migration)
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS send_rate INT DEFAULT 50`)
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS reply_rate INT DEFAULT 50`)
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS emails_per_day INT DEFAULT 20`)
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS auto_reply BOOLEAN DEFAULT true`)
 	if err != nil {
 		log.Printf("[Warmup] Error creating warmup_seeds table: %v", err)
 	}
@@ -978,6 +987,8 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 		SELECT
 			ws.id, ws.email, ws.provider, ws.imap_host, ws.imap_port, ws.smtp_host, ws.smtp_port,
 			ws.use_tls, ws.status, ws.last_check, ws.error_message, ws.created_at,
+			COALESCE(ws.send_rate, 50), COALESCE(ws.reply_rate, 50),
+			COALESCE(ws.emails_per_day, 20), COALESCE(ws.auto_reply, true),
 			COALESCE(ws.total_sent, 0) + COALESCE(stats.total_replied, 0) as total_sent,
 			COALESCE(stats.total_received, 0) as total_received,
 			COALESCE(stats.total_inbox, 0) as total_inbox,
@@ -1007,7 +1018,8 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 	for rows.Next() {
 		var id, email, provider, imapHost, smtpHost, status string
 		var imapPort, smtpPort int
-		var useTLS bool
+		var useTLS, autoReply bool
+		var sendRate, replyRate, emailsPerDay int
 		var lastCheck sql.NullTime
 		var errorMsg sql.NullString
 		var createdAt time.Time
@@ -1015,6 +1027,7 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 
 		rows.Scan(&id, &email, &provider, &imapHost, &imapPort, &smtpHost, &smtpPort,
 			&useTLS, &status, &lastCheck, &errorMsg, &createdAt,
+			&sendRate, &replyRate, &emailsPerDay, &autoReply,
 			&totalSent, &totalReceived, &totalInbox, &totalSpam, &totalMoved, &totalReplied)
 
 		seed := fiber.Map{
@@ -1027,6 +1040,10 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 			"smtp_port":      smtpPort,
 			"use_tls":        useTLS,
 			"status":         status,
+			"send_rate":      sendRate,
+			"reply_rate":     replyRate,
+			"emails_per_day": emailsPerDay,
+			"auto_reply":     autoReply,
 			"created_at":     createdAt,
 			"total_sent":     totalSent,
 			"total_received": totalReceived,
@@ -1056,15 +1073,19 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 // createWarmupSeed adds a new seed account
 func (s *Server) createWarmupSeed(c *fiber.Ctx) error {
 	var req struct {
-		Email       string `json:"email"`
-		Password    string `json:"password"`
-		Provider    string `json:"provider"`
-		IMAPHost    string `json:"imap_host"`
-		IMAPPort    int    `json:"imap_port"`
-		IMAPTLSMode string `json:"imap_tls_mode"` // tls, starttls, none
-		SMTPHost    string `json:"smtp_host"`
-		SMTPPort    int    `json:"smtp_port"`
-		SMTPTLSMode string `json:"smtp_tls_mode"` // tls, starttls, none
+		Email        string `json:"email"`
+		Password     string `json:"password"`
+		Provider     string `json:"provider"`
+		IMAPHost     string `json:"imap_host"`
+		IMAPPort     int    `json:"imap_port"`
+		IMAPTLSMode  string `json:"imap_tls_mode"` // tls, starttls, none
+		SMTPHost     string `json:"smtp_host"`
+		SMTPPort     int    `json:"smtp_port"`
+		SMTPTLSMode  string `json:"smtp_tls_mode"` // tls, starttls, none
+		SendRate     int    `json:"send_rate"`
+		ReplyRate    int    `json:"reply_rate"`
+		EmailsPerDay int    `json:"emails_per_day"`
+		AutoReply    *bool  `json:"auto_reply"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -1081,6 +1102,21 @@ func (s *Server) createWarmupSeed(c *fiber.Ctx) error {
 	}
 	if req.SMTPPort == 0 {
 		req.SMTPPort = 587
+	}
+
+	// Set default values
+	if req.SendRate == 0 {
+		req.SendRate = 50
+	}
+	if req.ReplyRate == 0 {
+		req.ReplyRate = 50
+	}
+	if req.EmailsPerDay == 0 {
+		req.EmailsPerDay = 20
+	}
+	autoReply := true
+	if req.AutoReply != nil {
+		autoReply = *req.AutoReply
 	}
 
 	// Auto-detect TLS mode based on port if not specified
@@ -1106,9 +1142,11 @@ func (s *Server) createWarmupSeed(c *fiber.Ctx) error {
 	id := uuid.New().String()
 
 	_, err := s.db.Exec(`
-		INSERT INTO warmup_seeds (id, email, password, provider, imap_host, imap_port, imap_tls_mode, smtp_host, smtp_port, smtp_tls_mode, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active')
-	`, id, req.Email, req.Password, req.Provider, req.IMAPHost, req.IMAPPort, req.IMAPTLSMode, req.SMTPHost, req.SMTPPort, req.SMTPTLSMode)
+		INSERT INTO warmup_seeds (id, email, password, provider, imap_host, imap_port, imap_tls_mode,
+			smtp_host, smtp_port, smtp_tls_mode, send_rate, reply_rate, emails_per_day, auto_reply, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'active')
+	`, id, req.Email, req.Password, req.Provider, req.IMAPHost, req.IMAPPort, req.IMAPTLSMode,
+		req.SMTPHost, req.SMTPPort, req.SMTPTLSMode, req.SendRate, req.ReplyRate, req.EmailsPerDay, autoReply)
 
 	if err != nil {
 		if strings.Contains(err.Error(), "unique") {
@@ -1121,6 +1159,100 @@ func (s *Server) createWarmupSeed(c *fiber.Ctx) error {
 	go s.testSeedConnection(id)
 
 	return c.JSON(fiber.Map{"id": id, "message": "Seed account added"})
+}
+
+// updateWarmupSeed updates a seed account
+func (s *Server) updateWarmupSeed(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	var req struct {
+		Password     string `json:"password"`
+		IMAPHost     string `json:"imap_host"`
+		IMAPPort     int    `json:"imap_port"`
+		IMAPTLSMode  string `json:"imap_tls_mode"`
+		SMTPHost     string `json:"smtp_host"`
+		SMTPPort     int    `json:"smtp_port"`
+		SMTPTLSMode  string `json:"smtp_tls_mode"`
+		SendRate     int    `json:"send_rate"`
+		ReplyRate    int    `json:"reply_rate"`
+		EmailsPerDay int    `json:"emails_per_day"`
+		AutoReply    *bool  `json:"auto_reply"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	// Build dynamic update query
+	query := `UPDATE warmup_seeds SET updated_at = NOW()`
+	params := []interface{}{}
+	paramIdx := 1
+
+	if req.Password != "" {
+		query += fmt.Sprintf(", password = $%d", paramIdx)
+		params = append(params, req.Password)
+		paramIdx++
+	}
+	if req.IMAPHost != "" {
+		query += fmt.Sprintf(", imap_host = $%d", paramIdx)
+		params = append(params, req.IMAPHost)
+		paramIdx++
+	}
+	if req.IMAPPort > 0 {
+		query += fmt.Sprintf(", imap_port = $%d", paramIdx)
+		params = append(params, req.IMAPPort)
+		paramIdx++
+	}
+	if req.IMAPTLSMode != "" {
+		query += fmt.Sprintf(", imap_tls_mode = $%d", paramIdx)
+		params = append(params, req.IMAPTLSMode)
+		paramIdx++
+	}
+	if req.SMTPHost != "" {
+		query += fmt.Sprintf(", smtp_host = $%d", paramIdx)
+		params = append(params, req.SMTPHost)
+		paramIdx++
+	}
+	if req.SMTPPort > 0 {
+		query += fmt.Sprintf(", smtp_port = $%d", paramIdx)
+		params = append(params, req.SMTPPort)
+		paramIdx++
+	}
+	if req.SMTPTLSMode != "" {
+		query += fmt.Sprintf(", smtp_tls_mode = $%d", paramIdx)
+		params = append(params, req.SMTPTLSMode)
+		paramIdx++
+	}
+	if req.SendRate > 0 {
+		query += fmt.Sprintf(", send_rate = $%d", paramIdx)
+		params = append(params, req.SendRate)
+		paramIdx++
+	}
+	if req.ReplyRate > 0 {
+		query += fmt.Sprintf(", reply_rate = $%d", paramIdx)
+		params = append(params, req.ReplyRate)
+		paramIdx++
+	}
+	if req.EmailsPerDay > 0 {
+		query += fmt.Sprintf(", emails_per_day = $%d", paramIdx)
+		params = append(params, req.EmailsPerDay)
+		paramIdx++
+	}
+	if req.AutoReply != nil {
+		query += fmt.Sprintf(", auto_reply = $%d", paramIdx)
+		params = append(params, *req.AutoReply)
+		paramIdx++
+	}
+
+	query += fmt.Sprintf(" WHERE id = $%d", paramIdx)
+	params = append(params, id)
+
+	_, err := s.db.Exec(query, params...)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{"message": "Seed updated"})
 }
 
 // deleteSeed removes a seed account

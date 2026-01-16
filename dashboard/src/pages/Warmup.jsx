@@ -821,7 +821,11 @@ function AddSeedModal({ onClose, onSave }) {
     imap_tls_mode: 'tls',
     smtp_host: '',
     smtp_port: 587,
-    smtp_tls_mode: 'starttls'
+    smtp_tls_mode: 'starttls',
+    send_rate: 50,
+    reply_rate: 50,
+    emails_per_day: 20,
+    auto_reply: true
   })
   const [loading, setLoading] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -1037,6 +1041,60 @@ function AddSeedModal({ onClose, onSave }) {
                 {testResults.smtp.success ? '✓ ' + testResults.smtp.message : '✗ ' + testResults.smtp.error}
               </div>
             )}
+          </div>
+
+          {/* Configurações de Warmup */}
+          <div className="p-4 bg-purple-50 rounded-xl space-y-3">
+            <h4 className="font-medium text-purple-900">Configurações de Warmup</h4>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Envio %</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={form.send_rate}
+                  onChange={(e) => setForm({ ...form, send_rate: parseInt(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                />
+                <p className="text-xs text-gray-400 mt-0.5">Chance de enviar</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Resposta %</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={form.reply_rate}
+                  onChange={(e) => setForm({ ...form, reply_rate: parseInt(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                />
+                <p className="text-xs text-gray-400 mt-0.5">Chance de responder</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Emails/dia</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={form.emails_per_day}
+                  onChange={(e) => setForm({ ...form, emails_per_day: parseInt(e.target.value) || 1 })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                />
+                <p className="text-xs text-gray-400 mt-0.5">Limite diário</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 pt-2">
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.auto_reply}
+                  onChange={(e) => setForm({ ...form, auto_reply: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-purple-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+              </label>
+              <span className="text-sm text-gray-700">Resposta automática ativada</span>
+            </div>
           </div>
 
           <div className="flex justify-end gap-3 pt-4 border-t">
