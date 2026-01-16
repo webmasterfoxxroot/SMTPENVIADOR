@@ -818,6 +818,12 @@ function AddSeedModal({ onClose, onSave }) {
   const [bulkMode, setBulkMode] = useState(false)
   const [bulkText, setBulkText] = useState('')
   const [bulkLoading, setBulkLoading] = useState(false)
+  const [bulkSettings, setBulkSettings] = useState({
+    send_rate: 50,
+    reply_rate: 50,
+    emails_per_day: 20,
+    auto_reply: true
+  })
   const [form, setForm] = useState({
     email: '',
     password: '',
@@ -1053,10 +1059,10 @@ function AddSeedModal({ onClose, onSave }) {
         smtp_host: providerConfig?.smtp_host || '',
         smtp_port: providerConfig?.smtp_port || 587,
         smtp_tls_mode: providerConfig?.smtp_tls_mode || 'starttls',
-        send_rate: 50,
-        reply_rate: 50,
-        emails_per_day: 20,
-        auto_reply: true,
+        send_rate: bulkSettings.send_rate,
+        reply_rate: bulkSettings.reply_rate,
+        emails_per_day: bulkSettings.emails_per_day,
+        auto_reply: bulkSettings.auto_reply,
         oauth_token: isOutlook ? rawToken : '',
         oauth_client_id: isOutlook ? rawClientId : ''
       }
@@ -1149,6 +1155,57 @@ email3@gmail.com\tsenha3`}
                 </p>
               </div>
             )}
+
+            {/* Configurações de Warmup para Importação em Massa */}
+            <div className="p-4 bg-purple-50 rounded-xl space-y-3">
+              <h4 className="font-medium text-purple-900">Configurações para todas as contas</h4>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Envio %</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={bulkSettings.send_rate}
+                    onChange={(e) => setBulkSettings({ ...bulkSettings, send_rate: parseInt(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Resposta %</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={bulkSettings.reply_rate}
+                    onChange={(e) => setBulkSettings({ ...bulkSettings, reply_rate: parseInt(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Emails/dia</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={bulkSettings.emails_per_day}
+                    onChange={(e) => setBulkSettings({ ...bulkSettings, emails_per_day: parseInt(e.target.value) || 1 })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-3 pt-2">
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={bulkSettings.auto_reply}
+                    onChange={(e) => setBulkSettings({ ...bulkSettings, auto_reply: e.target.checked })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-purple-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                </label>
+                <span className="text-sm text-gray-700">Resposta automática ativada</span>
+              </div>
+            </div>
 
             <button
               type="button"
