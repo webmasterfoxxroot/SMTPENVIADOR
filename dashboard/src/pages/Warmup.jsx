@@ -908,28 +908,36 @@ function AddSeedModal({ onClose, onSave }) {
     if (parts.length >= 2) {
       const email = parts[0].trim()
       const password = parts[1].trim()
-      const oauthToken = parts.length >= 3 ? parts[2].trim() : ''
+      const rawToken = parts.length >= 3 ? parts[2].trim() : ''
 
       // Detecta o provedor e preenche automaticamente
       const domain = email.split('@')[1]?.toLowerCase() || ''
       let providerConfig = null
+      let isOutlook = false
 
       for (const [key, config] of Object.entries(providerConfigs)) {
         if (domain.includes(key.replace('_', '-'))) {
           providerConfig = config
+          // Verifica se é Outlook/Hotmail/Live/MSN (provedores Microsoft)
+          isOutlook = ['outlook', 'hotmail', 'live', 'msn'].includes(key)
           break
         }
       }
 
+      // OAuth token só é usado para Outlook/Hotmail/Live/MSN
+      const oauthToken = isOutlook ? rawToken : ''
+
       if (providerConfig) {
         setForm(prev => ({ ...prev, email, password, oauth_token: oauthToken, ...providerConfig }))
       } else {
-        setForm(prev => ({ ...prev, email, password, oauth_token: oauthToken, provider: 'other' }))
+        setForm(prev => ({ ...prev, email, password, oauth_token: '', provider: 'other' }))
       }
 
       // Mostra mensagem diferente se tem token OAuth
       if (oauthToken) {
         toast.success(`Credenciais + OAuth Token: ${email}`)
+      } else if (rawToken && !isOutlook) {
+        toast.success(`Credenciais preenchidas: ${email} (token ignorado - não é Outlook)`)
       } else {
         toast.success(`Credenciais preenchidas: ${email}`)
       }
