@@ -1349,32 +1349,48 @@ func (s *Server) deleteWarmupSeed(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Seed removed"})
 }
 
-// testWarmupSeed tests IMAP connection for a seed
+// testWarmupSeed tests IMAP connection for a seed (with OAuth2 support)
 func (s *Server) testWarmupSeed(c *fiber.Ctx) error {
 	id := c.Params("id")
 
 	var email, password, imapHost string
 	var imapPort int
-	var useTLS bool
+	var imapTLSMode, oauthToken, oauthClientID sql.NullString
 
 	err := s.db.QueryRow(`
-		SELECT email, password, imap_host, imap_port, use_tls
+		SELECT email, password, imap_host, imap_port, COALESCE(imap_tls_mode, 'tls'), oauth_token, oauth_client_id
 		FROM warmup_seeds WHERE id = $1
-	`, id).Scan(&email, &password, &imapHost, &imapPort, &useTLS)
+	`, id).Scan(&email, &password, &imapHost, &imapPort, &imapTLSMode, &oauthToken, &oauthClientID)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Seed not found"})
 	}
 
-	// Test IMAP connection
-	err = testIMAPConnection(imapHost, imapPort, email, password, useTLS)
+	tlsMode := "tls"
+	if imapTLSMode.Valid && imapTLSMode.String != "" {
+		tlsMode = imapTLSMode.String
+	}
+
+	oauth := ""
+	if oauthToken.Valid && oauthToken.String != "" {
+		oauth = oauthToken.String
+	}
+
+	clientID := ""
+	if oauthClientID.Valid && oauthClientID.String != "" {
+		clientID = oauthClientID.String
+	}
+
+	// Test IMAP connection with OAuth2 support
+	err = testIMAPConnectionWithOAuth(imapHost, imapPort, email, password, tlsMode, oauth, clientID)
 	if err != nil {
-		s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
+		// Don't change status - just store error message
+		s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
 			err.Error(), id)
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	s.db.Exec(`UPDATE warmup_seeds SET status = 'active', error_message = NULL, last_check = NOW() WHERE id = $1`, id)
+	s.db.Exec(`UPDATE warmup_seeds SET error_message = NULL, last_check = NOW() WHERE id = $1`, id)
 
 	return c.JSON(fiber.Map{"message": "Connection successful"})
 }
@@ -2238,10 +2254,12 @@ func (s *Server) testSeedConnection(seedID string) {
 
 	err = testIMAPConnectionWithOAuth(imapHost, imapPort, email, password, tlsMode, oauth, clientID)
 	if err != nil {
-		s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
+		// Don't change status to error - just store the error message for troubleshooting
+		// Seeds should only be deactivated manually by the user
+		s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
 			err.Error(), seedID)
 	} else {
-		s.db.Exec(`UPDATE warmup_seeds SET status = 'active', error_message = NULL, last_check = NOW() WHERE id = $1`, seedID)
+		s.db.Exec(`UPDATE warmup_seeds SET error_message = NULL, last_check = NOW() WHERE id = $1`, seedID)
 	}
 }
 
@@ -3302,9 +3320,10 @@ func (s *Server) processIMAPInteractions() {
 		return
 	}
 
-	// Get all active seeds
+	// Get all active seeds with OAuth credentials
 	rows, err := s.db.Query(`
-		SELECT id, email, password, imap_host, imap_port, use_tls
+		SELECT id, email, password, imap_host, imap_port, use_tls,
+		       COALESCE(imap_tls_mode, 'tls'), COALESCE(oauth_token, ''), COALESCE(oauth_client_id, '')
 		FROM warmup_seeds WHERE status = 'active'
 	`)
 	if err != nil {
@@ -3317,15 +3336,16 @@ func (s *Server) processIMAPInteractions() {
 		var seedID, email, password, imapHost string
 		var imapPort int
 		var useTLS bool
+		var tlsMode, oauthToken, oauthClientID string
 
-		rows.Scan(&seedID, &email, &password, &imapHost, &imapPort, &useTLS)
+		rows.Scan(&seedID, &email, &password, &imapHost, &imapPort, &useTLS, &tlsMode, &oauthToken, &oauthClientID)
 
 		log.Printf("[Warmup IMAP] Processing inbox for %s", email)
-		go s.processOneSeedInbox(seedID, email, password, imapHost, imapPort, useTLS)
+		go s.processOneSeedInboxWithOAuth(seedID, email, password, imapHost, imapPort, tlsMode, oauthToken, oauthClientID)
 	}
 }
 
-func (s *Server) processOneSeedInbox(seedID, email, password, imapHost string, imapPort int, useTLS bool) {
+func (s *Server) processOneSeedInboxWithOAuth(seedID, email, password, imapHost string, imapPort int, tlsMode, oauthToken, oauthClientID string) {
 	addr := fmt.Sprintf("%s:%d", imapHost, imapPort)
 
 	var c *client.Client
@@ -3334,31 +3354,54 @@ func (s *Server) processOneSeedInbox(seedID, email, password, imapHost string, i
 	// Create dialer with timeout
 	dialer := &net.Dialer{Timeout: 30 * time.Second}
 
-	if useTLS || imapPort == 993 {
+	// Determine if we should use TLS
+	useTLS := tlsMode == "tls" || imapPort == 993
+
+	if useTLS {
 		// First establish TCP connection with timeout
 		conn, dialErr := dialer.Dial("tcp", addr)
 		if dialErr != nil {
 			log.Printf("[Warmup IMAP] TCP dial failed for %s: %v", email, dialErr)
-			s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
+			// Don't change status - just log the error
+			s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
 				dialErr.Error(), seedID)
 			return
 		}
 		// Upgrade to TLS
-		tlsConn := tls.Client(conn, &tls.Config{ServerName: imapHost})
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: imapHost, InsecureSkipVerify: true})
 		tlsConn.SetDeadline(time.Now().Add(30 * time.Second))
 		if err := tlsConn.Handshake(); err != nil {
 			conn.Close()
 			log.Printf("[Warmup IMAP] TLS handshake failed for %s: %v", email, err)
-			s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
+			s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
 				err.Error(), seedID)
 			return
 		}
 		c, err = client.New(tlsConn)
+	} else if tlsMode == "starttls" {
+		conn, dialErr := dialer.Dial("tcp", addr)
+		if dialErr != nil {
+			log.Printf("[Warmup IMAP] TCP dial failed for %s: %v", email, dialErr)
+			s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
+				dialErr.Error(), seedID)
+			return
+		}
+		c, err = client.New(conn)
+		if err == nil {
+			tlsConfig := &tls.Config{ServerName: imapHost, InsecureSkipVerify: true}
+			if startTLSErr := c.StartTLS(tlsConfig); startTLSErr != nil {
+				c.Logout()
+				log.Printf("[Warmup IMAP] STARTTLS failed for %s: %v", email, startTLSErr)
+				s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
+					startTLSErr.Error(), seedID)
+				return
+			}
+		}
 	} else {
 		conn, dialErr := dialer.Dial("tcp", addr)
 		if dialErr != nil {
 			log.Printf("[Warmup IMAP] TCP dial failed for %s: %v", email, dialErr)
-			s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
+			s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
 				dialErr.Error(), seedID)
 			return
 		}
@@ -3367,7 +3410,7 @@ func (s *Server) processOneSeedInbox(seedID, email, password, imapHost string, i
 
 	if err != nil {
 		log.Printf("[Warmup IMAP] Failed to connect to %s: %v", email, err)
-		s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
+		s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
 			err.Error(), seedID)
 		return
 	}
@@ -3376,15 +3419,36 @@ func (s *Server) processOneSeedInbox(seedID, email, password, imapHost string, i
 	// Set timeout for IMAP operations
 	c.Timeout = 60 * time.Second
 
-	if err := c.Login(email, password); err != nil {
-		log.Printf("[Warmup IMAP] Login failed for %s: %v", email, err)
-		s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
-			err.Error(), seedID)
-		return
+	// Try OAuth2 first if we have token and client_id
+	authSuccess := false
+	if oauthToken != "" && oauthClientID != "" {
+		log.Printf("[Warmup IMAP] Trying OAuth2 for %s...", email)
+		tokenResp, oauthErr := refreshMicrosoftAccessToken(oauthToken, oauthClientID)
+		if oauthErr == nil && tokenResp.AccessToken != "" {
+			if err := authenticateIMAPWithXOAuth2(c, email, tokenResp.AccessToken); err == nil {
+				log.Printf("[Warmup IMAP] OAuth2 authentication successful for %s", email)
+				authSuccess = true
+			} else {
+				log.Printf("[Warmup IMAP] OAuth2 failed for %s: %v, trying password...", email, err)
+			}
+		} else {
+			log.Printf("[Warmup IMAP] Token refresh failed for %s: %v, trying password...", email, oauthErr)
+		}
 	}
 
-	// Update last check
-	s.db.Exec(`UPDATE warmup_seeds SET last_check = NOW(), status = 'active', error_message = NULL WHERE id = $1`, seedID)
+	// Fall back to password auth
+	if !authSuccess {
+		if err := c.Login(email, password); err != nil {
+			log.Printf("[Warmup IMAP] Login failed for %s: %v", email, err)
+			// Don't change status - just log the error
+			s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
+				err.Error(), seedID)
+			return
+		}
+	}
+
+	// Update last check - clear error message on success
+	s.db.Exec(`UPDATE warmup_seeds SET last_check = NOW(), error_message = NULL WHERE id = $1`, seedID)
 
 	log.Printf("[Warmup IMAP] Connected successfully to %s, checking mailboxes...", email)
 
