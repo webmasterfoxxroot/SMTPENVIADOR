@@ -29,7 +29,8 @@ import {
   Send,
   Link2,
   FileText,
-  Reply
+  Reply,
+  ArrowUpRight
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
@@ -1722,6 +1723,34 @@ function Warmup() {
           </div>
         </button>
         <button
+          onClick={() => setActiveTab('smtps')}
+          className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${
+            activeTab === 'smtps'
+              ? 'text-orange-600 border-orange-600'
+              : 'text-gray-500 border-transparent hover:text-gray-700'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <Server className="w-4 h-4" />
+            SMTPs
+            <span className="px-2 py-0.5 text-xs bg-gray-100 rounded-full">{warmupSMTPs.length}</span>
+          </div>
+        </button>
+        <button
+          onClick={() => setActiveTab('seeds')}
+          className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${
+            activeTab === 'seeds'
+              ? 'text-orange-600 border-orange-600'
+              : 'text-gray-500 border-transparent hover:text-gray-700'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <Mail className="w-4 h-4" />
+            Seeds
+            <span className="px-2 py-0.5 text-xs bg-gray-100 rounded-full">{seeds.length}</span>
+          </div>
+        </button>
+        <button
           onClick={() => setActiveTab('templates')}
           className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${
             activeTab === 'templates'
@@ -1791,90 +1820,9 @@ function Warmup() {
         </div>
       </div>
 
-      {/* Inbox vs Spam Donut */}
-      <div className="grid grid-cols-3 gap-6 mb-6">
-        <div className="col-span-2 bg-white rounded-2xl p-6 border border-gray-100">
-          <h3 className="font-semibold text-gray-900 mb-4">SMTPs em Aquecimento</h3>
-          {warmupSMTPs.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
-              <Flame className="w-12 h-12 mx-auto mb-4 opacity-30" />
-              <p>Nenhum SMTP em aquecimento</p>
-              <button onClick={() => setShowAddSMTP(true)} className="text-orange-600 hover:underline mt-2">
-                Adicionar SMTP ao warmup
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {warmupSMTPs.map(smtp => (
-                <div key={smtp.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
-                  <div className="flex items-center gap-4">
-                    <div className={`p-2 rounded-lg ${smtp.status === 'active' ? 'bg-green-100' : 'bg-gray-200'}`}>
-                      <Server className={`w-5 h-5 ${smtp.status === 'active' ? 'text-green-600' : 'text-gray-400'}`} />
-                    </div>
-                    <div>
-                      <p className="font-medium text-gray-900">{smtp.smtp_name}</p>
-                      <p className="text-sm text-gray-500">
-                        Dia {smtp.current_day} | {smtp.total_sent} enviados | {smtp.inbox_rate?.toFixed(1)}% entrada
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                      smtp.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'
-                    }`}>
-                      {smtp.status === 'active' ? 'Ativo' : 'Pausado'}
-                    </span>
-                    {smtp.internal_warmup && (
-                      <span className="px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
-                        Interno
-                      </span>
-                    )}
-                    <button
-                      onClick={() => setEditingWarmup(smtp)}
-                      className="p-2 hover:bg-orange-100 rounded-lg transition-colors"
-                      title="Configurar"
-                    >
-                      <Settings className="w-4 h-4 text-orange-600" />
-                    </button>
-                    <button
-                      onClick={() => toggleInternalWarmup(smtp.id)}
-                      className={`p-2 rounded-lg transition-colors ${smtp.internal_warmup ? 'bg-purple-100 hover:bg-purple-200' : 'hover:bg-purple-100'}`}
-                      title={smtp.internal_warmup ? 'Desativar aquecimento interno' : 'Ativar aquecimento interno (SMTP→SMTP)'}
-                    >
-                      <Link2 className={`w-4 h-4 ${smtp.internal_warmup ? 'text-purple-600' : 'text-gray-400'}`} />
-                    </button>
-                    <button
-                      onClick={() => toggleWarmup(smtp.id)}
-                      className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
-                      title={smtp.status === 'active' ? 'Pausar' : 'Ativar'}
-                    >
-                      {smtp.status === 'active' ? (
-                        <Pause className="w-4 h-4 text-gray-600" />
-                      ) : (
-                        <Play className="w-4 h-4 text-green-600" />
-                      )}
-                    </button>
-                    <button
-                      onClick={() => triggerWarmup(smtp.id, 3)}
-                      className="p-2 hover:bg-blue-100 rounded-lg transition-colors"
-                      title="Enviar 3 emails agora (teste)"
-                    >
-                      <Mail className="w-4 h-4 text-blue-600" />
-                    </button>
-                    <button
-                      onClick={() => deleteWarmupSMTP(smtp.id)}
-                      className="p-2 hover:bg-red-100 rounded-lg transition-colors"
-                      title="Remover"
-                    >
-                      <Trash2 className="w-4 h-4 text-red-500" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
+      {/* Dashboard Stats Grid */}
+      <div className="grid grid-cols-2 gap-6 mb-6">
+        {/* Entrada vs Spam Donut */}
         <div className="bg-white rounded-2xl p-6 border border-gray-100">
           <h3 className="font-semibold text-gray-900 mb-4">Entrada vs Spam</h3>
           <div className="relative w-40 h-40 mx-auto">
@@ -1912,156 +1860,34 @@ function Warmup() {
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Seeds Section */}
-      <div className="bg-white rounded-2xl p-6 border border-gray-100 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-gray-900">Contas Seed (IMAP)</h3>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={checkIMAP}
-              className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors text-sm"
-            >
-              <RefreshCw className="w-4 h-4" />
-              Verificar Emails
-            </button>
-            <span className="text-sm text-gray-500">{seeds.length} contas</span>
+        {/* Resumo Rápido */}
+        <div className="bg-white rounded-2xl p-6 border border-gray-100">
+          <h3 className="font-semibold text-gray-900 mb-4">Resumo</h3>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between p-3 bg-orange-50 rounded-lg">
+              <div className="flex items-center gap-3">
+                <Server className="w-5 h-5 text-orange-600" />
+                <span className="text-gray-700">SMTPs em Aquecimento</span>
+              </div>
+              <span className="text-xl font-bold text-orange-600">{warmupSMTPs.length}</span>
+            </div>
+            <div className="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
+              <div className="flex items-center gap-3">
+                <Mail className="w-5 h-5 text-blue-600" />
+                <span className="text-gray-700">Contas Seed</span>
+              </div>
+              <span className="text-xl font-bold text-blue-600">{seeds.length}</span>
+            </div>
+            <div className="flex items-center justify-between p-3 bg-purple-50 rounded-lg">
+              <div className="flex items-center gap-3">
+                <FileText className="w-5 h-5 text-purple-600" />
+                <span className="text-gray-700">Templates</span>
+              </div>
+              <span className="text-xl font-bold text-purple-600">{templates.length}</span>
+            </div>
           </div>
         </div>
-
-        {seeds.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
-            <Mail className="w-12 h-12 mx-auto mb-4 opacity-30" />
-            <p>Nenhuma conta seed cadastrada</p>
-            <button onClick={() => setShowAddSeed(true)} className="text-blue-600 hover:underline mt-2">
-              Adicionar conta seed
-            </button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-4">
-            {seeds.map(seed => (
-              <div key={seed.id} className="p-4 border border-gray-100 rounded-xl">
-                <div className="flex items-center justify-between mb-2">
-                  <span className={`px-2 py-1 rounded text-xs font-medium ${
-                    seed.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                  }`}>
-                    {seed.provider?.toUpperCase()}
-                  </span>
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() => triggerSeedSend(seed.id)}
-                      className="p-1.5 hover:bg-cyan-50 rounded-lg"
-                      title="Enviar email"
-                    >
-                      <Send className="w-4 h-4 text-cyan-500" />
-                    </button>
-                    <button
-                      onClick={() => toggleSeed(seed.id)}
-                      className="p-1.5 hover:bg-gray-100 rounded-lg"
-                      title={seed.status === 'active' ? 'Pausar' : 'Ativar'}
-                    >
-                      {seed.status === 'active' ? (
-                        <Pause className="w-4 h-4 text-gray-400" />
-                      ) : (
-                        <Play className="w-4 h-4 text-green-500" />
-                      )}
-                    </button>
-                    <button
-                      onClick={() => setEditingSeed(seed)}
-                      className="p-1.5 hover:bg-blue-50 rounded-lg"
-                      title="Editar configurações"
-                    >
-                      <Settings className="w-4 h-4 text-blue-500" />
-                    </button>
-                    <button
-                      onClick={() => testSeed(seed.id)}
-                      className="p-1.5 hover:bg-gray-100 rounded-lg"
-                      title="Testar conexao"
-                    >
-                      <TestTube className="w-4 h-4 text-gray-400" />
-                    </button>
-                    <button
-                      onClick={() => deleteSeed(seed.id)}
-                      className="p-1.5 hover:bg-red-50 rounded-lg"
-                      title="Remover"
-                    >
-                      <Trash2 className="w-4 h-4 text-red-400" />
-                    </button>
-                  </div>
-                </div>
-                <p className="font-medium text-gray-900 text-sm truncate">{seed.email}</p>
-                <p className="text-xs text-gray-500 mt-1">
-                  {seed.status === 'active' ? (
-                    <span className="text-green-600 flex items-center gap-1">
-                      <CheckCircle className="w-3 h-3" /> Conectado
-                    </span>
-                  ) : seed.status === 'paused' ? (
-                    <span className="text-orange-600 flex items-center gap-1">
-                      <Pause className="w-3 h-3" /> Pausado
-                    </span>
-                  ) : (
-                    <span className="text-red-600 flex items-center gap-1">
-                      <XCircle className="w-3 h-3" /> {seed.error_message || 'Erro'}
-                    </span>
-                  )}
-                </p>
-                {/* Seed Config */}
-                <div className="mt-2 flex gap-2 text-xs">
-                  <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded">
-                    Envio: {seed.send_rate || 50}%
-                  </span>
-                  <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded">
-                    Resp: {seed.reply_rate || 50}%
-                  </span>
-                  <span className="px-2 py-0.5 bg-gray-100 text-gray-700 rounded">
-                    {seed.emails_per_day || 20}/dia
-                  </span>
-                  {seed.auto_reply === false && (
-                    <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded">
-                      Auto-resp OFF
-                    </span>
-                  )}
-                </div>
-                {/* Seed Statistics */}
-                <div className="mt-3 pt-3 border-t border-gray-100">
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div className="flex items-center gap-1">
-                      <Send className="w-3 h-3 text-cyan-500" />
-                      <span className="text-gray-600">Enviados:</span>
-                      <span className="font-medium text-cyan-600">{seed.total_sent || 0}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Mail className="w-3 h-3 text-blue-500" />
-                      <span className="text-gray-600">Recebidos:</span>
-                      <span className="font-medium text-gray-900">{seed.total_received || 0}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Inbox className="w-3 h-3 text-green-500" />
-                      <span className="text-gray-600">Entrada:</span>
-                      <span className="font-medium text-green-600">{seed.total_inbox || 0}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <AlertCircle className="w-3 h-3 text-red-500" />
-                      <span className="text-gray-600">Spam:</span>
-                      <span className="font-medium text-red-600">{seed.total_spam || 0}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <TrendingUp className="w-3 h-3 text-orange-500" />
-                      <span className="text-gray-600">Movidos:</span>
-                      <span className="font-medium text-orange-600">{seed.total_moved || 0}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <MessageSquare className="w-3 h-3 text-purple-500" />
-                      <span className="text-gray-600">Respondidos:</span>
-                      <span className="font-medium text-purple-600">{seed.total_replied || 0}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* Recent Activity */}
@@ -2076,12 +1902,18 @@ function Warmup() {
                 <div className={`p-2 rounded-lg ${
                   item.warmup_type === 'reply' ? 'bg-indigo-100' :
                   item.warmup_type === 'internal' ? 'bg-purple-100' :
+                  item.warmup_type === 'seed_to_smtp' ? 'bg-teal-100' :
+                  item.warmup_type === 'moved_to_inbox' ? 'bg-green-100' :
                   item.status === 'opened' ? 'bg-green-100' : 'bg-blue-100'
                 }`}>
                   {item.warmup_type === 'reply' ? (
                     <MessageSquare className="w-4 h-4 text-indigo-600" />
                   ) : item.warmup_type === 'internal' ? (
                     <Link2 className="w-4 h-4 text-purple-600" />
+                  ) : item.warmup_type === 'seed_to_smtp' ? (
+                    <ArrowUpRight className="w-4 h-4 text-teal-600" />
+                  ) : item.warmup_type === 'moved_to_inbox' ? (
+                    <CheckCircle className="w-4 h-4 text-green-600" />
                   ) : item.status === 'opened' ? (
                     <CheckCircle className="w-4 h-4 text-green-600" />
                   ) : (
@@ -2096,6 +1928,15 @@ function Warmup() {
                     )}
                     {item.warmup_type === 'internal' && (
                       <span className="px-1.5 py-0.5 text-xs font-medium bg-purple-100 text-purple-700 rounded">Interno</span>
+                    )}
+                    {item.warmup_type === 'seed_to_smtp' && (
+                      <span className="px-1.5 py-0.5 text-xs font-medium bg-teal-100 text-teal-700 rounded">Seed→SMTP</span>
+                    )}
+                    {item.warmup_type === 'smtp_to_seed' && (
+                      <span className="px-1.5 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded">SMTP→Seed</span>
+                    )}
+                    {item.warmup_type === 'moved_to_inbox' && (
+                      <span className="px-1.5 py-0.5 text-xs font-medium bg-green-100 text-green-700 rounded">Movido p/ Entrada</span>
                     )}
                   </div>
                   <p className="text-xs text-gray-500 truncate">
@@ -2113,6 +1954,173 @@ function Warmup() {
         )}
       </div>
         </>
+      )}
+
+      {/* SMTPs Tab */}
+      {activeTab === 'smtps' && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-2xl p-6 border border-gray-100">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-gray-900">SMTPs em Aquecimento</h3>
+              <button
+                onClick={() => setShowAddSMTP(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Adicionar SMTP
+              </button>
+            </div>
+            {warmupSMTPs.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">
+                <Server className="w-16 h-16 mx-auto mb-4 opacity-30" />
+                <p className="text-lg">Nenhum SMTP em aquecimento</p>
+                <p className="text-sm mt-2">Adicione um SMTP para começar o aquecimento</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {warmupSMTPs.map(smtp => (
+                  <div key={smtp.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-100">
+                    <div className="flex items-center gap-4">
+                      <div className={`p-3 rounded-xl ${smtp.status === 'active' ? 'bg-green-100' : 'bg-gray-200'}`}>
+                        <Server className={`w-6 h-6 ${smtp.status === 'active' ? 'text-green-600' : 'text-gray-400'}`} />
+                      </div>
+                      <div>
+                        <p className="font-semibold text-gray-900">{smtp.smtp_name}</p>
+                        <p className="text-sm text-gray-500">
+                          Dia {smtp.current_day} | {smtp.min_emails_per_day}-{smtp.max_emails_per_day} emails/dia
+                        </p>
+                        <div className="flex gap-4 mt-1 text-xs">
+                          <span className="text-blue-600">Enviados: {smtp.total_sent}</span>
+                          <span className="text-green-600">Entrada: {smtp.total_inbox}</span>
+                          <span className="text-red-600">Spam: {smtp.total_spam}</span>
+                          <span className="text-purple-600">Respostas: {smtp.total_replies}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                        smtp.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'
+                      }`}>
+                        {smtp.status === 'active' ? 'Ativo' : 'Pausado'}
+                      </span>
+                      <button
+                        onClick={() => triggerWarmup(smtp.id)}
+                        className="p-2 hover:bg-blue-50 rounded-lg"
+                        title="Enviar email"
+                      >
+                        <Send className="w-5 h-5 text-blue-500" />
+                      </button>
+                      <button
+                        onClick={() => toggleWarmup(smtp.id)}
+                        className="p-2 hover:bg-gray-100 rounded-lg"
+                        title={smtp.status === 'active' ? 'Pausar' : 'Ativar'}
+                      >
+                        {smtp.status === 'active' ? (
+                          <Pause className="w-5 h-5 text-gray-400" />
+                        ) : (
+                          <Play className="w-5 h-5 text-green-500" />
+                        )}
+                      </button>
+                      <button
+                        onClick={() => setEditingWarmup(smtp)}
+                        className="p-2 hover:bg-gray-100 rounded-lg"
+                        title="Editar"
+                      >
+                        <Settings className="w-5 h-5 text-gray-400" />
+                      </button>
+                      <button
+                        onClick={() => deleteWarmupSMTP(smtp.id)}
+                        className="p-2 hover:bg-red-50 rounded-lg"
+                        title="Remover"
+                      >
+                        <Trash2 className="w-5 h-5 text-red-400" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Seeds Tab */}
+      {activeTab === 'seeds' && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-2xl p-6 border border-gray-100">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-gray-900">Contas Seed (IMAP)</h3>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={checkIMAP}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Verificar Emails
+                </button>
+                <button
+                  onClick={() => setShowAddSeed(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Nova Seed
+                </button>
+              </div>
+            </div>
+            {seeds.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">
+                <Mail className="w-16 h-16 mx-auto mb-4 opacity-30" />
+                <p className="text-lg">Nenhuma conta seed cadastrada</p>
+                <p className="text-sm mt-2">Adicione contas seed para receber emails de warmup</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-4">
+                {seeds.map(seed => (
+                  <div key={seed.id} className="p-4 border border-gray-200 rounded-xl hover:border-gray-300 transition-colors">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className={`px-2 py-1 rounded text-xs font-medium ${
+                        seed.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                      }`}>
+                        {seed.provider?.toUpperCase()}
+                      </span>
+                      <div className="flex gap-1">
+                        <button onClick={() => triggerSeedSend(seed.id)} className="p-1.5 hover:bg-cyan-50 rounded-lg" title="Enviar email">
+                          <Send className="w-4 h-4 text-cyan-500" />
+                        </button>
+                        <button onClick={() => toggleSeed(seed.id)} className="p-1.5 hover:bg-gray-100 rounded-lg">
+                          {seed.status === 'active' ? <Pause className="w-4 h-4 text-gray-400" /> : <Play className="w-4 h-4 text-green-500" />}
+                        </button>
+                        <button onClick={() => setEditingSeed(seed)} className="p-1.5 hover:bg-gray-100 rounded-lg">
+                          <Edit className="w-4 h-4 text-gray-400" />
+                        </button>
+                        <button onClick={() => deleteSeed(seed.id)} className="p-1.5 hover:bg-red-50 rounded-lg">
+                          <Trash2 className="w-4 h-4 text-red-400" />
+                        </button>
+                      </div>
+                    </div>
+                    <p className="font-medium text-gray-900 truncate">{seed.email}</p>
+                    <p className="text-xs text-gray-500 mt-1">{seed.imap_host}</p>
+                    <div className="mt-3 pt-3 border-t border-gray-100">
+                      <div className="grid grid-cols-3 gap-2 text-xs">
+                        <div><span className="text-gray-500">Enviados:</span> <span className="font-medium">{seed.total_sent || 0}</span></div>
+                        <div><span className="text-gray-500">Recebidos:</span> <span className="font-medium">{seed.total_received || 0}</span></div>
+                        <div><span className="text-gray-500">Respondidos:</span> <span className="font-medium">{seed.total_replied || 0}</span></div>
+                      </div>
+                      <div className="flex justify-between mt-2 text-xs">
+                        <span className="text-green-600">Entrada: {seed.total_inbox || 0}</span>
+                        <span className="text-red-600">Spam: {seed.total_spam || 0}</span>
+                        <span className="text-orange-600">Movidos: {seed.total_moved || 0}</span>
+                      </div>
+                    </div>
+                    <div className="mt-2 text-xs text-gray-400">
+                      Taxas: Envio {seed.send_rate}% | Resposta {seed.reply_rate}% | Limite {seed.emails_per_day}/dia
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Templates Tab */}

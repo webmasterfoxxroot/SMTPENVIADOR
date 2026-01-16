@@ -249,6 +249,43 @@ func (s *Server) initWarmupTables() {
 		log.Printf("[Warmup] Error creating warmup_internal_emails table: %v", err)
 	}
 
+	// Create warmup_seed_emails table for tracking Seed→SMTP emails
+	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS warmup_seed_emails (
+			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+			seed_id UUID NOT NULL REFERENCES warmup_seeds(id) ON DELETE CASCADE,
+			to_email VARCHAR(255) NOT NULL,
+			to_warmup_smtp_id UUID REFERENCES warmup_smtps(id) ON DELETE SET NULL,
+			subject VARCHAR(500),
+			message_id VARCHAR(255),
+			status VARCHAR(20) DEFAULT 'sent',
+			sent_at TIMESTAMP DEFAULT NOW(),
+			created_at TIMESTAMP DEFAULT NOW()
+		)
+	`)
+	if err != nil {
+		log.Printf("[Warmup] Error creating warmup_seed_emails table: %v", err)
+	}
+
+	// Create warmup_activity table for tracking events (moved to inbox, etc.)
+	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS warmup_activity (
+			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+			activity_type VARCHAR(50) NOT NULL,
+			email_id UUID,
+			seed_id UUID REFERENCES warmup_seeds(id) ON DELETE SET NULL,
+			warmup_smtp_id UUID REFERENCES warmup_smtps(id) ON DELETE SET NULL,
+			from_email VARCHAR(255),
+			to_email VARCHAR(255),
+			subject VARCHAR(500),
+			details TEXT,
+			created_at TIMESTAMP DEFAULT NOW()
+		)
+	`)
+	if err != nil {
+		log.Printf("[Warmup] Error creating warmup_activity table: %v", err)
+	}
+
 	// Insert default warmup templates
 	s.insertDefaultWarmupTemplates()
 
@@ -1653,10 +1690,14 @@ func (s *Server) triggerWarmup(c *fiber.Ctx) error {
 	})
 }
 
-// getWarmupActivity returns recent warmup activity (including internal warmup)
+// getWarmupActivity returns recent warmup activity (including all types)
 func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
-	// Query regular warmup emails, internal warmup emails, AND replies
-	// Cast all IDs to TEXT to ensure UNION compatibility
+	// Query all warmup activity types:
+	// 1. SMTP → Seed emails (warmup_emails)
+	// 2. Replies (warmup_emails with replied_at)
+	// 3. Internal SMTP → SMTP (warmup_internal_emails)
+	// 4. Seed → SMTP emails (warmup_seed_emails)
+	// 5. Activity events like "moved to inbox" (warmup_activity)
 	rows, err := s.db.Query(`
 		(
 			SELECT DISTINCT ON (e.id) e.id::text, COALESCE(e.subject, ''), COALESCE(e.status, 'sent'), e.sent_at,
@@ -1666,7 +1707,7 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 				       ''
 				   ) as from_email,
 				   COALESCE(s.email, '') as to_email,
-				   'seed' as warmup_type
+				   'smtp_to_seed' as warmup_type
 			FROM warmup_emails e
 			JOIN warmup_seeds s ON e.seed_id = s.id
 			JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
@@ -1692,12 +1733,29 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 			FROM warmup_internal_emails ie
 			LEFT JOIN smtp_senders ss ON ie.to_sender_id = ss.id
 		)
+		UNION ALL
+		(
+			SELECT se.id::text, COALESCE(se.subject, ''), COALESCE(se.status, 'sent'), se.sent_at,
+				   COALESCE(s.email, '') as from_email,
+				   COALESCE(se.to_email, '') as to_email,
+				   'seed_to_smtp' as warmup_type
+			FROM warmup_seed_emails se
+			JOIN warmup_seeds s ON se.seed_id = s.id
+		)
+		UNION ALL
+		(
+			SELECT a.id::text, COALESCE(a.subject, a.activity_type, ''), a.activity_type as status, a.created_at as sent_at,
+				   COALESCE(a.from_email, '') as from_email,
+				   COALESCE(a.to_email, '') as to_email,
+				   a.activity_type as warmup_type
+			FROM warmup_activity a
+		)
 		ORDER BY sent_at DESC
 		LIMIT 50
 	`)
 	if err != nil {
 		log.Printf("[Warmup API] getWarmupActivity main query error: %v", err)
-		// If warmup_internal_emails table doesn't exist yet, fall back to query without internal
+		// Fallback to simpler query without new tables
 		rows, err = s.db.Query(`
 			(
 				SELECT DISTINCT ON (e.id) e.id::text, COALESCE(e.subject, ''), COALESCE(e.status, 'sent'), e.sent_at,
@@ -1707,7 +1765,7 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 					       ''
 					   ) as from_email,
 					   COALESCE(s.email, '') as to_email,
-					   'seed' as warmup_type
+					   'smtp_to_seed' as warmup_type
 				FROM warmup_emails e
 				JOIN warmup_seeds s ON e.seed_id = s.id
 				JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
@@ -2929,6 +2987,12 @@ func (s *Server) processSeedToSMTPEmails() {
 				continue
 			}
 
+			// Save to warmup_seed_emails table for activity tracking
+			s.db.Exec(`
+				INSERT INTO warmup_seed_emails (seed_id, to_email, to_warmup_smtp_id, subject, message_id, status, sent_at)
+				VALUES ($1, $2, $3, $4, $5, 'sent', NOW())
+			`, seed.ID, target.SenderEmail, target.WarmupID, subject, messageID)
+
 			// Update seed's sent counter
 			s.db.Exec(`UPDATE warmup_seeds SET total_sent = total_sent + 1 WHERE id = $1`, seed.ID)
 
@@ -3180,6 +3244,14 @@ func (s *Server) checkMailbox(c *client.Client, seedID, mailbox string, isSpam b
 			// Try to move to inbox
 			if err := c.Move(singleSeq, "INBOX"); err == nil {
 				s.db.Exec(`UPDATE warmup_emails SET moved_to_inbox = true WHERE id = $1`, warmupEmailID)
+
+				// Log activity for "moved to inbox"
+				s.db.Exec(`
+					INSERT INTO warmup_activity (activity_type, email_id, seed_id, warmup_smtp_id, subject, details)
+					SELECT 'moved_to_inbox', e.id, e.seed_id, e.warmup_smtp_id, e.subject, 'Movido do spam para entrada'
+					FROM warmup_emails e WHERE e.id = $1
+				`, warmupEmailID)
+
 				log.Printf("[Warmup IMAP] Moved email from spam to inbox")
 			}
 		} else {
