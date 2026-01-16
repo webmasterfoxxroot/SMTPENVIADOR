@@ -29,7 +29,8 @@ import {
   Send,
   Link2,
   FileText,
-  Reply
+  Reply,
+  ArrowUpRight
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
@@ -2076,12 +2077,18 @@ function Warmup() {
                 <div className={`p-2 rounded-lg ${
                   item.warmup_type === 'reply' ? 'bg-indigo-100' :
                   item.warmup_type === 'internal' ? 'bg-purple-100' :
+                  item.warmup_type === 'seed_to_smtp' ? 'bg-teal-100' :
+                  item.warmup_type === 'moved_to_inbox' ? 'bg-green-100' :
                   item.status === 'opened' ? 'bg-green-100' : 'bg-blue-100'
                 }`}>
                   {item.warmup_type === 'reply' ? (
                     <MessageSquare className="w-4 h-4 text-indigo-600" />
                   ) : item.warmup_type === 'internal' ? (
                     <Link2 className="w-4 h-4 text-purple-600" />
+                  ) : item.warmup_type === 'seed_to_smtp' ? (
+                    <ArrowUpRight className="w-4 h-4 text-teal-600" />
+                  ) : item.warmup_type === 'moved_to_inbox' ? (
+                    <CheckCircle className="w-4 h-4 text-green-600" />
                   ) : item.status === 'opened' ? (
                     <CheckCircle className="w-4 h-4 text-green-600" />
                   ) : (
@@ -2096,6 +2103,15 @@ function Warmup() {
                     )}
                     {item.warmup_type === 'internal' && (
                       <span className="px-1.5 py-0.5 text-xs font-medium bg-purple-100 text-purple-700 rounded">Interno</span>
+                    )}
+                    {item.warmup_type === 'seed_to_smtp' && (
+                      <span className="px-1.5 py-0.5 text-xs font-medium bg-teal-100 text-teal-700 rounded">Seed→SMTP</span>
+                    )}
+                    {item.warmup_type === 'smtp_to_seed' && (
+                      <span className="px-1.5 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded">SMTP→Seed</span>
+                    )}
+                    {item.warmup_type === 'moved_to_inbox' && (
+                      <span className="px-1.5 py-0.5 text-xs font-medium bg-green-100 text-green-700 rounded">Movido p/ Entrada</span>
                     )}
                   </div>
                   <p className="text-xs text-gray-500 truncate">
