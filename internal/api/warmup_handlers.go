@@ -2677,12 +2677,14 @@ func (s *Server) processSeedToSMTPEmails() {
 
 	// Only send during business hours (6-22)
 	if currentHour < 6 || currentHour > 22 {
+		log.Printf("[Warmup Seed→SMTP] Outside sending hours (current: %d)", currentHour)
 		return
 	}
 
-	// Get active seeds with SMTP settings
+	// Get active seeds with SMTP settings AND their warmup config
 	seedRows, err := s.db.Query(`
-		SELECT id, email, password, smtp_host, smtp_port, use_tls
+		SELECT id, email, password, smtp_host, smtp_port, use_tls,
+		       COALESCE(send_rate, 50), COALESCE(emails_per_day, 20)
 		FROM warmup_seeds
 		WHERE status = 'active' AND smtp_host IS NOT NULL AND smtp_host != ''
 	`)
@@ -2692,31 +2694,31 @@ func (s *Server) processSeedToSMTPEmails() {
 	}
 	defer seedRows.Close()
 
-	var seeds []struct {
-		ID       string
-		Email    string
-		Password string
-		SMTPHost string
-		SMTPPort int
-		UseTLS   bool
+	type seedInfo struct {
+		ID           string
+		Email        string
+		Password     string
+		SMTPHost     string
+		SMTPPort     int
+		UseTLS       bool
+		SendRate     int
+		EmailsPerDay int
 	}
 
+	var seeds []seedInfo
 	for seedRows.Next() {
-		var seed struct {
-			ID       string
-			Email    string
-			Password string
-			SMTPHost string
-			SMTPPort int
-			UseTLS   bool
-		}
-		seedRows.Scan(&seed.ID, &seed.Email, &seed.Password, &seed.SMTPHost, &seed.SMTPPort, &seed.UseTLS)
+		var seed seedInfo
+		seedRows.Scan(&seed.ID, &seed.Email, &seed.Password, &seed.SMTPHost, &seed.SMTPPort, &seed.UseTLS,
+			&seed.SendRate, &seed.EmailsPerDay)
 		seeds = append(seeds, seed)
 	}
 
 	if len(seeds) == 0 {
+		log.Printf("[Warmup Seed→SMTP] No active seeds with SMTP configured")
 		return
 	}
+
+	log.Printf("[Warmup Seed→SMTP] Found %d seeds with SMTP", len(seeds))
 
 	// Get active warmup SMTPs and their senders
 	smtpRows, err := s.db.Query(`
@@ -2724,8 +2726,6 @@ func (s *Server) processSeedToSMTPEmails() {
 		FROM warmup_smtps w
 		JOIN smtp_senders ss ON ss.smtp_id = w.smtp_id
 		WHERE w.status = 'active' AND ss.active = true
-		ORDER BY RANDOM()
-		LIMIT 10
 	`)
 	if err != nil {
 		log.Printf("[Warmup Seed→SMTP] Error getting SMTP senders: %v", err)
@@ -2750,53 +2750,98 @@ func (s *Server) processSeedToSMTPEmails() {
 	}
 
 	if len(targets) == 0 {
+		log.Printf("[Warmup Seed→SMTP] No active SMTP senders to send to")
 		return
 	}
 
-	// Random chance to send (20% per cycle)
-	if rand.Intn(100) > 20 {
-		return
+	log.Printf("[Warmup Seed→SMTP] Found %d SMTP senders as targets", len(targets))
+
+	// Process each seed
+	totalSent := 0
+	for _, seed := range seeds {
+		// Check how many this seed already sent today
+		var sentToday int
+		s.db.QueryRow(`
+			SELECT COUNT(*) FROM warmup_emails
+			WHERE seed_id = $1 AND DATE(sent_at) = $2 AND status = 'sent'
+		`, seed.ID, now.Format("2006-01-02")).Scan(&sentToday)
+
+		// Check daily limit
+		if sentToday >= seed.EmailsPerDay {
+			log.Printf("[Warmup Seed→SMTP] Seed %s: Daily limit reached (%d/%d)", seed.Email, sentToday, seed.EmailsPerDay)
+			continue
+		}
+
+		// Calculate how many to send this cycle
+		// Seed→SMTP runs every 3 minutes = 20 cycles per hour
+		// Sending hours = 16 (6-22), total cycles = 320
+		sendingHours := 16
+		cyclesPerHour := 20
+		totalCycles := sendingHours * cyclesPerHour
+		remaining := seed.EmailsPerDay - sentToday
+		emailsThisCycle := remaining / totalCycles
+
+		// Use send_rate as probability for low volume
+		if emailsThisCycle < 1 {
+			if rand.Intn(100) < seed.SendRate {
+				emailsThisCycle = 1
+			} else {
+				log.Printf("[Warmup Seed→SMTP] Seed %s: Skipped by rate (remaining=%d, rate=%d%%)", seed.Email, remaining, seed.SendRate)
+				continue
+			}
+		}
+
+		log.Printf("[Warmup Seed→SMTP] Seed %s: Limit=%d, Sent=%d, Remaining=%d, ThisCycle=%d, Rate=%d%%",
+			seed.Email, seed.EmailsPerDay, sentToday, remaining, emailsThisCycle, seed.SendRate)
+
+		// Send emails
+		for i := 0; i < emailsThisCycle; i++ {
+			// Pick random target
+			target := targets[rand.Intn(len(targets))]
+
+			// Get a random template
+			var subject, body string
+			err = s.db.QueryRow(`
+				SELECT subject, body FROM warmup_templates
+				WHERE active = true ORDER BY RANDOM() LIMIT 1
+			`).Scan(&subject, &body)
+			if err != nil {
+				continue
+			}
+
+			// Add randomization to subject
+			subject = subject + " #" + fmt.Sprintf("%d", rand.Intn(9999))
+
+			// Generate message ID
+			messageID := fmt.Sprintf("<%s@seed-warmup>", uuid.New().String())
+
+			// Determine TLS mode for seed's SMTP
+			tlsMode := "starttls"
+			if seed.SMTPPort == 465 {
+				tlsMode = "tls"
+			}
+
+			// Send email from seed to SMTP sender
+			err = s.sendSMTPEmail(seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
+				seed.Email, target.SenderEmail, subject, body, messageID)
+
+			if err != nil {
+				log.Printf("[Warmup Seed→SMTP] Failed to send from %s to %s: %v", seed.Email, target.SenderEmail, err)
+				continue
+			}
+
+			// Update seed's sent counter
+			s.db.Exec(`UPDATE warmup_seeds SET total_sent = total_sent + 1 WHERE id = $1`, seed.ID)
+
+			log.Printf("[Warmup Seed→SMTP] ✉️ Sent from %s to %s: %s", seed.Email, target.SenderEmail, subject)
+			totalSent++
+
+			// Small delay between sends
+			time.Sleep(200 * time.Millisecond)
+		}
 	}
 
-	// Pick random seed and target
-	seed := seeds[rand.Intn(len(seeds))]
-	target := targets[rand.Intn(len(targets))]
-
-	// Get a random template
-	var subject, body string
-	err = s.db.QueryRow(`
-		SELECT subject, body FROM warmup_templates
-		WHERE active = true ORDER BY RANDOM() LIMIT 1
-	`).Scan(&subject, &body)
-	if err != nil {
-		return
-	}
-
-	// Add randomization to subject
-	subject = subject + " #" + fmt.Sprintf("%d", rand.Intn(9999))
-
-	// Generate message ID
-	messageID := fmt.Sprintf("<%s@seed-warmup>", uuid.New().String())
-
-	// Determine TLS mode for seed's SMTP
-	tlsMode := "starttls"
-	if seed.SMTPPort == 465 {
-		tlsMode = "tls"
-	}
-
-	// Send email from seed to SMTP sender
-	err = s.sendSMTPEmail(seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
-		seed.Email, target.SenderEmail, subject, body, messageID)
-
-	if err != nil {
-		log.Printf("[Warmup Seed→SMTP] Failed to send from %s to %s: %v", seed.Email, target.SenderEmail, err)
-		return
-	}
-
-	// Update seed's sent counter
-	s.db.Exec(`UPDATE warmup_seeds SET total_sent = total_sent + 1 WHERE id = $1`, seed.ID)
-
-	log.Printf("[Warmup Seed→SMTP] ✉️ Sent from %s to %s: %s", seed.Email, target.SenderEmail, subject)
+	log.Printf("[Warmup Seed→SMTP] Cycle complete: sent %d emails", totalSent)
 }
 
 // ============================================
@@ -3019,12 +3064,21 @@ func (s *Server) checkMailbox(c *client.Client, seedID, mailbox string, isSpam b
 }
 
 func (s *Server) maybeReplyToWarmupEmail(c *client.Client, seedID, email, password, imapHost string) {
+	// First check if this seed has auto_reply enabled
+	var autoReply bool
+	var seedReplyRate int
+	err := s.db.QueryRow(`SELECT COALESCE(auto_reply, true), COALESCE(reply_rate, 50) FROM warmup_seeds WHERE id = $1`, seedID).Scan(&autoReply, &seedReplyRate)
+	if err != nil || !autoReply {
+		log.Printf("[Warmup Reply] Seed %s: auto_reply disabled or error: %v", email, err)
+		return
+	}
+
 	// Get a warmup email that hasn't been replied to
 	var warmupEmailID, warmupSMTPID, originalSubject, messageID string
 	var smtpHost, smtpUsername, smtpPassword, smtpTLSMode string
 	var smtpPort int
 
-	err := s.db.QueryRow(`
+	err = s.db.QueryRow(`
 		SELECT e.id, e.warmup_smtp_id, e.subject, e.message_id,
 			   s.host, s.port, s.username, s.password, s.tls_mode
 		FROM warmup_emails e
@@ -3040,13 +3094,14 @@ func (s *Server) maybeReplyToWarmupEmail(c *client.Client, seedID, email, passwo
 		return
 	}
 
-	// Check reply rate
-	var replyRate int
-	s.db.QueryRow(`SELECT reply_rate FROM warmup_smtps WHERE id = $1`, warmupSMTPID).Scan(&replyRate)
-
-	if rand.Intn(100) >= replyRate {
+	// Check SEED's reply rate (not SMTP's)
+	randomValue := rand.Intn(100)
+	if randomValue >= seedReplyRate {
+		log.Printf("[Warmup Reply] Seed %s: Skipped reply (rate=%d%%, roll=%d)", email, seedReplyRate, randomValue)
 		return
 	}
+
+	log.Printf("[Warmup Reply] Seed %s: Will reply (rate=%d%%, roll=%d)", email, seedReplyRate, randomValue)
 
 	// Send reply from seed to SMTP
 	replySubject := "Re: " + originalSubject
