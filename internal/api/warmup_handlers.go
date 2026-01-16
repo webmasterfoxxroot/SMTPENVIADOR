@@ -989,6 +989,7 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 			ws.use_tls, ws.status, ws.last_check, ws.error_message, ws.created_at,
 			COALESCE(ws.send_rate, 50), COALESCE(ws.reply_rate, 50),
 			COALESCE(ws.emails_per_day, 20), COALESCE(ws.auto_reply, true),
+			COALESCE(ws.imap_tls_mode, 'tls'), COALESCE(ws.smtp_tls_mode, 'starttls'),
 			COALESCE(ws.total_sent, 0) + COALESCE(stats.total_replied, 0) as total_sent,
 			COALESCE(stats.total_received, 0) as total_received,
 			COALESCE(stats.total_inbox, 0) as total_inbox,
@@ -1020,6 +1021,7 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 		var imapPort, smtpPort int
 		var useTLS, autoReply bool
 		var sendRate, replyRate, emailsPerDay int
+		var imapTLSMode, smtpTLSMode string
 		var lastCheck sql.NullTime
 		var errorMsg sql.NullString
 		var createdAt time.Time
@@ -1028,6 +1030,7 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 		rows.Scan(&id, &email, &provider, &imapHost, &imapPort, &smtpHost, &smtpPort,
 			&useTLS, &status, &lastCheck, &errorMsg, &createdAt,
 			&sendRate, &replyRate, &emailsPerDay, &autoReply,
+			&imapTLSMode, &smtpTLSMode,
 			&totalSent, &totalReceived, &totalInbox, &totalSpam, &totalMoved, &totalReplied)
 
 		seed := fiber.Map{
@@ -1036,8 +1039,10 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 			"provider":       provider,
 			"imap_host":      imapHost,
 			"imap_port":      imapPort,
+			"imap_tls_mode":  imapTLSMode,
 			"smtp_host":      smtpHost,
 			"smtp_port":      smtpPort,
+			"smtp_tls_mode":  smtpTLSMode,
 			"use_tls":        useTLS,
 			"status":         status,
 			"send_rate":      sendRate,
@@ -1173,9 +1178,9 @@ func (s *Server) updateWarmupSeed(c *fiber.Ctx) error {
 		SMTPHost     string `json:"smtp_host"`
 		SMTPPort     int    `json:"smtp_port"`
 		SMTPTLSMode  string `json:"smtp_tls_mode"`
-		SendRate     int    `json:"send_rate"`
-		ReplyRate    int    `json:"reply_rate"`
-		EmailsPerDay int    `json:"emails_per_day"`
+		SendRate     *int   `json:"send_rate"`
+		ReplyRate    *int   `json:"reply_rate"`
+		EmailsPerDay *int   `json:"emails_per_day"`
 		AutoReply    *bool  `json:"auto_reply"`
 	}
 
@@ -1223,19 +1228,19 @@ func (s *Server) updateWarmupSeed(c *fiber.Ctx) error {
 		params = append(params, req.SMTPTLSMode)
 		paramIdx++
 	}
-	if req.SendRate > 0 {
+	if req.SendRate != nil {
 		query += fmt.Sprintf(", send_rate = $%d", paramIdx)
-		params = append(params, req.SendRate)
+		params = append(params, *req.SendRate)
 		paramIdx++
 	}
-	if req.ReplyRate > 0 {
+	if req.ReplyRate != nil {
 		query += fmt.Sprintf(", reply_rate = $%d", paramIdx)
-		params = append(params, req.ReplyRate)
+		params = append(params, *req.ReplyRate)
 		paramIdx++
 	}
-	if req.EmailsPerDay > 0 {
+	if req.EmailsPerDay != nil && *req.EmailsPerDay > 0 {
 		query += fmt.Sprintf(", emails_per_day = $%d", paramIdx)
-		params = append(params, req.EmailsPerDay)
+		params = append(params, *req.EmailsPerDay)
 		paramIdx++
 	}
 	if req.AutoReply != nil {
