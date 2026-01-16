@@ -1415,6 +1415,111 @@ func (s *Server) toggleWarmupSeed(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"status": newStatus, "message": "Seed status updated"})
 }
 
+// verifyAllSeeds tests IMAP connection for all seeds and marks errors
+func (s *Server) verifyAllSeeds(c *fiber.Ctx) error {
+	// Get all seeds
+	rows, err := s.db.Query(`
+		SELECT id, email, password, imap_host, imap_port,
+		       COALESCE(imap_tls_mode, 'tls'),
+		       COALESCE(oauth_token, ''),
+		       COALESCE(oauth_client_id, '')
+		FROM warmup_seeds
+	`)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get seeds"})
+	}
+	defer rows.Close()
+
+	type seedInfo struct {
+		ID            string
+		Email         string
+		Password      string
+		IMAPHost      string
+		IMAPPort      int
+		TLSMode       string
+		OAuthToken    string
+		OAuthClientID string
+	}
+
+	var seeds []seedInfo
+	for rows.Next() {
+		var seed seedInfo
+		rows.Scan(&seed.ID, &seed.Email, &seed.Password, &seed.IMAPHost, &seed.IMAPPort,
+			&seed.TLSMode, &seed.OAuthToken, &seed.OAuthClientID)
+		seeds = append(seeds, seed)
+	}
+
+	// Test each seed in parallel with a semaphore to limit concurrency
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, 5) // Limit to 5 concurrent tests
+
+	var successCount, errorCount int
+	var mu sync.Mutex
+
+	db := s.db // Capture db reference for goroutines
+	for _, seed := range seeds {
+		wg.Add(1)
+		go func(seedData seedInfo) {
+			defer wg.Done()
+			semaphore <- struct{}{}        // Acquire
+			defer func() { <-semaphore }() // Release
+
+			testErr := testIMAPConnectionWithOAuth(seedData.IMAPHost, seedData.IMAPPort, seedData.Email, seedData.Password, seedData.TLSMode, seedData.OAuthToken, seedData.OAuthClientID)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if testErr != nil {
+				// Mark as error
+				db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
+					testErr.Error(), seedData.ID)
+				errorCount++
+				log.Printf("[Verify Seeds] ❌ %s: %v", seedData.Email, testErr)
+			} else {
+				// Mark as active (only if not already paused manually)
+				db.Exec(`UPDATE warmup_seeds SET status = CASE WHEN status = 'paused' THEN 'paused' ELSE 'active' END, error_message = NULL, last_check = NOW() WHERE id = $1`, seedData.ID)
+				successCount++
+				log.Printf("[Verify Seeds] ✅ %s: OK", seedData.Email)
+			}
+		}(seed)
+	}
+
+	wg.Wait()
+
+	return c.JSON(fiber.Map{
+		"message":       "Verificação concluída",
+		"total":         len(seeds),
+		"success_count": successCount,
+		"error_count":   errorCount,
+	})
+}
+
+// deleteErrorSeeds deletes all seeds with error status
+func (s *Server) deleteErrorSeeds(c *fiber.Ctx) error {
+	// Count how many will be deleted
+	var count int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'error'`).Scan(&count)
+
+	if count == 0 {
+		return c.JSON(fiber.Map{"message": "Nenhuma seed com erro para excluir", "deleted_count": 0})
+	}
+
+	// Delete all seeds with error status
+	result, err := s.db.Exec(`DELETE FROM warmup_seeds WHERE status = 'error'`)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Falha ao excluir seeds"})
+	}
+
+	deleted, _ := result.RowsAffected()
+
+	log.Printf("[Seeds] 🗑️ Deleted %d seeds with error status", deleted)
+
+	return c.JSON(fiber.Map{
+		"message":       fmt.Sprintf("Excluídas %d seeds com erro", deleted),
+		"deleted_count": deleted,
+	})
+}
+
 // triggerSeedSend forces the seed to send an email to a random SMTP
 func (s *Server) triggerSeedSend(c *fiber.Ctx) error {
 	id := c.Params("id")
