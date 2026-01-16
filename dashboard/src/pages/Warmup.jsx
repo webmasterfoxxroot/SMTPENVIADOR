@@ -1449,22 +1449,12 @@ function Warmup() {
       const availableRes = await api.get('/smtp')
       setAvailableSMTPs(availableRes.data?.data || [])
 
-      try {
-        const [statsRes, smtpsRes, seedsRes, activityRes, templatesRes] = await Promise.all([
-          api.get('/warmup/stats'),
-          api.get('/warmup/smtps'),
-          api.get('/warmup/seeds'),
-          api.get('/warmup/activity'),
-          api.get('/warmup/templates')
-        ])
-        setStats(statsRes.data || {})
-        setWarmupSMTPs(smtpsRes.data || [])
-        setSeeds(seedsRes.data || [])
-        setActivity(activityRes.data || [])
-        setTemplates(templatesRes.data || [])
-      } catch (warmupError) {
-        // Silent fail for auto-refresh
-      }
+      // Fetch each endpoint separately so one failure doesn't affect others
+      api.get('/warmup/stats').then(r => setStats(r.data || {})).catch(() => {})
+      api.get('/warmup/smtps').then(r => setWarmupSMTPs(r.data || [])).catch(() => {})
+      api.get('/warmup/seeds').then(r => setSeeds(r.data || [])).catch(() => {})
+      api.get('/warmup/activity').then(r => setActivity(r.data || [])).catch(() => {})
+      api.get('/warmup/templates').then(r => setTemplates(r.data || [])).catch(() => {})
     } catch (error) {
       // Silent fail for auto-refresh
     }
@@ -1477,29 +1467,32 @@ function Warmup() {
       const availableRes = await api.get('/smtp')
       setAvailableSMTPs(availableRes.data?.data || [])
 
-      // Fetch warmup data (may fail if tables don't exist yet)
+      // Fetch each warmup endpoint separately so one failure doesn't affect others
       try {
-        const [statsRes, smtpsRes, seedsRes, activityRes, templatesRes] = await Promise.all([
-          api.get('/warmup/stats'),
-          api.get('/warmup/smtps'),
-          api.get('/warmup/seeds'),
-          api.get('/warmup/activity'),
-          api.get('/warmup/templates')
-        ])
+        const statsRes = await api.get('/warmup/stats')
         setStats(statsRes.data || {})
+      } catch (e) { console.log('Stats error:', e) }
+
+      try {
+        const smtpsRes = await api.get('/warmup/smtps')
         setWarmupSMTPs(smtpsRes.data || [])
+      } catch (e) { console.log('SMTPs error:', e) }
+
+      try {
+        const seedsRes = await api.get('/warmup/seeds')
         setSeeds(seedsRes.data || [])
+      } catch (e) { console.log('Seeds error:', e) }
+
+      try {
+        const activityRes = await api.get('/warmup/activity')
         setActivity(activityRes.data || [])
+      } catch (e) { console.log('Activity error:', e) }
+
+      try {
+        const templatesRes = await api.get('/warmup/templates')
         setTemplates(templatesRes.data || [])
-      } catch (warmupError) {
-        console.log('Warmup data not available yet:', warmupError)
-        // Set defaults
-        setStats({})
-        setWarmupSMTPs([])
-        setSeeds([])
-        setActivity([])
-        setTemplates([])
-      }
+      } catch (e) { console.log('Templates error:', e) }
+
     } catch (error) {
       console.error('Error fetching data:', error)
     } finally {

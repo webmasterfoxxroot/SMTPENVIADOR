@@ -1656,15 +1656,16 @@ func (s *Server) triggerWarmup(c *fiber.Ctx) error {
 // getWarmupActivity returns recent warmup activity (including internal warmup)
 func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 	// Query regular warmup emails, internal warmup emails, AND replies
+	// Cast all IDs to TEXT to ensure UNION compatibility
 	rows, err := s.db.Query(`
 		(
-			SELECT DISTINCT ON (e.id) e.id, e.subject, e.status, e.sent_at,
+			SELECT DISTINCT ON (e.id) e.id::text, COALESCE(e.subject, ''), COALESCE(e.status, 'sent'), e.sent_at,
 				   COALESCE(
 				       (SELECT email FROM smtp_senders WHERE smtp_id = sm.id AND active = true LIMIT 1),
 				       sm.username,
 				       ''
 				   ) as from_email,
-				   s.email as to_email,
+				   COALESCE(s.email, '') as to_email,
 				   'seed' as warmup_type
 			FROM warmup_emails e
 			JOIN warmup_seeds s ON e.seed_id = s.id
@@ -1674,8 +1675,8 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 		)
 		UNION ALL
 		(
-			SELECT e.id || '-reply' as id, 'Re: ' || e.subject as subject, 'replied' as status, e.replied_at as sent_at,
-				   COALESCE(e.reply_from, s.email) as from_email,
+			SELECT e.id::text || '-reply' as id, 'Re: ' || COALESCE(e.subject, '') as subject, 'replied' as status, e.replied_at as sent_at,
+				   COALESCE(e.reply_from, s.email, '') as from_email,
 				   COALESCE(e.reply_to, '') as to_email,
 				   'reply' as warmup_type
 			FROM warmup_emails e
@@ -1684,8 +1685,8 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 		)
 		UNION ALL
 		(
-			SELECT ie.id, ie.subject, ie.status, ie.sent_at,
-				   ie.from_sender_email as from_email,
+			SELECT ie.id::text, COALESCE(ie.subject, ''), COALESCE(ie.status, 'sent'), ie.sent_at,
+				   COALESCE(ie.from_sender_email, '') as from_email,
 				   COALESCE(ss.email, '') as to_email,
 				   'internal' as warmup_type
 			FROM warmup_internal_emails ie
@@ -1695,16 +1696,17 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 		LIMIT 50
 	`)
 	if err != nil {
+		log.Printf("[Warmup API] getWarmupActivity main query error: %v", err)
 		// If warmup_internal_emails table doesn't exist yet, fall back to query without internal
 		rows, err = s.db.Query(`
 			(
-				SELECT DISTINCT ON (e.id) e.id, e.subject, e.status, e.sent_at,
+				SELECT DISTINCT ON (e.id) e.id::text, COALESCE(e.subject, ''), COALESCE(e.status, 'sent'), e.sent_at,
 					   COALESCE(
 					       (SELECT email FROM smtp_senders WHERE smtp_id = sm.id AND active = true LIMIT 1),
 					       sm.username,
 					       ''
 					   ) as from_email,
-					   s.email as to_email,
+					   COALESCE(s.email, '') as to_email,
 					   'seed' as warmup_type
 				FROM warmup_emails e
 				JOIN warmup_seeds s ON e.seed_id = s.id
@@ -1714,8 +1716,8 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 			)
 			UNION ALL
 			(
-				SELECT e.id || '-reply' as id, 'Re: ' || e.subject as subject, 'replied' as status, e.replied_at as sent_at,
-					   COALESCE(e.reply_from, s.email) as from_email,
+				SELECT e.id::text || '-reply' as id, 'Re: ' || COALESCE(e.subject, '') as subject, 'replied' as status, e.replied_at as sent_at,
+					   COALESCE(e.reply_from, s.email, '') as from_email,
 					   COALESCE(e.reply_to, '') as to_email,
 					   'reply' as warmup_type
 				FROM warmup_emails e
@@ -1726,6 +1728,7 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 			LIMIT 50
 		`)
 		if err != nil {
+			log.Printf("[Warmup API] getWarmupActivity fallback query error: %v", err)
 			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 		}
 	}
