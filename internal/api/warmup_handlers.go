@@ -2130,61 +2130,83 @@ func (s *Server) generateProgressiveSchedule(warmupID string, minEmails, maxEmai
 // WARMUP ENGINE (Background Process)
 // ============================================
 
+// safeRun executes a function with panic recovery and timeout tracking
+func (s *Server) safeRun(name string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[Warmup Engine] PANIC in %s: %v", name, r)
+		}
+	}()
+
+	start := time.Now()
+	log.Printf("[Warmup Engine] Starting: %s", name)
+	fn()
+	log.Printf("[Warmup Engine] Completed: %s (took %v)", name, time.Since(start))
+}
+
 func (s *Server) startWarmupEngine() {
 	log.Println("[Warmup Engine] Starting...")
 
-	// Run IMAP check immediately on startup
-	go s.processIMAPInteractions()
-
-	// Run internal warmup immediately on startup
-	go s.processInternalWarmup()
-
-	// Run internal warmup IMAP check immediately on startup
-	go s.processInternalWarmupIMAP()
-
-	// Run external warmup (SMTP → Seeds) immediately on startup
-	go s.processWarmupEmails()
-
-	// Run every minute to check and send warmup emails
-	ticker := time.NewTicker(1 * time.Minute)
-	defer ticker.Stop()
+	// Run all tasks immediately on startup (in goroutines)
+	go s.safeRun("Initial IMAP Check", s.processIMAPInteractions)
+	go s.safeRun("Initial Internal Warmup", s.processInternalWarmup)
+	go s.safeRun("Initial Internal IMAP", s.processInternalWarmupIMAP)
+	go s.safeRun("Initial External Warmup", s.processWarmupEmails)
+	go s.safeRun("Initial Seed→SMTP", s.processSeedToSMTPEmails)
 
 	// Get configurable intervals from settings
 	imapInterval := s.getWarmupSettingInt("imap_check_interval", 5)
 	internalCycleInterval := s.getWarmupSettingInt("internal_cycle_minutes", 2)
 
-	log.Printf("[Warmup Engine] Intervals: IMAP=%dm, Internal=%dm", imapInterval, internalCycleInterval)
+	log.Printf("[Warmup Engine] Intervals: External=1m, Seed→SMTP=3m, Internal=%dm, IMAP=%dm", internalCycleInterval, imapInterval)
 
-	// Also run IMAP check (configurable, default 5 minutes)
+	// Create all tickers
+	externalTicker := time.NewTicker(1 * time.Minute)
 	imapTicker := time.NewTicker(time.Duration(imapInterval) * time.Minute)
-	defer imapTicker.Stop()
-
-	// Run seed-to-SMTP emails every 3 minutes
 	seedToSMTPTicker := time.NewTicker(3 * time.Minute)
-	defer seedToSMTPTicker.Stop()
-
-	// Run internal warmup (configurable, default 2 minutes)
 	internalWarmupTicker := time.NewTicker(time.Duration(internalCycleInterval) * time.Minute)
-	defer internalWarmupTicker.Stop()
-
-	// Run internal warmup IMAP check (same as IMAP interval)
 	internalImapTicker := time.NewTicker(time.Duration(imapInterval) * time.Minute)
+
+	defer externalTicker.Stop()
+	defer imapTicker.Stop()
+	defer seedToSMTPTicker.Stop()
+	defer internalWarmupTicker.Stop()
 	defer internalImapTicker.Stop()
 
-	log.Printf("[Warmup Engine] Started successfully - waiting for tickers...")
+	log.Printf("[Warmup Engine] Started successfully - all tickers running...")
+
+	// Keep track of last run time to detect stuck tickers
+	lastTick := time.Now()
 
 	for {
 		select {
-		case <-ticker.C:
-			s.processWarmupEmails()
+		case <-externalTicker.C:
+			lastTick = time.Now()
+			go s.safeRun("External Warmup (SMTP→Seeds)", s.processWarmupEmails)
+
 		case <-imapTicker.C:
-			s.processIMAPInteractions()
+			lastTick = time.Now()
+			go s.safeRun("IMAP Interactions", s.processIMAPInteractions)
+
 		case <-seedToSMTPTicker.C:
-			s.processSeedToSMTPEmails()
+			lastTick = time.Now()
+			go s.safeRun("Seed→SMTP Emails", s.processSeedToSMTPEmails)
+
 		case <-internalWarmupTicker.C:
-			s.processInternalWarmup()
+			lastTick = time.Now()
+			go s.safeRun("Internal Warmup (SMTP→SMTP)", s.processInternalWarmup)
+
 		case <-internalImapTicker.C:
-			s.processInternalWarmupIMAP()
+			lastTick = time.Now()
+			go s.safeRun("Internal IMAP Check", s.processInternalWarmupIMAP)
+
+		default:
+			// Safety check - if no tick for 10 minutes, log warning
+			if time.Since(lastTick) > 10*time.Minute {
+				log.Printf("[Warmup Engine] WARNING: No tick received for %v", time.Since(lastTick))
+				lastTick = time.Now()
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
 	}
 }
@@ -2515,9 +2537,19 @@ func (s *Server) sendWithImplicitTLS(addr, host, username, password, from, to st
 		InsecureSkipVerify: true,
 	}
 
-	conn, err := tls.Dial("tcp", addr, tlsConfig)
+	// First establish TCP connection with timeout
+	dialer := &net.Dialer{Timeout: 15 * time.Second}
+	tcpConn, err := dialer.Dial("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("TLS dial error: %v", err)
+		return fmt.Errorf("TCP dial error: %v", err)
+	}
+
+	// Then upgrade to TLS
+	conn := tls.Client(tcpConn, tlsConfig)
+	conn.SetDeadline(time.Now().Add(30 * time.Second))
+	if err := conn.Handshake(); err != nil {
+		tcpConn.Close()
+		return fmt.Errorf("TLS handshake error: %v", err)
 	}
 	defer conn.Close()
 
@@ -2928,10 +2960,38 @@ func (s *Server) processOneSeedInbox(seedID, email, password, imapHost string, i
 	var c *client.Client
 	var err error
 
+	// Create dialer with timeout
+	dialer := &net.Dialer{Timeout: 30 * time.Second}
+
 	if useTLS || imapPort == 993 {
-		c, err = client.DialTLS(addr, &tls.Config{ServerName: imapHost})
+		// First establish TCP connection with timeout
+		conn, dialErr := dialer.Dial("tcp", addr)
+		if dialErr != nil {
+			log.Printf("[Warmup IMAP] TCP dial failed for %s: %v", email, dialErr)
+			s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
+				dialErr.Error(), seedID)
+			return
+		}
+		// Upgrade to TLS
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: imapHost})
+		tlsConn.SetDeadline(time.Now().Add(30 * time.Second))
+		if err := tlsConn.Handshake(); err != nil {
+			conn.Close()
+			log.Printf("[Warmup IMAP] TLS handshake failed for %s: %v", email, err)
+			s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
+				err.Error(), seedID)
+			return
+		}
+		c, err = client.New(tlsConn)
 	} else {
-		c, err = client.Dial(addr)
+		conn, dialErr := dialer.Dial("tcp", addr)
+		if dialErr != nil {
+			log.Printf("[Warmup IMAP] TCP dial failed for %s: %v", email, dialErr)
+			s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
+				dialErr.Error(), seedID)
+			return
+		}
+		c, err = client.New(conn)
 	}
 
 	if err != nil {
@@ -2941,6 +3001,9 @@ func (s *Server) processOneSeedInbox(seedID, email, password, imapHost string, i
 		return
 	}
 	defer c.Logout()
+
+	// Set timeout for IMAP operations
+	c.Timeout = 60 * time.Second
 
 	if err := c.Login(email, password); err != nil {
 		log.Printf("[Warmup IMAP] Login failed for %s: %v", email, err)
@@ -3506,21 +3569,51 @@ func (s *Server) processOneSenderIMAP(senderID, senderEmail, imapHost string, im
 	var c *client.Client
 	var err error
 
+	// Create dialer with timeout
+	dialer := &net.Dialer{Timeout: 30 * time.Second}
+
 	// Connect based on TLS mode
 	switch imapTLSMode {
 	case "tls":
-		c, err = client.DialTLS(addr, &tls.Config{
+		// First establish TCP connection with timeout
+		conn, dialErr := dialer.Dial("tcp", addr)
+		if dialErr != nil {
+			log.Printf("[Internal Warmup IMAP] TCP dial failed for %s: %v", senderEmail, dialErr)
+			s.db.Exec(`UPDATE smtp_senders SET imap_status = 'error', imap_error = $1, imap_last_check = NOW() WHERE id = $2`,
+				dialErr.Error(), senderID)
+			return
+		}
+		// Upgrade to TLS
+		tlsConn := tls.Client(conn, &tls.Config{
 			ServerName:         imapHost,
 			InsecureSkipVerify: true,
 		})
+		tlsConn.SetDeadline(time.Now().Add(30 * time.Second))
+		if err := tlsConn.Handshake(); err != nil {
+			conn.Close()
+			log.Printf("[Internal Warmup IMAP] TLS handshake failed for %s: %v", senderEmail, err)
+			s.db.Exec(`UPDATE smtp_senders SET imap_status = 'error', imap_error = $1, imap_last_check = NOW() WHERE id = $2`,
+				err.Error(), senderID)
+			return
+		}
+		c, err = client.New(tlsConn)
 	case "starttls":
-		c, err = client.Dial(addr)
+		conn, dialErr := dialer.Dial("tcp", addr)
+		if dialErr != nil {
+			log.Printf("[Internal Warmup IMAP] TCP dial failed for %s: %v", senderEmail, dialErr)
+			s.db.Exec(`UPDATE smtp_senders SET imap_status = 'error', imap_error = $1, imap_last_check = NOW() WHERE id = $2`,
+				dialErr.Error(), senderID)
+			return
+		}
+		c, err = client.New(conn)
 		if err != nil {
+			conn.Close()
 			log.Printf("[Internal Warmup IMAP] Failed to connect for %s: %v", senderEmail, err)
 			s.db.Exec(`UPDATE smtp_senders SET imap_status = 'error', imap_error = $1, imap_last_check = NOW() WHERE id = $2`,
 				err.Error(), senderID)
 			return
 		}
+		c.Timeout = 60 * time.Second
 		tlsConfig := &tls.Config{
 			ServerName:         imapHost,
 			InsecureSkipVerify: true,
@@ -3533,7 +3626,14 @@ func (s *Server) processOneSenderIMAP(senderID, senderEmail, imapHost string, im
 			return
 		}
 	default: // "none"
-		c, err = client.Dial(addr)
+		conn, dialErr := dialer.Dial("tcp", addr)
+		if dialErr != nil {
+			log.Printf("[Internal Warmup IMAP] TCP dial failed for %s: %v", senderEmail, dialErr)
+			s.db.Exec(`UPDATE smtp_senders SET imap_status = 'error', imap_error = $1, imap_last_check = NOW() WHERE id = $2`,
+				dialErr.Error(), senderID)
+			return
+		}
+		c, err = client.New(conn)
 	}
 
 	if err != nil {
@@ -3543,6 +3643,9 @@ func (s *Server) processOneSenderIMAP(senderID, senderEmail, imapHost string, im
 		return
 	}
 	defer c.Logout()
+
+	// Set timeout for IMAP operations
+	c.Timeout = 60 * time.Second
 
 	if err := c.Login(senderEmail, imapPassword); err != nil {
 		log.Printf("[Internal Warmup IMAP] Login failed for %s: %v", senderEmail, err)
