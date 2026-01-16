@@ -1430,6 +1430,208 @@ func (s *Server) getWarmupStats(c *fiber.Ctx) error {
 	})
 }
 
+// getWarmupDiagnostic returns detailed diagnostic info to troubleshoot warmup issues
+func (s *Server) getWarmupDiagnostic(c *fiber.Ctx) error {
+	now := time.Now()
+	currentHour := now.Hour()
+
+	// Check warmup enabled
+	warmupEnabled := s.getWarmupSetting("warmup_enabled", "true")
+
+	// Count active elements
+	var activeSeeds, activeTemplates, activeSMTPs, smtpsWithInternal int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'active'`).Scan(&activeSeeds)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_templates WHERE active = true`).Scan(&activeTemplates)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeSMTPs)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active' AND internal_warmup = true`).Scan(&smtpsWithInternal)
+
+	// SMTPs with active underlying smtp_server
+	var smtpsWithActiveServer int
+	s.db.QueryRow(`
+		SELECT COUNT(*) FROM warmup_smtps w
+		JOIN smtp_servers s ON w.smtp_id = s.id
+		WHERE w.status = 'active' AND s.active = true
+	`).Scan(&smtpsWithActiveServer)
+
+	// SMTPs in valid hours for external warmup
+	var smtpsInValidHours int
+	s.db.QueryRow(`
+		SELECT COUNT(*) FROM warmup_smtps w
+		JOIN smtp_servers s ON w.smtp_id = s.id
+		WHERE w.status = 'active' AND s.active = true
+		AND $1 >= w.start_hour AND $1 < w.end_hour
+	`, currentHour).Scan(&smtpsInValidHours)
+
+	// SMTPs with internal warmup in valid hours
+	var internalInValidHours int
+	s.db.QueryRow(`
+		SELECT COUNT(*) FROM warmup_smtps w
+		JOIN smtp_servers s ON w.smtp_id = s.id
+		WHERE w.status = 'active' AND s.active = true AND w.internal_warmup = true
+		AND $1 >= w.start_hour AND $1 < w.end_hour
+	`, currentHour).Scan(&internalInValidHours)
+
+	// Senders with IMAP configured (needed for internal warmup)
+	var sendersWithIMAP int
+	s.db.QueryRow(`
+		SELECT COUNT(*) FROM smtp_senders ss
+		JOIN smtp_servers s ON ss.smtp_id = s.id
+		JOIN warmup_smtps w ON w.smtp_id = s.id
+		WHERE ss.active = true AND s.active = true AND w.status = 'active' AND w.internal_warmup = true
+		AND ss.imap_host IS NOT NULL AND ss.imap_host != ''
+	`).Scan(&sendersWithIMAP)
+
+	// Today's sent count
+	var sentTodayExternal, sentTodayInternal int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_emails WHERE DATE(sent_at) = $1`, now.Format("2006-01-02")).Scan(&sentTodayExternal)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_internal_emails WHERE DATE(sent_at) = $1`, now.Format("2006-01-02")).Scan(&sentTodayInternal)
+
+	// Build issues list
+	issues := []string{}
+
+	if warmupEnabled != "true" {
+		issues = append(issues, "Warmup está DESABILITADO globalmente")
+	}
+
+	// External warmup issues
+	if activeSeeds == 0 {
+		issues = append(issues, "SMTP→Seed: Nenhuma conta Seed ativa")
+	}
+	if activeTemplates == 0 {
+		issues = append(issues, "Nenhum template de email ativo")
+	}
+	if activeSMTPs == 0 {
+		issues = append(issues, "Nenhum SMTP em warmup ativo")
+	}
+	if smtpsWithActiveServer == 0 && activeSMTPs > 0 {
+		issues = append(issues, "SMTPs em warmup não têm servidor SMTP subjacente ativo")
+	}
+	if smtpsInValidHours == 0 && smtpsWithActiveServer > 0 {
+		issues = append(issues, fmt.Sprintf("SMTP→Seed: Nenhum SMTP no horário de envio (hora atual: %d)", currentHour))
+	}
+
+	// Internal warmup issues
+	if smtpsWithInternal < 2 {
+		issues = append(issues, fmt.Sprintf("SMTP→SMTP: Precisa de pelo menos 2 SMTPs com 'Interno' ativado (tem %d)", smtpsWithInternal))
+	}
+	if internalInValidHours < 2 && smtpsWithInternal >= 2 {
+		issues = append(issues, fmt.Sprintf("SMTP→SMTP: Menos de 2 SMTPs no horário válido (hora atual: %d)", currentHour))
+	}
+	if sendersWithIMAP == 0 && smtpsWithInternal >= 2 {
+		issues = append(issues, "SMTP→SMTP: Nenhum sender tem IMAP configurado (necessário para receber)")
+	}
+
+	// Get SMTP details
+	type smtpDetail struct {
+		Host          string `json:"host"`
+		Status        string `json:"status"`
+		Internal      bool   `json:"internal"`
+		StartHour     int    `json:"start_hour"`
+		EndHour       int    `json:"end_hour"`
+		InHours       bool   `json:"in_hours"`
+		TodayLimit    int    `json:"today_limit"`
+		SentToday     int    `json:"sent_today"`
+		ServerActive  bool   `json:"server_active"`
+		SendersCount  int    `json:"senders_count"`
+		SendersWithIMAP int  `json:"senders_with_imap"`
+	}
+
+	smtpRows, _ := s.db.Query(`
+		SELECT s.host, w.status, w.internal_warmup, w.start_hour, w.end_hour,
+		       w.min_emails_per_day, w.max_emails_per_day, w.recipe_type, w.start_date,
+		       s.active, s.id
+		FROM warmup_smtps w
+		JOIN smtp_servers s ON w.smtp_id = s.id
+	`)
+	defer smtpRows.Close()
+
+	var smtpDetails []smtpDetail
+	for smtpRows.Next() {
+		var host, status, recipeType, serverID string
+		var internal, serverActive bool
+		var startHour, endHour, minEmails, maxEmails int
+		var startDate time.Time
+		smtpRows.Scan(&host, &status, &internal, &startHour, &endHour,
+			&minEmails, &maxEmails, &recipeType, &startDate, &serverActive, &serverID)
+
+		currentDay := int(now.Sub(startDate).Hours()/24) + 1
+		if currentDay < 1 {
+			currentDay = 1
+		}
+		todayLimit := s.calculateDailyLimit(recipeType, currentDay, minEmails, maxEmails, "")
+
+		var sentToday, sendersCount, sendersWithIMAPCount int
+		s.db.QueryRow(`SELECT COUNT(*) FROM warmup_internal_emails WHERE from_smtp_id = $1 AND DATE(sent_at) = $2`, serverID, now.Format("2006-01-02")).Scan(&sentToday)
+		s.db.QueryRow(`SELECT COUNT(*) FROM smtp_senders WHERE smtp_id = $1 AND active = true`, serverID).Scan(&sendersCount)
+		s.db.QueryRow(`SELECT COUNT(*) FROM smtp_senders WHERE smtp_id = $1 AND active = true AND imap_host IS NOT NULL AND imap_host != ''`, serverID).Scan(&sendersWithIMAPCount)
+
+		inHours := currentHour >= startHour && currentHour < endHour
+
+		smtpDetails = append(smtpDetails, smtpDetail{
+			Host:          host,
+			Status:        status,
+			Internal:      internal,
+			StartHour:     startHour,
+			EndHour:       endHour,
+			InHours:       inHours,
+			TodayLimit:    todayLimit,
+			SentToday:     sentToday,
+			ServerActive:  serverActive,
+			SendersCount:  sendersCount,
+			SendersWithIMAP: sendersWithIMAPCount,
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"timestamp":      now.Format("2006-01-02 15:04:05"),
+		"current_hour":   currentHour,
+		"warmup_enabled": warmupEnabled == "true",
+		"external_warmup": fiber.Map{
+			"active_seeds":      activeSeeds,
+			"active_templates":  activeTemplates,
+			"active_smtps":      smtpsWithActiveServer,
+			"smtps_in_hours":    smtpsInValidHours,
+			"sent_today":        sentTodayExternal,
+		},
+		"internal_warmup": fiber.Map{
+			"smtps_with_internal":  smtpsWithInternal,
+			"smtps_in_hours":       internalInValidHours,
+			"senders_with_imap":    sendersWithIMAP,
+			"sent_today":           sentTodayInternal,
+		},
+		"smtp_details": smtpDetails,
+		"issues":       issues,
+		"ok":           len(issues) == 0,
+	})
+}
+
+// triggerWarmup manually triggers a warmup cycle for testing
+func (s *Server) triggerWarmup(c *fiber.Ctx) error {
+	var req struct {
+		Type string `json:"type"` // "external", "internal", or "both"
+	}
+	if err := c.BodyParser(&req); err != nil {
+		req.Type = "both"
+	}
+
+	results := fiber.Map{}
+
+	if req.Type == "external" || req.Type == "both" {
+		go s.processWarmupEmails()
+		results["external"] = "triggered"
+	}
+
+	if req.Type == "internal" || req.Type == "both" {
+		go s.processInternalWarmup()
+		results["internal"] = "triggered"
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "Warmup cycles triggered - check logs for results",
+		"results": results,
+	})
+}
+
 // getWarmupActivity returns recent warmup activity (including internal warmup)
 func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 	// Query both regular warmup emails and internal warmup emails
