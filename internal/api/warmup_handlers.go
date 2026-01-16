@@ -1976,9 +1976,10 @@ func getTLSModeFromBool(useTLS bool, port int) string {
 
 // Microsoft OAuth2 constants
 const (
-	// Microsoft public client ID (Thunderbird's client ID - widely used for IMAP)
-	msOAuthClientID = "08162f7c-0fd2-4200-a84a-f25a4db0b584"
-	msOAuthTokenURL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
+	// Microsoft Office public client ID (works with personal accounts)
+	msOAuthClientID = "d3590ed6-52b3-4102-aeff-aad2292ab01c"
+	// Use /common endpoint for both personal and work accounts
+	msOAuthTokenURL = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 	msOAuthScope    = "https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access"
 )
 
