@@ -895,51 +895,54 @@ function AddSeedModal({ onClose, onSave }) {
     return null
   }
 
-  // Função para colar credenciais no formato: email\tsenha\ttoken
-  const pasteCredentials = async () => {
-    try {
-      const text = await navigator.clipboard.readText()
-      if (!text) {
-        toast.error('Clipboard vazio')
-        return
+  // Função para processar credenciais no formato: email\tsenha\ttoken
+  const processCredentials = (text) => {
+    if (!text || !text.trim()) {
+      toast.error('Texto vazio')
+      return
+    }
+
+    // Tenta parsear o formato: email  senha  token (separado por tab ou múltiplos espaços)
+    const parts = text.trim().split(/\t+|\s{2,}/)
+
+    if (parts.length >= 2) {
+      const email = parts[0].trim()
+      const password = parts[1].trim()
+      const rawToken = parts.length >= 3 ? parts[2].trim() : ''
+
+      // Detecta o provedor e preenche automaticamente
+      const domain = email.split('@')[1]?.toLowerCase() || ''
+      let providerConfig = null
+      let isOutlook = false
+
+      for (const [key, config] of Object.entries(providerConfigs)) {
+        if (domain.includes(key.replace('_', '-'))) {
+          providerConfig = config
+          // Verifica se é Outlook/Hotmail/Live/MSN (provedores Microsoft)
+          isOutlook = ['outlook', 'hotmail', 'live', 'msn'].includes(key)
+          break
+        }
       }
 
-      // Tenta parsear o formato: email  senha  token (separado por tab ou múltiplos espaços)
-      const parts = text.trim().split(/\t+|\s{2,}/)
+      // OAuth token só é usado para Outlook/Hotmail/Live/MSN
+      const oauthToken = isOutlook ? rawToken : ''
 
-      if (parts.length >= 2) {
-        const email = parts[0].trim()
-        const password = parts[1].trim()
-        const oauthToken = parts.length >= 3 ? parts[2].trim() : ''
-
-        // Detecta o provedor e preenche automaticamente
-        const domain = email.split('@')[1]?.toLowerCase() || ''
-        let providerConfig = null
-
-        for (const [key, config] of Object.entries(providerConfigs)) {
-          if (domain.includes(key.replace('_', '-'))) {
-            providerConfig = config
-            break
-          }
-        }
-
-        if (providerConfig) {
-          setForm(prev => ({ ...prev, email, password, oauth_token: oauthToken, ...providerConfig }))
-        } else {
-          setForm(prev => ({ ...prev, email, password, oauth_token: oauthToken, provider: 'other' }))
-        }
-
-        // Mostra mensagem diferente se tem token OAuth
-        if (oauthToken) {
-          toast.success(`Credenciais + OAuth Token coladas: ${email}`)
-        } else {
-          toast.success(`Credenciais coladas: ${email}`)
-        }
+      if (providerConfig) {
+        setForm(prev => ({ ...prev, email, password, oauth_token: oauthToken, ...providerConfig }))
       } else {
-        toast.error('Formato inválido. Use: email  senha  token')
+        setForm(prev => ({ ...prev, email, password, oauth_token: '', provider: 'other' }))
       }
-    } catch (error) {
-      toast.error('Erro ao acessar clipboard. Use Ctrl+V manualmente.')
+
+      // Mostra mensagem diferente se tem token OAuth
+      if (oauthToken) {
+        toast.success(`Credenciais + OAuth Token: ${email}`)
+      } else if (rawToken && !isOutlook) {
+        toast.success(`Credenciais preenchidas: ${email} (token ignorado - não é Outlook)`)
+      } else {
+        toast.success(`Credenciais preenchidas: ${email}`)
+      }
+    } else {
+      toast.error('Formato inválido. Use: email  senha  token')
     }
   }
 
@@ -1005,18 +1008,33 @@ function AddSeedModal({ onClose, onSave }) {
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          {/* Botão Colar Credenciais */}
-          <button
-            type="button"
-            onClick={pasteCredentials}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-purple-500 to-indigo-500 text-white rounded-xl hover:from-purple-600 hover:to-indigo-600 transition-all font-medium"
-          >
-            <ClipboardPaste className="w-5 h-5" />
-            Colar Credenciais
-          </button>
-          <p className="text-xs text-center text-gray-400 -mt-2">
-            Formato: email TAB senha TAB token (cola automático)
-          </p>
+          {/* Campo para Colar Credenciais */}
+          <div className="p-3 bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-xl">
+            <div className="flex items-center gap-2 mb-2">
+              <ClipboardPaste className="w-4 h-4 text-purple-600" />
+              <label className="text-sm font-medium text-purple-900">Colar Credenciais (Ctrl+V)</label>
+            </div>
+            <input
+              type="text"
+              placeholder="Cole aqui: email    senha    token"
+              className="w-full px-3 py-2 border border-purple-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none bg-white"
+              onPaste={(e) => {
+                e.preventDefault()
+                const text = e.clipboardData.getData('text')
+                processCredentials(text)
+              }}
+              onChange={(e) => {
+                // Também processa se o usuário digitar/colar de outra forma
+                if (e.target.value.includes('\t') || e.target.value.split(/\s{2,}/).length >= 2) {
+                  processCredentials(e.target.value)
+                  e.target.value = ''
+                }
+              }}
+            />
+            <p className="text-xs text-purple-600 mt-1">
+              Formato: email TAB senha TAB token (preenche tudo automaticamente)
+            </p>
+          </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
