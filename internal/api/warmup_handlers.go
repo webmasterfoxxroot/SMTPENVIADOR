@@ -1384,13 +1384,13 @@ func (s *Server) testWarmupSeed(c *fiber.Ctx) error {
 	// Test IMAP connection with OAuth2 support
 	err = testIMAPConnectionWithOAuth(imapHost, imapPort, email, password, tlsMode, oauth, clientID)
 	if err != nil {
-		// Don't change status - just store error message
-		s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
+		// Set status to error and store the error message
+		s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
 			err.Error(), id)
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	s.db.Exec(`UPDATE warmup_seeds SET error_message = NULL, last_check = NOW() WHERE id = $1`, id)
+	s.db.Exec(`UPDATE warmup_seeds SET status = 'active', error_message = NULL, last_check = NOW() WHERE id = $1`, id)
 
 	return c.JSON(fiber.Map{"message": "Connection successful"})
 }
@@ -2254,12 +2254,11 @@ func (s *Server) testSeedConnection(seedID string) {
 
 	err = testIMAPConnectionWithOAuth(imapHost, imapPort, email, password, tlsMode, oauth, clientID)
 	if err != nil {
-		// Don't change status to error - just store the error message for troubleshooting
-		// Seeds should only be deactivated manually by the user
-		s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
+		// Set status to error and store the error message
+		s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
 			err.Error(), seedID)
 	} else {
-		s.db.Exec(`UPDATE warmup_seeds SET error_message = NULL, last_check = NOW() WHERE id = $1`, seedID)
+		s.db.Exec(`UPDATE warmup_seeds SET status = 'active', error_message = NULL, last_check = NOW() WHERE id = $1`, seedID)
 	}
 }
 
@@ -3362,8 +3361,7 @@ func (s *Server) processOneSeedInboxWithOAuth(seedID, email, password, imapHost 
 		conn, dialErr := dialer.Dial("tcp", addr)
 		if dialErr != nil {
 			log.Printf("[Warmup IMAP] TCP dial failed for %s: %v", email, dialErr)
-			// Don't change status - just log the error
-			s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
+			s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
 				dialErr.Error(), seedID)
 			return
 		}
@@ -3373,7 +3371,7 @@ func (s *Server) processOneSeedInboxWithOAuth(seedID, email, password, imapHost 
 		if err := tlsConn.Handshake(); err != nil {
 			conn.Close()
 			log.Printf("[Warmup IMAP] TLS handshake failed for %s: %v", email, err)
-			s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
+			s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
 				err.Error(), seedID)
 			return
 		}
@@ -3382,7 +3380,7 @@ func (s *Server) processOneSeedInboxWithOAuth(seedID, email, password, imapHost 
 		conn, dialErr := dialer.Dial("tcp", addr)
 		if dialErr != nil {
 			log.Printf("[Warmup IMAP] TCP dial failed for %s: %v", email, dialErr)
-			s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
+			s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
 				dialErr.Error(), seedID)
 			return
 		}
@@ -3392,7 +3390,7 @@ func (s *Server) processOneSeedInboxWithOAuth(seedID, email, password, imapHost 
 			if startTLSErr := c.StartTLS(tlsConfig); startTLSErr != nil {
 				c.Logout()
 				log.Printf("[Warmup IMAP] STARTTLS failed for %s: %v", email, startTLSErr)
-				s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
+				s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
 					startTLSErr.Error(), seedID)
 				return
 			}
@@ -3401,7 +3399,7 @@ func (s *Server) processOneSeedInboxWithOAuth(seedID, email, password, imapHost 
 		conn, dialErr := dialer.Dial("tcp", addr)
 		if dialErr != nil {
 			log.Printf("[Warmup IMAP] TCP dial failed for %s: %v", email, dialErr)
-			s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
+			s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
 				dialErr.Error(), seedID)
 			return
 		}
@@ -3410,7 +3408,7 @@ func (s *Server) processOneSeedInboxWithOAuth(seedID, email, password, imapHost 
 
 	if err != nil {
 		log.Printf("[Warmup IMAP] Failed to connect to %s: %v", email, err)
-		s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
+		s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
 			err.Error(), seedID)
 		return
 	}
@@ -3440,15 +3438,14 @@ func (s *Server) processOneSeedInboxWithOAuth(seedID, email, password, imapHost 
 	if !authSuccess {
 		if err := c.Login(email, password); err != nil {
 			log.Printf("[Warmup IMAP] Login failed for %s: %v", email, err)
-			// Don't change status - just log the error
-			s.db.Exec(`UPDATE warmup_seeds SET error_message = $1, last_check = NOW() WHERE id = $2`,
+			s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
 				err.Error(), seedID)
 			return
 		}
 	}
 
 	// Update last check - clear error message on success
-	s.db.Exec(`UPDATE warmup_seeds SET last_check = NOW(), error_message = NULL WHERE id = $1`, seedID)
+	s.db.Exec(`UPDATE warmup_seeds SET status = 'active', last_check = NOW(), error_message = NULL WHERE id = $1`, seedID)
 
 	log.Printf("[Warmup IMAP] Connected successfully to %s, checking mailboxes...", email)
 
