@@ -1757,6 +1757,12 @@ func (s *Server) startWarmupEngine() {
 	// Run IMAP check immediately on startup
 	go s.processIMAPInteractions()
 
+	// Run internal warmup immediately on startup
+	go s.processInternalWarmup()
+
+	// Run internal warmup IMAP check immediately on startup
+	go s.processInternalWarmupIMAP()
+
 	// Run every minute to check and send warmup emails
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
@@ -1764,6 +1770,8 @@ func (s *Server) startWarmupEngine() {
 	// Get configurable intervals from settings
 	imapInterval := s.getWarmupSettingInt("imap_check_interval", 5)
 	internalCycleInterval := s.getWarmupSettingInt("internal_cycle_minutes", 2)
+
+	log.Printf("[Warmup Engine] Intervals: IMAP=%dm, Internal=%dm", imapInterval, internalCycleInterval)
 
 	// Also run IMAP check (configurable, default 5 minutes)
 	imapTicker := time.NewTicker(time.Duration(imapInterval) * time.Minute)
@@ -1781,7 +1789,7 @@ func (s *Server) startWarmupEngine() {
 	internalImapTicker := time.NewTicker(time.Duration(imapInterval) * time.Minute)
 	defer internalImapTicker.Stop()
 
-	log.Printf("[Warmup Engine] Started with intervals: IMAP=%dm, Internal=%dm", imapInterval, internalCycleInterval)
+	log.Printf("[Warmup Engine] Started successfully - waiting for tickers...")
 
 	for {
 		select {
@@ -2742,14 +2750,32 @@ func getRandomReplyBody() string {
 
 // processInternalWarmup sends emails between SMTPs for internal warmup
 func (s *Server) processInternalWarmup() {
+	log.Printf("[Internal Warmup] === Cycle starting ===")
+
 	// Check if warmup is enabled
-	if s.getWarmupSetting("warmup_enabled", "true") != "true" {
+	warmupEnabled := s.getWarmupSetting("warmup_enabled", "true")
+	log.Printf("[Internal Warmup] warmup_enabled setting = %s", warmupEnabled)
+	if warmupEnabled != "true" {
 		log.Printf("[Internal Warmup] Disabled globally")
 		return
 	}
 
 	now := time.Now()
 	currentHour := now.Hour()
+	log.Printf("[Internal Warmup] Current hour: %d", currentHour)
+
+	// Debug: Check counts to understand the state
+	var totalWarmupSmtps, activeWarmupSmtps, internalWarmupSmtps, bothActiveAndInternal int
+	var totalSmtpServers, activeSmtpServers, matchingJoin int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps`).Scan(&totalWarmupSmtps)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeWarmupSmtps)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE internal_warmup = true`).Scan(&internalWarmupSmtps)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active' AND internal_warmup = true`).Scan(&bothActiveAndInternal)
+	s.db.QueryRow(`SELECT COUNT(*) FROM smtp_servers`).Scan(&totalSmtpServers)
+	s.db.QueryRow(`SELECT COUNT(*) FROM smtp_servers WHERE active = true`).Scan(&activeSmtpServers)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps w JOIN smtp_servers s ON w.smtp_id = s.id WHERE w.status = 'active' AND w.internal_warmup = true AND s.active = true`).Scan(&matchingJoin)
+	log.Printf("[Internal Warmup] DB State: warmup_smtps(total=%d, active=%d, internal=%d, both=%d), smtp_servers(total=%d, active=%d), matching_join=%d",
+		totalWarmupSmtps, activeWarmupSmtps, internalWarmupSmtps, bothActiveAndInternal, totalSmtpServers, activeSmtpServers, matchingJoin)
 
 	// Get SMTPs with internal warmup enabled (include hour settings)
 	rows, err := s.db.Query(`
