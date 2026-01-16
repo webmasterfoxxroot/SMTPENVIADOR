@@ -1419,13 +1419,14 @@ func (s *Server) toggleWarmupSeed(c *fiber.Ctx) error {
 func (s *Server) triggerSeedSend(c *fiber.Ctx) error {
 	id := c.Params("id")
 
-	// Get seed info
+	// Get seed info including OAuth credentials
 	var email, password, smtpHost string
 	var smtpPort int
+	var oauthToken, oauthClientID sql.NullString
 	err := s.db.QueryRow(`
-		SELECT email, password, smtp_host, smtp_port
+		SELECT email, password, smtp_host, smtp_port, oauth_token, oauth_client_id
 		FROM warmup_seeds WHERE id = $1
-	`, id).Scan(&email, &password, &smtpHost, &smtpPort)
+	`, id).Scan(&email, &password, &smtpHost, &smtpPort, &oauthToken, &oauthClientID)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Seed not found"})
@@ -1462,7 +1463,17 @@ func (s *Server) triggerSeedSend(c *fiber.Ctx) error {
 		tlsMode = "tls"
 	}
 
-	err = s.sendSMTPEmail(smtpHost, smtpPort, email, password, tlsMode, email, targetEmail, subject, body, messageID)
+	// Extract OAuth credentials
+	oauth := ""
+	clientID := ""
+	if oauthToken.Valid && oauthToken.String != "" {
+		oauth = oauthToken.String
+	}
+	if oauthClientID.Valid && oauthClientID.String != "" {
+		clientID = oauthClientID.String
+	}
+
+	err = s.sendSMTPEmailWithOAuth(smtpHost, smtpPort, email, password, tlsMode, email, targetEmail, subject, body, messageID, oauth, clientID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -2808,6 +2819,55 @@ func (s *Server) sendWarmupEmail(warmupID, smtpID, host string, port int, userna
 	log.Printf("[Warmup] ✉️ Sent from %s to %s: %s", senderEmail, seedEmail, subject)
 }
 
+// sendSMTPEmailWithOAuth sends email with OAuth2 support for Outlook
+func (s *Server) sendSMTPEmailWithOAuth(host string, port int, username, password, tlsMode, from, to, subject, body, messageID, oauthToken, oauthClientID string) error {
+	// Extract email from "Name <email>" format if present
+	fromEmail := from
+	fromHeader := from
+	if strings.Contains(from, "<") && strings.Contains(from, ">") {
+		start := strings.Index(from, "<") + 1
+		end := strings.Index(from, ">")
+		if start > 0 && end > start {
+			fromEmail = from[start:end]
+		}
+		nameEnd := strings.Index(from, "<")
+		if nameEnd > 0 {
+			name := strings.TrimSpace(from[:nameEnd])
+			if needsEncoding(name) {
+				fromHeader = mimeEncode(name) + " <" + fromEmail + ">"
+			}
+		}
+	}
+
+	encodedSubject := subject
+	if needsEncoding(subject) {
+		encodedSubject = mimeEncode(subject)
+	}
+
+	msg := fmt.Sprintf("From: %s\r\n"+
+		"To: %s\r\n"+
+		"Subject: %s\r\n"+
+		"Message-ID: %s\r\n"+
+		"Date: %s\r\n"+
+		"MIME-Version: 1.0\r\n"+
+		"Content-Type: text/plain; charset=UTF-8\r\n"+
+		"Content-Transfer-Encoding: base64\r\n"+
+		"\r\n"+
+		"%s", fromHeader, to, encodedSubject, messageID, time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 -0700"), encodeBase64WithLineBreaks([]byte(body)))
+
+	addr := fmt.Sprintf("%s:%d", host, port)
+
+	// Handle different TLS modes with OAuth support
+	switch tlsMode {
+	case "tls":
+		return s.sendWithImplicitTLSOAuth(addr, host, username, password, fromEmail, to, []byte(msg), oauthToken, oauthClientID)
+	case "starttls":
+		return s.sendWithSTARTTLSOAuth(addr, host, username, password, fromEmail, to, []byte(msg), oauthToken, oauthClientID)
+	default:
+		return s.sendPlainSMTPOAuth(addr, host, username, password, fromEmail, to, []byte(msg), oauthToken, oauthClientID)
+	}
+}
+
 func (s *Server) sendSMTPEmail(host string, port int, username, password, tlsMode, from, to, subject, body, messageID string) error {
 	// Extract email from "Name <email>" format if present
 	fromEmail := from
@@ -2983,6 +3043,130 @@ func (s *Server) sendPlainSMTP(addr, host, username, password, from, to string, 
 	return s.sendSMTPMessage(client, from, to, msg)
 }
 
+// ============================================
+// OAuth-enabled SMTP send functions
+// ============================================
+
+// sendWithImplicitTLSOAuth sends email using implicit TLS with OAuth2 support
+func (s *Server) sendWithImplicitTLSOAuth(addr, host, username, password, from, to string, msg []byte, oauthToken, oauthClientID string) error {
+	tlsConfig := &tls.Config{
+		ServerName:         host,
+		InsecureSkipVerify: true,
+	}
+
+	dialer := &net.Dialer{Timeout: 15 * time.Second}
+	tcpConn, err := dialer.Dial("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("TCP dial error: %v", err)
+	}
+
+	conn := tls.Client(tcpConn, tlsConfig)
+	conn.SetDeadline(time.Now().Add(30 * time.Second))
+	if err := conn.Handshake(); err != nil {
+		tcpConn.Close()
+		return fmt.Errorf("TLS handshake error: %v", err)
+	}
+	defer conn.Close()
+
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		return fmt.Errorf("SMTP client error: %v", err)
+	}
+	defer client.Close()
+
+	if err := s.authenticateSMTPWithOAuth(client, host, username, password, oauthToken, oauthClientID); err != nil {
+		return err
+	}
+
+	return s.sendSMTPMessage(client, from, to, msg)
+}
+
+// sendWithSTARTTLSOAuth sends email using STARTTLS with OAuth2 support
+func (s *Server) sendWithSTARTTLSOAuth(addr, host, username, password, from, to string, msg []byte, oauthToken, oauthClientID string) error {
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("dial error: %v", err)
+	}
+
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("SMTP client error: %v", err)
+	}
+	defer client.Close()
+
+	if err := client.Hello("[127.0.0.1]"); err != nil {
+		return fmt.Errorf("EHLO error: %v", err)
+	}
+
+	tlsConfig := &tls.Config{
+		ServerName:         host,
+		InsecureSkipVerify: true,
+	}
+
+	if err := client.StartTLS(tlsConfig); err != nil {
+		return fmt.Errorf("STARTTLS error: %v", err)
+	}
+
+	if err := s.authenticateSMTPWithOAuth(client, host, username, password, oauthToken, oauthClientID); err != nil {
+		return err
+	}
+
+	return s.sendSMTPMessage(client, from, to, msg)
+}
+
+// sendPlainSMTPOAuth sends email without TLS with OAuth2 support
+func (s *Server) sendPlainSMTPOAuth(addr, host, username, password, from, to string, msg []byte, oauthToken, oauthClientID string) error {
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("dial error: %v", err)
+	}
+
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("SMTP client error: %v", err)
+	}
+	defer client.Close()
+
+	if err := client.Hello("[127.0.0.1]"); err != nil {
+		return fmt.Errorf("EHLO error: %v", err)
+	}
+
+	if err := s.authenticateSMTPWithOAuth(client, host, username, password, oauthToken, oauthClientID); err != nil {
+		return err
+	}
+
+	return s.sendSMTPMessage(client, from, to, msg)
+}
+
+// authenticateSMTPWithOAuth tries OAuth2 first if available, then falls back to password
+func (s *Server) authenticateSMTPWithOAuth(client *smtp.Client, host, username, password, oauthToken, oauthClientID string) error {
+	if username == "" {
+		return nil // No auth needed
+	}
+
+	// Try OAuth2 first if we have token and client_id
+	if oauthToken != "" && oauthClientID != "" {
+		log.Printf("[SMTP OAuth] Trying OAuth2 for %s...", username)
+		tokenResp, oauthErr := refreshMicrosoftAccessToken(oauthToken, oauthClientID)
+		if oauthErr == nil && tokenResp.AccessToken != "" {
+			auth := newXOAuth2SMTPAuth(username, tokenResp.AccessToken)
+			if err := client.Auth(auth); err == nil {
+				log.Printf("[SMTP OAuth] XOAUTH2 authentication successful!")
+				return nil
+			} else {
+				log.Printf("[SMTP OAuth] XOAUTH2 failed: %v, trying password...", err)
+			}
+		} else {
+			log.Printf("[SMTP OAuth] Token refresh failed: %v, trying password...", oauthErr)
+		}
+	}
+
+	// Fall back to password authentication
+	return s.authenticateSMTP(client, host, username, password)
+}
+
 // authenticateSMTP tries LOGIN auth first (works without TLS), then PLAIN
 func (s *Server) authenticateSMTP(client *smtp.Client, host, username, password string) error {
 	if username == "" || password == "" {
@@ -3135,10 +3319,11 @@ func (s *Server) processSeedToSMTPEmails() {
 		return
 	}
 
-	// Get active seeds with SMTP settings AND their warmup config
+	// Get active seeds with SMTP settings AND their warmup config (including OAuth)
 	seedRows, err := s.db.Query(`
 		SELECT id, email, password, smtp_host, smtp_port, use_tls,
-		       COALESCE(send_rate, 50), COALESCE(emails_per_day, 20)
+		       COALESCE(send_rate, 50), COALESCE(emails_per_day, 20),
+		       COALESCE(oauth_token, ''), COALESCE(oauth_client_id, '')
 		FROM warmup_seeds
 		WHERE status = 'active' AND smtp_host IS NOT NULL AND smtp_host != ''
 	`)
@@ -3149,21 +3334,23 @@ func (s *Server) processSeedToSMTPEmails() {
 	defer seedRows.Close()
 
 	type seedInfo struct {
-		ID           string
-		Email        string
-		Password     string
-		SMTPHost     string
-		SMTPPort     int
-		UseTLS       bool
-		SendRate     int
-		EmailsPerDay int
+		ID            string
+		Email         string
+		Password      string
+		SMTPHost      string
+		SMTPPort      int
+		UseTLS        bool
+		SendRate      int
+		EmailsPerDay  int
+		OAuthToken    string
+		OAuthClientID string
 	}
 
 	var seeds []seedInfo
 	for seedRows.Next() {
 		var seed seedInfo
 		seedRows.Scan(&seed.ID, &seed.Email, &seed.Password, &seed.SMTPHost, &seed.SMTPPort, &seed.UseTLS,
-			&seed.SendRate, &seed.EmailsPerDay)
+			&seed.SendRate, &seed.EmailsPerDay, &seed.OAuthToken, &seed.OAuthClientID)
 		seeds = append(seeds, seed)
 	}
 
@@ -3275,9 +3462,9 @@ func (s *Server) processSeedToSMTPEmails() {
 				tlsMode = "tls"
 			}
 
-			// Send email from seed to SMTP sender
-			err = s.sendSMTPEmail(seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
-				seed.Email, target.SenderEmail, subject, body, messageID)
+			// Send email from seed to SMTP sender (with OAuth2 support for Outlook)
+			err = s.sendSMTPEmailWithOAuth(seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
+				seed.Email, target.SenderEmail, subject, body, messageID, seed.OAuthToken, seed.OAuthClientID)
 
 			if err != nil {
 				log.Printf("[Warmup Seed→SMTP] Failed to send from %s to %s: %v", seed.Email, target.SenderEmail, err)
