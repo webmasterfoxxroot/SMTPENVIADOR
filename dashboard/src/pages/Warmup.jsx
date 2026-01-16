@@ -828,7 +828,8 @@ function AddSeedModal({ onClose, onSave }) {
     reply_rate: 50,
     emails_per_day: 20,
     auto_reply: true,
-    oauth_token: '' // Microsoft OAuth2 refresh token
+    oauth_token: '', // Microsoft OAuth2 refresh token
+    oauth_client_id: '' // Microsoft OAuth2 client_id
   })
   const [loading, setLoading] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -895,20 +896,21 @@ function AddSeedModal({ onClose, onSave }) {
     return null
   }
 
-  // Função para processar credenciais no formato: email\tsenha\ttoken
+  // Função para processar credenciais no formato: email\tsenha\ttoken\tclient_id
   const processCredentials = (text) => {
     if (!text || !text.trim()) {
       toast.error('Texto vazio')
       return
     }
 
-    // Tenta parsear o formato: email  senha  token (separado por tab ou múltiplos espaços)
+    // Tenta parsear o formato: email  senha  token  client_id (separado por tab ou múltiplos espaços)
     const parts = text.trim().split(/\t+|\s{2,}/)
 
     if (parts.length >= 2) {
       const email = parts[0].trim()
       const password = parts[1].trim()
       const rawToken = parts.length >= 3 ? parts[2].trim() : ''
+      const rawClientId = parts.length >= 4 ? parts[3].trim() : ''
 
       // Detecta o provedor e preenche automaticamente
       const domain = email.split('@')[1]?.toLowerCase() || ''
@@ -924,17 +926,20 @@ function AddSeedModal({ onClose, onSave }) {
         }
       }
 
-      // OAuth token só é usado para Outlook/Hotmail/Live/MSN
+      // OAuth token e client_id só são usados para Outlook/Hotmail/Live/MSN
       const oauthToken = isOutlook ? rawToken : ''
+      const oauthClientId = isOutlook ? rawClientId : ''
 
       if (providerConfig) {
-        setForm(prev => ({ ...prev, email, password, oauth_token: oauthToken, ...providerConfig }))
+        setForm(prev => ({ ...prev, email, password, oauth_token: oauthToken, oauth_client_id: oauthClientId, ...providerConfig }))
       } else {
-        setForm(prev => ({ ...prev, email, password, oauth_token: '', provider: 'other' }))
+        setForm(prev => ({ ...prev, email, password, oauth_token: '', oauth_client_id: '', provider: 'other' }))
       }
 
       // Mostra mensagem diferente se tem token OAuth
-      if (oauthToken) {
+      if (oauthToken && oauthClientId) {
+        toast.success(`OAuth2 completo: ${email} (token + client_id)`)
+      } else if (oauthToken) {
         toast.success(`Credenciais + OAuth Token: ${email}`)
       } else if (rawToken && !isOutlook) {
         toast.success(`Credenciais preenchidas: ${email} (token ignorado - não é Outlook)`)
@@ -942,7 +947,7 @@ function AddSeedModal({ onClose, onSave }) {
         toast.success(`Credenciais preenchidas: ${email}`)
       }
     } else {
-      toast.error('Formato inválido. Use: email  senha  token')
+      toast.error('Formato inválido. Use: email  senha  token  client_id')
     }
   }
 
@@ -1063,21 +1068,25 @@ function AddSeedModal({ onClose, onSave }) {
 
           {/* OAuth Token Indicator */}
           {form.oauth_token && (
-            <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-xl">
-              <CheckCircle className="w-5 h-5 text-green-600" />
+            <div className={`flex items-center gap-2 p-3 rounded-xl ${form.oauth_client_id ? 'bg-green-50 border border-green-200' : 'bg-yellow-50 border border-yellow-200'}`}>
+              <CheckCircle className={`w-5 h-5 ${form.oauth_client_id ? 'text-green-600' : 'text-yellow-600'}`} />
               <div className="flex-1">
-                <p className="text-sm font-medium text-green-800">OAuth2 Token Detectado</p>
-                <p className="text-xs text-green-600">
-                  Autenticação Microsoft OAuth2 será usada (Outlook/Hotmail)
+                <p className={`text-sm font-medium ${form.oauth_client_id ? 'text-green-800' : 'text-yellow-800'}`}>
+                  {form.oauth_client_id ? 'OAuth2 Completo (Token + Client ID)' : 'OAuth2 Token (falta Client ID)'}
+                </p>
+                <p className={`text-xs ${form.oauth_client_id ? 'text-green-600' : 'text-yellow-600'}`}>
+                  {form.oauth_client_id
+                    ? `Client ID: ${form.oauth_client_id.substring(0, 8)}...`
+                    : 'Formato esperado: email  senha  token  client_id'}
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => setForm(prev => ({ ...prev, oauth_token: '' }))}
-                className="p-1 hover:bg-green-100 rounded"
-                title="Remover token"
+                onClick={() => setForm(prev => ({ ...prev, oauth_token: '', oauth_client_id: '' }))}
+                className={`p-1 rounded ${form.oauth_client_id ? 'hover:bg-green-100' : 'hover:bg-yellow-100'}`}
+                title="Remover OAuth"
               >
-                <X className="w-4 h-4 text-green-600" />
+                <X className={`w-4 h-4 ${form.oauth_client_id ? 'text-green-600' : 'text-yellow-600'}`} />
               </button>
             </div>
           )}
