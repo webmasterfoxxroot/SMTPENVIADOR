@@ -1993,6 +1993,42 @@ function Warmup() {
     }
   }
 
+  const [verifyingAllSeeds, setVerifyingAllSeeds] = useState(false)
+  const [deletingErrorSeeds, setDeletingErrorSeeds] = useState(false)
+
+  const verifyAllSeeds = async () => {
+    if (!confirm('Verificar login de todas as seeds? Isso pode demorar alguns minutos.')) return
+    setVerifyingAllSeeds(true)
+    try {
+      const res = await api.post('/warmup/seeds/verify-all')
+      toast.success(`Verificação concluída! ${res.data.success_count} OK, ${res.data.error_count} com erro`)
+      fetchAll()
+    } catch (error) {
+      toast.error('Erro ao verificar seeds')
+    } finally {
+      setVerifyingAllSeeds(false)
+    }
+  }
+
+  const deleteErrorSeeds = async () => {
+    const errorCount = seeds.filter(s => s.status === 'error').length
+    if (errorCount === 0) {
+      toast.error('Nenhuma seed com erro para excluir')
+      return
+    }
+    if (!confirm(`Excluir ${errorCount} seeds com erro? Esta ação não pode ser desfeita.`)) return
+    setDeletingErrorSeeds(true)
+    try {
+      const res = await api.delete('/warmup/seeds/with-errors')
+      toast.success(res.data.message)
+      fetchAll()
+    } catch (error) {
+      toast.error('Erro ao excluir seeds')
+    } finally {
+      setDeletingErrorSeeds(false)
+    }
+  }
+
   const addTemplate = async () => {
     if (!newTemplate.subject || !newTemplate.body) {
       toast.error('Preencha assunto e corpo')
@@ -2423,17 +2459,37 @@ function Warmup() {
           <div className="bg-white rounded-2xl p-6 border border-gray-100">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-gray-900">Contas Seed (IMAP)</h3>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={verifyAllSeeds}
+                  disabled={verifyingAllSeeds}
+                  className="flex items-center gap-2 px-3 py-2 bg-orange-50 text-orange-600 rounded-lg hover:bg-orange-100 transition-colors disabled:opacity-50"
+                  title="Verificar login de todas as seeds"
+                >
+                  {verifyingAllSeeds ? <Loader2 className="w-4 h-4 animate-spin" /> : <TestTube className="w-4 h-4" />}
+                  Verificar Todos
+                </button>
+                {seeds.filter(s => s.status === 'error').length > 0 && (
+                  <button
+                    onClick={deleteErrorSeeds}
+                    disabled={deletingErrorSeeds}
+                    className="flex items-center gap-2 px-3 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50"
+                    title="Excluir todas as seeds com erro"
+                  >
+                    {deletingErrorSeeds ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                    Excluir com Erro ({seeds.filter(s => s.status === 'error').length})
+                  </button>
+                )}
                 <button
                   onClick={checkIMAP}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
+                  className="flex items-center gap-2 px-3 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
                 >
                   <RefreshCw className="w-4 h-4" />
                   Verificar Emails
                 </button>
                 <button
                   onClick={() => setShowAddSeed(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
                 >
                   <Plus className="w-4 h-4" />
                   Nova Seed
@@ -2449,13 +2505,22 @@ function Warmup() {
             ) : (
               <div className="grid grid-cols-2 gap-4">
                 {seeds.map(seed => (
-                  <div key={seed.id} className="p-4 border border-gray-200 rounded-xl hover:border-gray-300 transition-colors">
+                  <div key={seed.id} className={`p-4 border rounded-xl transition-colors ${
+                    seed.status === 'error' ? 'border-red-300 bg-red-50/30' : 'border-gray-200 hover:border-gray-300'
+                  }`}>
                     <div className="flex items-center justify-between mb-3">
-                      <span className={`px-2 py-1 rounded text-xs font-medium ${
-                        seed.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                      }`}>
-                        {seed.provider?.toUpperCase()}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                          seed.status === 'active' ? 'bg-green-100 text-green-700' :
+                          seed.status === 'error' ? 'bg-red-100 text-red-700' :
+                          'bg-gray-100 text-gray-700'
+                        }`}>
+                          {seed.status === 'active' ? 'ATIVO' : seed.status === 'error' ? 'ERRO' : 'PAUSADO'}
+                        </span>
+                        <span className="px-2 py-1 rounded text-xs font-medium bg-blue-50 text-blue-600">
+                          {seed.provider?.toUpperCase()}
+                        </span>
+                      </div>
                       <div className="flex gap-1">
                         <button onClick={() => triggerSeedSend(seed.id)} className="p-1.5 hover:bg-cyan-50 rounded-lg" title="Enviar email">
                           <Send className="w-4 h-4 text-cyan-500" />
@@ -2473,6 +2538,11 @@ function Warmup() {
                     </div>
                     <p className="font-medium text-gray-900 truncate">{seed.email}</p>
                     <p className="text-xs text-gray-500 mt-1">{seed.imap_host}</p>
+                    {seed.status === 'error' && seed.error_message && (
+                      <p className="text-xs text-red-600 mt-2 bg-red-50 p-2 rounded truncate" title={seed.error_message}>
+                        {seed.error_message.length > 80 ? seed.error_message.substring(0, 80) + '...' : seed.error_message}
+                      </p>
+                    )}
                     <div className="mt-3 pt-3 border-t border-gray-100">
                       <div className="grid grid-cols-3 gap-2 text-xs">
                         <div><span className="text-gray-500">Enviados:</span> <span className="font-medium">{seed.total_sent || 0}</span></div>
