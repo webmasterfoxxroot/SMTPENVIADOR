@@ -1900,6 +1900,9 @@ func (s *Server) startWarmupEngine() {
 	// Run internal warmup IMAP check immediately on startup
 	go s.processInternalWarmupIMAP()
 
+	// Run external warmup (SMTP → Seeds) immediately on startup
+	go s.processWarmupEmails()
+
 	// Run every minute to check and send warmup emails
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
@@ -1982,7 +1985,9 @@ func (s *Server) processWarmupEmails() {
 	}
 	defer rows.Close()
 
+	smtpCount := 0
 	for rows.Next() {
+		smtpCount++
 		var warmupID, smtpID, recipeType string
 		var startDate time.Time
 		var minEmails, maxEmails, replyRate, startHour, endHour int
@@ -2060,6 +2065,12 @@ func (s *Server) processWarmupEmails() {
 		for i := 0; i < emailsPerMinute; i++ {
 			s.sendWarmupEmail(warmupID, smtpID, host, port, username, password, tlsMode, replyRate)
 		}
+	}
+
+	if smtpCount == 0 {
+		log.Printf("[Warmup Engine] No active warmup SMTPs found (check if warmup_smtps.status='active' AND smtp_servers.active=true)")
+	} else {
+		log.Printf("[Warmup Engine] Processed %d warmup SMTPs", smtpCount)
 	}
 }
 
