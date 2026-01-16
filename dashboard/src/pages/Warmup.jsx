@@ -31,7 +31,8 @@ import {
   FileText,
   Reply,
   ArrowUpRight,
-  ClipboardPaste
+  ClipboardPaste,
+  Upload
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
@@ -814,6 +815,9 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
 
 // Modal para adicionar Seed
 function AddSeedModal({ onClose, onSave }) {
+  const [bulkMode, setBulkMode] = useState(false)
+  const [bulkText, setBulkText] = useState('')
+  const [bulkLoading, setBulkLoading] = useState(false)
   const [form, setForm] = useState({
     email: '',
     password: '',
@@ -994,6 +998,92 @@ function AddSeedModal({ onClose, onSave }) {
     }
   }
 
+  // Função para importação em massa
+  const handleBulkImport = async () => {
+    if (!bulkText.trim()) {
+      toast.error('Cole as credenciais primeiro')
+      return
+    }
+
+    const lines = bulkText.trim().split('\n').filter(line => line.trim())
+    if (lines.length === 0) {
+      toast.error('Nenhuma linha válida encontrada')
+      return
+    }
+
+    setBulkLoading(true)
+    let success = 0
+    let failed = 0
+    const errors = []
+
+    for (const line of lines) {
+      const parts = line.trim().split(/\t+|\s{2,}/)
+      if (parts.length < 2) {
+        failed++
+        errors.push(`Linha inválida: ${line.substring(0, 30)}...`)
+        continue
+      }
+
+      const email = parts[0].trim()
+      const password = parts[1].trim()
+      const rawToken = parts.length >= 3 ? parts[2].trim() : ''
+      const rawClientId = parts.length >= 4 ? parts[3].trim() : ''
+
+      // Detecta o provedor
+      const domain = email.split('@')[1]?.toLowerCase() || ''
+      let providerConfig = null
+      let isOutlook = false
+
+      for (const [key, config] of Object.entries(providerConfigs)) {
+        if (domain.includes(key.replace('_', '-'))) {
+          providerConfig = config
+          isOutlook = ['outlook', 'hotmail', 'live', 'msn'].includes(key)
+          break
+        }
+      }
+
+      // Monta o objeto da seed
+      const seedData = {
+        email,
+        password,
+        provider: providerConfig?.provider || 'other',
+        imap_host: providerConfig?.imap_host || '',
+        imap_port: providerConfig?.imap_port || 993,
+        imap_tls_mode: providerConfig?.imap_tls_mode || 'tls',
+        smtp_host: providerConfig?.smtp_host || '',
+        smtp_port: providerConfig?.smtp_port || 587,
+        smtp_tls_mode: providerConfig?.smtp_tls_mode || 'starttls',
+        send_rate: 50,
+        reply_rate: 50,
+        emails_per_day: 20,
+        auto_reply: true,
+        oauth_token: isOutlook ? rawToken : '',
+        oauth_client_id: isOutlook ? rawClientId : ''
+      }
+
+      try {
+        await api.post('/warmup/seeds', seedData)
+        success++
+      } catch (error) {
+        failed++
+        errors.push(`${email}: ${error.response?.data?.error || 'Erro'}`)
+      }
+    }
+
+    setBulkLoading(false)
+
+    if (success > 0) {
+      toast.success(`${success} contas importadas com sucesso!`)
+    }
+    if (failed > 0) {
+      toast.error(`${failed} falhas: ${errors.slice(0, 3).join(', ')}${errors.length > 3 ? '...' : ''}`)
+    }
+
+    if (success > 0) {
+      onSave()
+    }
+  }
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
@@ -1012,6 +1102,74 @@ function AddSeedModal({ onClose, onSave }) {
           </button>
         </div>
 
+        {/* Toggle Modo Bulk */}
+        <div className="px-6 pt-4">
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={bulkMode}
+              onChange={(e) => setBulkMode(e.target.checked)}
+              className="w-5 h-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <div>
+              <span className="font-medium text-gray-900">Importar em Massa</span>
+              <p className="text-xs text-gray-500">Adicionar múltiplas contas de uma vez</p>
+            </div>
+          </label>
+        </div>
+
+        {bulkMode ? (
+          /* Modo Bulk - Textarea para múltiplas linhas */
+          <div className="p-6 space-y-4">
+            <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl">
+              <div className="flex items-center gap-2 mb-3">
+                <Upload className="w-5 h-5 text-blue-600" />
+                <span className="font-medium text-blue-900">Cole as credenciais abaixo</span>
+              </div>
+              <textarea
+                value={bulkText}
+                onChange={(e) => setBulkText(e.target.value)}
+                placeholder={`email1@outlook.com\tsenha1\ttoken1\tclient_id1
+email2@outlook.com\tsenha2\ttoken2\tclient_id2
+email3@gmail.com\tsenha3`}
+                className="w-full h-48 px-3 py-2 border border-blue-200 rounded-lg text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none bg-white resize-none"
+              />
+              <div className="mt-2 text-xs text-blue-700 space-y-1">
+                <p><strong>Formato:</strong> email TAB senha TAB token TAB client_id</p>
+                <p>• Uma conta por linha</p>
+                <p>• Token e client_id são opcionais (só para Outlook/Hotmail)</p>
+                <p>• Provedor detectado automaticamente pelo domínio</p>
+              </div>
+            </div>
+
+            {bulkText && (
+              <div className="p-3 bg-gray-50 rounded-lg">
+                <p className="text-sm text-gray-600">
+                  <strong>{bulkText.trim().split('\n').filter(l => l.trim()).length}</strong> linhas detectadas
+                </p>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={handleBulkImport}
+              disabled={bulkLoading || !bulkText.trim()}
+              className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-semibold hover:from-blue-700 hover:to-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {bulkLoading ? (
+                <>
+                  <RefreshCw className="w-5 h-5 animate-spin" />
+                  Importando...
+                </>
+              ) : (
+                <>
+                  <Upload className="w-5 h-5" />
+                  Importar {bulkText.trim().split('\n').filter(l => l.trim()).length || 0} Contas
+                </>
+              )}
+            </button>
+          </div>
+        ) : (
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           {/* Campo para Colar Credenciais */}
           <div className="p-3 bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-xl">
@@ -1274,6 +1432,7 @@ function AddSeedModal({ onClose, onSave }) {
             </button>
           </div>
         </form>
+        )}
       </div>
     </div>
   )
