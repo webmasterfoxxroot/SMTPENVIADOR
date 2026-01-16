@@ -1428,6 +1428,9 @@ function Warmup() {
   const [templates, setTemplates] = useState([])
   const [showAddTemplate, setShowAddTemplate] = useState(false)
   const [newTemplate, setNewTemplate] = useState({ subject: '', body: '', category: 'business', template_type: 'send' })
+  const [showDiagnostic, setShowDiagnostic] = useState(false)
+  const [diagnostic, setDiagnostic] = useState(null)
+  const [triggeringWarmup, setTriggeringWarmup] = useState(false)
 
   useEffect(() => {
     fetchAll()
@@ -1559,6 +1562,29 @@ function Warmup() {
     }
   }
 
+  const fetchDiagnostic = async () => {
+    try {
+      const res = await api.get('/warmup/diagnostic')
+      setDiagnostic(res.data)
+      setShowDiagnostic(true)
+    } catch (error) {
+      toast.error('Erro ao buscar diagnóstico')
+    }
+  }
+
+  const triggerWarmupNow = async (type) => {
+    setTriggeringWarmup(true)
+    try {
+      await api.post('/warmup/trigger', { type })
+      toast.success('Ciclo de warmup disparado! Verifique os logs.')
+      setTimeout(fetchAll, 3000)
+    } catch (error) {
+      toast.error('Erro ao disparar warmup')
+    } finally {
+      setTriggeringWarmup(false)
+    }
+  }
+
   const checkIMAP = async () => {
     try {
       await api.post('/warmup/check-imap')
@@ -1652,6 +1678,13 @@ function Warmup() {
         <div className="flex gap-3">
           {activeTab === 'dashboard' && (
             <>
+              <button
+                onClick={fetchDiagnostic}
+                className="btn bg-yellow-100 text-yellow-700 hover:bg-yellow-200 flex items-center gap-2"
+              >
+                <AlertCircle className="w-4 h-4" />
+                Diagnóstico
+              </button>
               <button
                 onClick={() => setShowAddSeed(true)}
                 className="btn btn-secondary flex items-center gap-2"
@@ -2289,6 +2322,199 @@ function Warmup() {
           onClose={() => setEditingWarmup(null)}
           onSave={() => { setEditingWarmup(null); fetchAll() }}
         />
+      )}
+
+      {/* Diagnostic Modal */}
+      {showDiagnostic && diagnostic && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-6 border-b border-gray-100">
+              <div className="flex items-center gap-3">
+                <div className={`p-3 rounded-xl ${diagnostic.ok ? 'bg-green-100' : 'bg-red-100'}`}>
+                  {diagnostic.ok ? (
+                    <CheckCircle className="w-6 h-6 text-green-600" />
+                  ) : (
+                    <AlertCircle className="w-6 h-6 text-red-600" />
+                  )}
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">Diagnóstico do Warmup</h2>
+                  <p className="text-sm text-gray-500">{diagnostic.timestamp} (Hora: {diagnostic.current_hour})</p>
+                </div>
+              </div>
+              <button onClick={() => setShowDiagnostic(false)} className="p-2 hover:bg-gray-100 rounded-lg">
+                <X className="w-5 h-5 text-gray-400" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {/* Issues */}
+              {diagnostic.issues && diagnostic.issues.length > 0 && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+                  <h3 className="font-semibold text-red-800 mb-2 flex items-center gap-2">
+                    <XCircle className="w-5 h-5" />
+                    Problemas Encontrados ({diagnostic.issues.length})
+                  </h3>
+                  <ul className="space-y-1">
+                    {diagnostic.issues.map((issue, i) => (
+                      <li key={i} className="text-sm text-red-700 flex items-start gap-2">
+                        <span className="text-red-400">•</span>
+                        {issue}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {diagnostic.ok && (
+                <div className="bg-green-50 border border-green-200 rounded-xl p-4">
+                  <h3 className="font-semibold text-green-800 flex items-center gap-2">
+                    <CheckCircle className="w-5 h-5" />
+                    Tudo OK! O sistema de warmup está configurado corretamente.
+                  </h3>
+                </div>
+              )}
+
+              {/* External Warmup */}
+              <div className="bg-blue-50 rounded-xl p-4">
+                <h3 className="font-semibold text-blue-900 mb-3">SMTP → Seeds (Externo)</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                  <div>
+                    <p className="text-gray-500">Seeds Ativas</p>
+                    <p className="font-bold text-blue-700">{diagnostic.external_warmup?.active_seeds || 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Templates Ativos</p>
+                    <p className="font-bold text-blue-700">{diagnostic.external_warmup?.active_templates || 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">SMTPs Ativos</p>
+                    <p className="font-bold text-blue-700">{diagnostic.external_warmup?.active_smtps || 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">No Horário</p>
+                    <p className="font-bold text-blue-700">{diagnostic.external_warmup?.smtps_in_hours || 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Enviados Hoje</p>
+                    <p className="font-bold text-green-700">{diagnostic.external_warmup?.sent_today || 0}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Internal Warmup */}
+              <div className="bg-purple-50 rounded-xl p-4">
+                <h3 className="font-semibold text-purple-900 mb-3">SMTP → SMTP (Interno)</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                  <div>
+                    <p className="text-gray-500">SMTPs c/ Interno</p>
+                    <p className="font-bold text-purple-700">{diagnostic.internal_warmup?.smtps_with_internal || 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">No Horário</p>
+                    <p className="font-bold text-purple-700">{diagnostic.internal_warmup?.smtps_in_hours || 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Senders c/ IMAP</p>
+                    <p className="font-bold text-purple-700">{diagnostic.internal_warmup?.senders_with_imap || 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Enviados Hoje</p>
+                    <p className="font-bold text-green-700">{diagnostic.internal_warmup?.sent_today || 0}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* SMTP Details */}
+              {diagnostic.smtp_details && diagnostic.smtp_details.length > 0 && (
+                <div>
+                  <h3 className="font-semibold text-gray-900 mb-3">Detalhes por SMTP</h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-3 py-2 text-left">Host</th>
+                          <th className="px-3 py-2 text-center">Status</th>
+                          <th className="px-3 py-2 text-center">Interno</th>
+                          <th className="px-3 py-2 text-center">Horário</th>
+                          <th className="px-3 py-2 text-center">No Horário</th>
+                          <th className="px-3 py-2 text-center">Limite</th>
+                          <th className="px-3 py-2 text-center">Enviados</th>
+                          <th className="px-3 py-2 text-center">Senders</th>
+                          <th className="px-3 py-2 text-center">c/ IMAP</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {diagnostic.smtp_details.map((smtp, i) => (
+                          <tr key={i} className="border-t">
+                            <td className="px-3 py-2 font-medium">{smtp.host}</td>
+                            <td className="px-3 py-2 text-center">
+                              <span className={`px-2 py-0.5 rounded text-xs ${smtp.status === 'active' && smtp.server_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                {smtp.status === 'active' && smtp.server_active ? 'Ativo' : 'Inativo'}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              {smtp.internal ? '✓' : '-'}
+                            </td>
+                            <td className="px-3 py-2 text-center">{smtp.start_hour}-{smtp.end_hour}h</td>
+                            <td className="px-3 py-2 text-center">
+                              {smtp.in_hours ? (
+                                <span className="text-green-600">✓</span>
+                              ) : (
+                                <span className="text-red-500">✗</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-center">{smtp.today_limit}</td>
+                            <td className="px-3 py-2 text-center">{smtp.sent_today}</td>
+                            <td className="px-3 py-2 text-center">{smtp.senders_count}</td>
+                            <td className="px-3 py-2 text-center">{smtp.senders_with_imap}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex justify-between items-center pt-4 border-t">
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => triggerWarmupNow('external')}
+                    disabled={triggeringWarmup}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm flex items-center gap-2"
+                  >
+                    {triggeringWarmup ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                    Forçar SMTP→Seed
+                  </button>
+                  <button
+                    onClick={() => triggerWarmupNow('internal')}
+                    disabled={triggeringWarmup}
+                    className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm flex items-center gap-2"
+                  >
+                    {triggeringWarmup ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                    Forçar SMTP→SMTP
+                  </button>
+                  <button
+                    onClick={() => triggerWarmupNow('both')}
+                    disabled={triggeringWarmup}
+                    className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 text-sm flex items-center gap-2"
+                  >
+                    {triggeringWarmup ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                    Forçar Ambos
+                  </button>
+                </div>
+                <button
+                  onClick={fetchDiagnostic}
+                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm flex items-center gap-2"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Atualizar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

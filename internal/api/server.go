@@ -339,6 +339,8 @@ func (s *Server) setupRoutes() {
 	warmup := protected.Group("/warmup")
 	warmup.Get("/stats", s.getWarmupStats)
 	warmup.Get("/activity", s.getWarmupActivity)
+	warmup.Get("/diagnostic", s.getWarmupDiagnostic)
+	warmup.Post("/trigger", s.triggerWarmup)
 	// Warmup SMTPs
 	warmup.Get("/smtps", s.listWarmupSMTPs)
 	warmup.Post("/smtps", s.createWarmupSMTP)
