@@ -1637,12 +1637,18 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 	// Query both regular warmup emails and internal warmup emails
 	rows, err := s.db.Query(`
 		(
-			SELECT e.id, e.subject, e.status, e.sent_at,
-				   '' as from_email, s.email as to_email,
+			SELECT DISTINCT ON (e.id) e.id, e.subject, e.status, e.sent_at,
+				   COALESCE(
+				       (SELECT email FROM smtp_senders WHERE smtp_id = sm.id AND active = true LIMIT 1),
+				       sm.username,
+				       ''
+				   ) as from_email,
+				   s.email as to_email,
 				   'seed' as warmup_type
 			FROM warmup_emails e
 			JOIN warmup_seeds s ON e.seed_id = s.id
 			JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
+			JOIN smtp_servers sm ON w.smtp_id = sm.id
 		)
 		UNION ALL
 		(
@@ -1659,13 +1665,19 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 	if err != nil {
 		// If warmup_internal_emails table doesn't exist yet, fall back to original query
 		rows, err = s.db.Query(`
-			SELECT e.id, e.subject, e.status, e.sent_at,
-				   '' as from_email, s.email as to_email,
+			SELECT DISTINCT ON (e.id) e.id, e.subject, e.status, e.sent_at,
+				   COALESCE(
+				       (SELECT email FROM smtp_senders WHERE smtp_id = sm.id AND active = true LIMIT 1),
+				       sm.username,
+				       ''
+				   ) as from_email,
+				   s.email as to_email,
 				   'seed' as warmup_type
 			FROM warmup_emails e
 			JOIN warmup_seeds s ON e.seed_id = s.id
 			JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
-			ORDER BY e.sent_at DESC
+			JOIN smtp_servers sm ON w.smtp_id = sm.id
+			ORDER BY e.id, e.sent_at DESC
 			LIMIT 50
 		`)
 		if err != nil {
