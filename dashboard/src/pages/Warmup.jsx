@@ -30,7 +30,8 @@ import {
   Link2,
   FileText,
   Reply,
-  ArrowUpRight
+  ArrowUpRight,
+  ClipboardPaste
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
@@ -883,13 +884,56 @@ function AddSeedModal({ onClose, onSave }) {
     // Procura match direto por nome de domínio
     for (const [key, config] of Object.entries(providerConfigs)) {
       if (domain.includes(key.replace('_', '-'))) {
-        setForm({ ...form, email, ...config })
-        return
+        setForm(prev => ({ ...prev, email, ...config }))
+        return config
       }
     }
 
     // Se não encontrar, mantém como 'other' mas não limpa os campos (caso o usuário já tenha preenchido)
     setForm(prev => ({ ...prev, email, provider: 'other' }))
+    return null
+  }
+
+  // Função para colar credenciais no formato: email\tsenha\ttoken
+  const pasteCredentials = async () => {
+    try {
+      const text = await navigator.clipboard.readText()
+      if (!text) {
+        toast.error('Clipboard vazio')
+        return
+      }
+
+      // Tenta parsear o formato: email  senha  token (separado por tab ou múltiplos espaços)
+      const parts = text.trim().split(/\t+|\s{2,}/)
+
+      if (parts.length >= 2) {
+        const email = parts[0].trim()
+        const password = parts[1].trim()
+
+        // Detecta o provedor e preenche automaticamente
+        const domain = email.split('@')[1]?.toLowerCase() || ''
+        let providerConfig = null
+
+        for (const [key, config] of Object.entries(providerConfigs)) {
+          if (domain.includes(key.replace('_', '-'))) {
+            providerConfig = config
+            break
+          }
+        }
+
+        if (providerConfig) {
+          setForm(prev => ({ ...prev, email, password, ...providerConfig }))
+        } else {
+          setForm(prev => ({ ...prev, email, password, provider: 'other' }))
+        }
+
+        toast.success(`Credenciais coladas: ${email}`)
+      } else {
+        toast.error('Formato inválido. Use: email  senha  token')
+      }
+    } catch (error) {
+      toast.error('Erro ao acessar clipboard. Use Ctrl+V manualmente.')
+    }
   }
 
   const testConnection = async (testType) => {
@@ -954,6 +998,19 @@ function AddSeedModal({ onClose, onSave }) {
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {/* Botão Colar Credenciais */}
+          <button
+            type="button"
+            onClick={pasteCredentials}
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-purple-500 to-indigo-500 text-white rounded-xl hover:from-purple-600 hover:to-indigo-600 transition-all font-medium"
+          >
+            <ClipboardPaste className="w-5 h-5" />
+            Colar Credenciais
+          </button>
+          <p className="text-xs text-center text-gray-400 -mt-2">
+            Formato: email TAB senha TAB token (cola automático)
+          </p>
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
             <input
