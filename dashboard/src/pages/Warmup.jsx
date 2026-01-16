@@ -2081,14 +2081,14 @@ function Warmup() {
             {activity.map(item => (
               <div key={item.id} className="flex items-center gap-4 p-3 bg-gray-50 rounded-lg">
                 <div className={`p-2 rounded-lg ${
+                  item.warmup_type === 'reply' ? 'bg-indigo-100' :
                   item.warmup_type === 'internal' ? 'bg-purple-100' :
-                  item.status === 'replied' ? 'bg-indigo-100' :
                   item.status === 'opened' ? 'bg-green-100' : 'bg-blue-100'
                 }`}>
-                  {item.warmup_type === 'internal' ? (
-                    <Link2 className="w-4 h-4 text-purple-600" />
-                  ) : item.status === 'replied' ? (
+                  {item.warmup_type === 'reply' ? (
                     <MessageSquare className="w-4 h-4 text-indigo-600" />
+                  ) : item.warmup_type === 'internal' ? (
+                    <Link2 className="w-4 h-4 text-purple-600" />
                   ) : item.status === 'opened' ? (
                     <CheckCircle className="w-4 h-4 text-green-600" />
                   ) : (
@@ -2098,6 +2098,9 @@ function Warmup() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-medium text-gray-900 truncate">{item.subject}</p>
+                    {item.warmup_type === 'reply' && (
+                      <span className="px-1.5 py-0.5 text-xs font-medium bg-indigo-100 text-indigo-700 rounded">Resposta</span>
+                    )}
                     {item.warmup_type === 'internal' && (
                       <span className="px-1.5 py-0.5 text-xs font-medium bg-purple-100 text-purple-700 rounded">Interno</span>
                     )}

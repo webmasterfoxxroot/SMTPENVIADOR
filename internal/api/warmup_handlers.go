@@ -164,6 +164,10 @@ func (s *Server) initWarmupTables() {
 	// Add verified column if missing (migration)
 	s.db.Exec(`ALTER TABLE warmup_emails ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT false`)
 
+	// Add reply tracking columns to warmup_emails (migration)
+	s.db.Exec(`ALTER TABLE warmup_emails ADD COLUMN IF NOT EXISTS reply_from VARCHAR(255)`)
+	s.db.Exec(`ALTER TABLE warmup_emails ADD COLUMN IF NOT EXISTS reply_to VARCHAR(255)`)
+
 	// Add total_sent column to warmup_seeds for tracking sent emails
 	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS total_sent INT DEFAULT 0`)
 
@@ -1634,7 +1638,7 @@ func (s *Server) triggerWarmup(c *fiber.Ctx) error {
 
 // getWarmupActivity returns recent warmup activity (including internal warmup)
 func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
-	// Query both regular warmup emails and internal warmup emails
+	// Query regular warmup emails, internal warmup emails, AND replies
 	rows, err := s.db.Query(`
 		(
 			SELECT DISTINCT ON (e.id) e.id, e.subject, e.status, e.sent_at,
@@ -1649,6 +1653,17 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 			JOIN warmup_seeds s ON e.seed_id = s.id
 			JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
 			JOIN smtp_servers sm ON w.smtp_id = sm.id
+			WHERE e.status != 'replied' OR e.replied_at IS NULL
+		)
+		UNION ALL
+		(
+			SELECT e.id || '-reply' as id, 'Re: ' || e.subject as subject, 'replied' as status, e.replied_at as sent_at,
+				   COALESCE(e.reply_from, s.email) as from_email,
+				   COALESCE(e.reply_to, '') as to_email,
+				   'reply' as warmup_type
+			FROM warmup_emails e
+			JOIN warmup_seeds s ON e.seed_id = s.id
+			WHERE e.replied_at IS NOT NULL
 		)
 		UNION ALL
 		(
@@ -1663,21 +1678,34 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 		LIMIT 50
 	`)
 	if err != nil {
-		// If warmup_internal_emails table doesn't exist yet, fall back to original query
+		// If warmup_internal_emails table doesn't exist yet, fall back to query without internal
 		rows, err = s.db.Query(`
-			SELECT DISTINCT ON (e.id) e.id, e.subject, e.status, e.sent_at,
-				   COALESCE(
-				       (SELECT email FROM smtp_senders WHERE smtp_id = sm.id AND active = true LIMIT 1),
-				       sm.username,
-				       ''
-				   ) as from_email,
-				   s.email as to_email,
-				   'seed' as warmup_type
-			FROM warmup_emails e
-			JOIN warmup_seeds s ON e.seed_id = s.id
-			JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
-			JOIN smtp_servers sm ON w.smtp_id = sm.id
-			ORDER BY e.id, e.sent_at DESC
+			(
+				SELECT DISTINCT ON (e.id) e.id, e.subject, e.status, e.sent_at,
+					   COALESCE(
+					       (SELECT email FROM smtp_senders WHERE smtp_id = sm.id AND active = true LIMIT 1),
+					       sm.username,
+					       ''
+					   ) as from_email,
+					   s.email as to_email,
+					   'seed' as warmup_type
+				FROM warmup_emails e
+				JOIN warmup_seeds s ON e.seed_id = s.id
+				JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
+				JOIN smtp_servers sm ON w.smtp_id = sm.id
+				WHERE e.status != 'replied' OR e.replied_at IS NULL
+			)
+			UNION ALL
+			(
+				SELECT e.id || '-reply' as id, 'Re: ' || e.subject as subject, 'replied' as status, e.replied_at as sent_at,
+					   COALESCE(e.reply_from, s.email) as from_email,
+					   COALESCE(e.reply_to, '') as to_email,
+					   'reply' as warmup_type
+				FROM warmup_emails e
+				JOIN warmup_seeds s ON e.seed_id = s.id
+				WHERE e.replied_at IS NOT NULL
+			)
+			ORDER BY sent_at DESC
 			LIMIT 50
 		`)
 		if err != nil {
@@ -3137,8 +3165,8 @@ func (s *Server) maybeReplyToWarmupEmail(c *client.Client, seedID, email, passwo
 		return
 	}
 
-	// Update stats
-	s.db.Exec(`UPDATE warmup_emails SET replied_at = NOW(), status = 'replied' WHERE id = $1`, warmupEmailID)
+	// Update the original email as replied and store who replied
+	s.db.Exec(`UPDATE warmup_emails SET replied_at = NOW(), status = 'replied', reply_from = $2, reply_to = $3 WHERE id = $1`, warmupEmailID, email, smtpUsername)
 	s.db.Exec(`UPDATE warmup_smtps SET total_replies = total_replies + 1 WHERE id = $1`, warmupSMTPID)
 	s.updateWarmupDailyStats(warmupSMTPID, "replies")
 
