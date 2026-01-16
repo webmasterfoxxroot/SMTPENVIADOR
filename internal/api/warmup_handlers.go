@@ -3438,12 +3438,6 @@ func (s *Server) processSeedToSMTPEmails() {
 	now := time.Now()
 	currentHour := now.Hour()
 
-	// Only send during business hours (6-22)
-	if currentHour < 6 || currentHour > 22 {
-		log.Printf("[Warmup Seed→SMTP] Outside sending hours (current: %d)", currentHour)
-		return
-	}
-
 	// Get active seeds with SMTP settings AND their warmup config (including OAuth)
 	seedRows, err := s.db.Query(`
 		SELECT id, email, password, smtp_host, smtp_port, use_tls,
@@ -3484,15 +3478,16 @@ func (s *Server) processSeedToSMTPEmails() {
 		return
 	}
 
-	log.Printf("[Warmup Seed→SMTP] Found %d seeds with SMTP", len(seeds))
+	log.Printf("[Warmup Seed→SMTP] Found %d seeds with SMTP (current hour: %d)", len(seeds), currentHour)
 
-	// Get active warmup SMTPs and their senders
+	// Get active warmup SMTPs and their senders (only those within their configured hours)
 	smtpRows, err := s.db.Query(`
 		SELECT w.id, w.smtp_id, ss.email as sender_email
 		FROM warmup_smtps w
 		JOIN smtp_senders ss ON ss.smtp_id = w.smtp_id
 		WHERE w.status = 'active' AND ss.active = true
-	`)
+		AND $1 >= w.start_hour AND $1 < w.end_hour
+	`, currentHour)
 	if err != nil {
 		log.Printf("[Warmup Seed→SMTP] Error getting SMTP senders: %v", err)
 		return
@@ -3516,7 +3511,7 @@ func (s *Server) processSeedToSMTPEmails() {
 	}
 
 	if len(targets) == 0 {
-		log.Printf("[Warmup Seed→SMTP] No active SMTP senders to send to")
+		log.Printf("[Warmup Seed→SMTP] No active SMTP senders within configured hours (current hour: %d)", currentHour)
 		return
 	}
 
