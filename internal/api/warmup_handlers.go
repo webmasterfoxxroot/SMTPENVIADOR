@@ -2103,32 +2103,16 @@ func testIMAPConnectionWithOAuth(host string, port int, email, password, tlsMode
 	}
 	defer c.Logout()
 
-	// If we have an OAuth token, use XOAUTH2 authentication
-	if oauthToken != "" {
-		// Get access token from refresh token
-		tokenResp, err := refreshMicrosoftAccessToken(oauthToken)
-		if err != nil {
-			// If OAuth fails, try normal login as fallback
-			log.Printf("[OAuth] Token refresh failed, trying password: %v", err)
-			if loginErr := c.Login(email, password); loginErr != nil {
-				return fmt.Errorf("OAuth failed (%v) and password login failed: %v", err, loginErr)
-			}
-			return nil
-		}
-
-		// Use XOAUTH2 authentication
-		if err := authenticateIMAPWithXOAuth2(c, email, tokenResp.AccessToken); err != nil {
-			// If XOAUTH2 fails, try normal login as fallback
-			log.Printf("[OAuth] XOAUTH2 auth failed, trying password: %v", err)
-			if loginErr := c.Login(email, password); loginErr != nil {
-				return fmt.Errorf("XOAUTH2 failed (%v) and password login failed: %v", err, loginErr)
-			}
-		}
-		return nil
-	}
-
-	// Normal password login
+	// Try password login first (works with App Passwords)
 	if err := c.Login(email, password); err != nil {
+		// Check if this is Outlook/Hotmail
+		domain := strings.ToLower(email)
+		isOutlook := strings.Contains(domain, "outlook") || strings.Contains(domain, "hotmail") ||
+			strings.Contains(domain, "live.") || strings.Contains(domain, "msn.")
+
+		if isOutlook {
+			return fmt.Errorf("LOGIN failed: %v. Para Outlook/Hotmail, crie uma App Password em: account.microsoft.com/security > Segurança > Senhas de app", err)
+		}
 		return fmt.Errorf("login failed: %v", err)
 	}
 
