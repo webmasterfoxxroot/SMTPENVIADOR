@@ -3309,6 +3309,26 @@ func (s *Server) updateWarmupDailyStats(warmupID, statType string) {
 // SEED TO SMTP EMAIL PROCESSOR
 // ============================================
 
+// isQuotaOrSpamBlockError checks if an SMTP error indicates the account has been blocked
+// by the provider due to spam detection or quota limits (common with Outlook/Hotmail)
+func isQuotaOrSpamBlockError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	// Outlook/Hotmail specific errors
+	return strings.Contains(errStr, "outboundspamexception") ||
+		strings.Contains(errStr, "refusequota") ||
+		strings.Contains(errStr, "554 5.2.0") ||
+		strings.Contains(errStr, "wascl useraction") ||
+		strings.Contains(errStr, "showtirupgrade") ||
+		// Generic spam/abuse errors
+		strings.Contains(errStr, "spam") && strings.Contains(errStr, "blocked") ||
+		strings.Contains(errStr, "account suspended") ||
+		strings.Contains(errStr, "sending limit exceeded") ||
+		strings.Contains(errStr, "too many messages")
+}
+
 func (s *Server) processSeedToSMTPEmails() {
 	now := time.Now()
 	currentHour := now.Hour()
@@ -3468,6 +3488,14 @@ func (s *Server) processSeedToSMTPEmails() {
 
 			if err != nil {
 				log.Printf("[Warmup Seed→SMTP] Failed to send from %s to %s: %v", seed.Email, target.SenderEmail, err)
+
+				// Check if this is a quota/spam block error - if so, deactivate the seed
+				if isQuotaOrSpamBlockError(err) {
+					log.Printf("[Warmup Seed→SMTP] ⚠️ Quota/spam block detected for %s - deactivating seed", seed.Email)
+					s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
+						err.Error(), seed.ID)
+					break // Stop sending from this seed
+				}
 				continue
 			}
 
@@ -3852,6 +3880,13 @@ func (s *Server) maybeReplyToWarmupEmail(c *client.Client, seedID, email, passwo
 
 	if err != nil {
 		log.Printf("[Warmup Reply] Failed to send reply: %v", err)
+
+		// Check if this is a quota/spam block error - if so, deactivate the seed
+		if isQuotaOrSpamBlockError(err) {
+			log.Printf("[Warmup Reply] ⚠️ Quota/spam block detected for %s - deactivating seed", email)
+			s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
+				err.Error(), seedID)
+		}
 		return
 	}
 
