@@ -25,42 +25,40 @@ import (
 // ============================================
 
 func (s *Server) initWarmupTables() {
-	// Check if migration needed
+	// First, ensure warmup_settings table exists for tracking migrations
+	s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS warmup_settings (
+			key VARCHAR(100) PRIMARY KEY,
+			value TEXT,
+			updated_at TIMESTAMP DEFAULT NOW()
+		)
+	`)
+
+	// Check if UUID migration was already done
+	var migrationDone string
+	s.db.QueryRow(`SELECT value FROM warmup_settings WHERE key = 'uuid_migration_done'`).Scan(&migrationDone)
+
+	// Only check for migration if not already done
 	var needsMigration bool
+	if migrationDone != "true" {
+		// Check if warmup_smtps has wrong column type (VARCHAR instead of UUID)
+		var columnType string
+		err := s.db.QueryRow(`
+			SELECT data_type FROM information_schema.columns
+			WHERE table_name = 'warmup_smtps' AND column_name = 'id'
+		`).Scan(&columnType)
+		if err == nil && columnType == "character varying" {
+			needsMigration = true
+		}
 
-	// Check if warmup_smtps has wrong column type (VARCHAR instead of UUID)
-	var columnType string
-	err := s.db.QueryRow(`
-		SELECT data_type FROM information_schema.columns
-		WHERE table_name = 'warmup_smtps' AND column_name = 'id'
-	`).Scan(&columnType)
-	if err == nil && columnType == "character varying" {
-		needsMigration = true
-	}
-
-	// Check if warmup_seeds has wrong column type
-	err = s.db.QueryRow(`
-		SELECT data_type FROM information_schema.columns
-		WHERE table_name = 'warmup_seeds' AND column_name = 'id'
-	`).Scan(&columnType)
-	if err == nil && columnType == "character varying" {
-		needsMigration = true
-	}
-
-	// Check if warmup_emails table exists (might have failed to create)
-	var emailsTableExists bool
-	s.db.QueryRow(`
-		SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'warmup_emails')
-	`).Scan(&emailsTableExists)
-
-	// Also check if warmup_smtps exists but warmup_emails doesn't
-	var smtpsTableExists bool
-	s.db.QueryRow(`
-		SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'warmup_smtps')
-	`).Scan(&smtpsTableExists)
-
-	if smtpsTableExists && !emailsTableExists {
-		needsMigration = true
+		// Check if warmup_seeds has wrong column type
+		err = s.db.QueryRow(`
+			SELECT data_type FROM information_schema.columns
+			WHERE table_name = 'warmup_seeds' AND column_name = 'id'
+		`).Scan(&columnType)
+		if err == nil && columnType == "character varying" {
+			needsMigration = true
+		}
 	}
 
 	if needsMigration {
@@ -71,9 +69,14 @@ func (s *Server) initWarmupTables() {
 		s.db.Exec(`DROP TABLE IF EXISTS warmup_templates CASCADE`)
 		s.db.Exec(`DROP TABLE IF EXISTS warmup_seeds CASCADE`)
 		s.db.Exec(`DROP TABLE IF EXISTS warmup_smtps CASCADE`)
+
+		// Mark migration as done BEFORE creating tables
+		s.db.Exec(`INSERT INTO warmup_settings (key, value) VALUES ('uuid_migration_done', 'true')
+		           ON CONFLICT (key) DO UPDATE SET value = 'true', updated_at = NOW()`)
 	}
 
 	// Create warmup_smtps table
+	var err error
 	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS warmup_smtps (
 			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
