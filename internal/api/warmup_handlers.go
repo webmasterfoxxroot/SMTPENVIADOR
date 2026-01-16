@@ -440,14 +440,16 @@ func (s *Server) insertDefaultWarmupTemplates() {
 func (s *Server) listWarmupSMTPs(c *fiber.Ctx) error {
 	rows, err := s.db.Query(`
 		SELECT
-			w.id, w.smtp_id, s.name as smtp_name, w.status, COALESCE(w.recipe_type, 'progressive'),
-			w.start_date, w.end_date, COALESCE(w.current_day, 1),
+			w.id, w.smtp_id, COALESCE(s.name, 'Unknown') as smtp_name,
+			COALESCE(w.status, 'active'), COALESCE(w.recipe_type, 'progressive'),
+			COALESCE(w.start_date, NOW()), w.end_date, COALESCE(w.current_day, 1),
 			COALESCE(w.min_emails_per_day, 5), COALESCE(w.max_emails_per_day, 40),
 			COALESCE(w.send_rate, 30), COALESCE(w.reply_rate, 30),
 			COALESCE(w.start_hour, 8), COALESCE(w.end_hour, 18),
 			COALESCE(w.total_sent, 0), COALESCE(w.total_inbox, 0),
 			COALESCE(w.total_spam, 0), COALESCE(w.total_replies, 0),
-			w.custom_schedule, COALESCE(w.internal_warmup, false), w.created_at, w.updated_at
+			w.custom_schedule, COALESCE(w.internal_warmup, false),
+			COALESCE(w.created_at, NOW()), COALESCE(w.updated_at, NOW())
 		FROM warmup_smtps w
 		JOIN smtp_servers s ON w.smtp_id = s.id
 		ORDER BY w.created_at DESC
@@ -996,9 +998,11 @@ func (s *Server) updateWarmupSchedule(c *fiber.Ctx) error {
 func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 	rows, err := s.db.Query(`
 		SELECT
-			ws.id, ws.email, COALESCE(ws.provider, 'other'), ws.imap_host, COALESCE(ws.imap_port, 993),
+			ws.id, COALESCE(ws.email, ''), COALESCE(ws.provider, 'other'),
+			COALESCE(ws.imap_host, ''), COALESCE(ws.imap_port, 993),
 			COALESCE(ws.smtp_host, ''), COALESCE(ws.smtp_port, 587),
-			COALESCE(ws.use_tls, true), COALESCE(ws.status, 'active'), ws.last_check, ws.error_message, ws.created_at,
+			COALESCE(ws.use_tls, true), COALESCE(ws.status, 'active'),
+			ws.last_check, ws.error_message, COALESCE(ws.created_at, NOW()),
 			COALESCE(ws.send_rate, 50), COALESCE(ws.reply_rate, 50),
 			COALESCE(ws.emails_per_day, 20), COALESCE(ws.auto_reply, true),
 			COALESCE(ws.imap_tls_mode, 'tls'), COALESCE(ws.smtp_tls_mode, 'starttls'),
@@ -1759,11 +1763,14 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 // listWarmupTemplates returns all warmup templates
 func (s *Server) listWarmupTemplates(c *fiber.Ctx) error {
 	rows, err := s.db.Query(`
-		SELECT id, subject, body, category, COALESCE(template_type, 'send'), active, created_at
+		SELECT id, COALESCE(subject, ''), COALESCE(body, ''),
+		       COALESCE(category, 'business'), COALESCE(template_type, 'send'),
+		       COALESCE(active, true), COALESCE(created_at, NOW())
 		FROM warmup_templates
 		ORDER BY template_type, category, created_at
 	`)
 	if err != nil {
+		log.Printf("[Warmup API] listWarmupTemplates query error: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
 	defer rows.Close()
@@ -1774,7 +1781,11 @@ func (s *Server) listWarmupTemplates(c *fiber.Ctx) error {
 		var active bool
 		var createdAt time.Time
 
-		rows.Scan(&id, &subject, &body, &category, &templateType, &active, &createdAt)
+		err := rows.Scan(&id, &subject, &body, &category, &templateType, &active, &createdAt)
+		if err != nil {
+			log.Printf("[Warmup API] listWarmupTemplates scan error: %v", err)
+			continue
+		}
 
 		templates = append(templates, fiber.Map{
 			"id":            id,
