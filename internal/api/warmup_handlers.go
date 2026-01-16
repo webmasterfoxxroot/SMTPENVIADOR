@@ -2313,12 +2313,16 @@ func (s *Server) testSeedConnectionPreview(c *fiber.Ctx) error {
 				}
 			}
 
-			// Test SMTP connection
-			err := s.testSMTPConnection(req.SMTPHost, req.SMTPPort, req.Email, req.Password, req.SMTPTLSMode)
+			// Test SMTP connection with OAuth if available
+			err := s.testSMTPConnectionWithOAuth(req.SMTPHost, req.SMTPPort, req.Email, req.Password, req.SMTPTLSMode, req.OAuthToken, req.OAuthClientID)
 			if err != nil {
 				results["smtp"] = fiber.Map{"success": false, "error": err.Error()}
 			} else {
-				results["smtp"] = fiber.Map{"success": true, "message": "Conexão SMTP OK!"}
+				if req.OAuthToken != "" && req.OAuthClientID != "" {
+					results["smtp"] = fiber.Map{"success": true, "message": "Conexão SMTP com OAuth2 OK!"}
+				} else {
+					results["smtp"] = fiber.Map{"success": true, "message": "Conexão SMTP OK!"}
+				}
 			}
 		}
 	}
@@ -2326,9 +2330,42 @@ func (s *Server) testSeedConnectionPreview(c *fiber.Ctx) error {
 	return c.JSON(results)
 }
 
-// testSMTPConnection tests SMTP connection without sending email
+// testSMTPConnection tests SMTP connection without sending email (legacy, no OAuth)
 func (s *Server) testSMTPConnection(host string, port int, username, password, tlsMode string) error {
+	return s.testSMTPConnectionWithOAuth(host, port, username, password, tlsMode, "", "")
+}
+
+// testSMTPConnectionWithOAuth tests SMTP connection with OAuth2 support
+func (s *Server) testSMTPConnectionWithOAuth(host string, port int, username, password, tlsMode, oauthToken, oauthClientID string) error {
 	addr := fmt.Sprintf("%s:%d", host, port)
+
+	// Helper function to authenticate with OAuth or password
+	authenticateWithOAuth := func(client *smtp.Client) error {
+		// If we have OAuth token AND client_id, try OAuth2 first
+		if oauthToken != "" && oauthClientID != "" {
+			log.Printf("[SMTP OAuth] Trying OAuth2 for %s with client_id: %s...", username, oauthClientID[:8])
+
+			// Get access token from refresh token
+			tokenResp, oauthErr := refreshMicrosoftAccessToken(oauthToken, oauthClientID)
+			if oauthErr == nil && tokenResp.AccessToken != "" {
+				log.Printf("[SMTP OAuth] Got access token, trying XOAUTH2...")
+
+				// Try XOAUTH2 authentication
+				auth := newXOAuth2SMTPAuth(username, tokenResp.AccessToken)
+				if err := client.Auth(auth); err == nil {
+					log.Printf("[SMTP OAuth] XOAUTH2 authentication successful!")
+					return nil
+				} else {
+					log.Printf("[SMTP OAuth] XOAUTH2 failed: %v, trying password...", err)
+				}
+			} else {
+				log.Printf("[SMTP OAuth] Token refresh failed: %v, trying password...", oauthErr)
+			}
+		}
+
+		// Fall back to password authentication
+		return s.authenticateSMTP(client, host, username, password)
+	}
 
 	switch tlsMode {
 	case "tls":
@@ -2349,7 +2386,7 @@ func (s *Server) testSMTPConnection(host string, port int, username, password, t
 		}
 		defer client.Close()
 
-		if err := s.authenticateSMTP(client, host, username, password); err != nil {
+		if err := authenticateWithOAuth(client); err != nil {
 			return err
 		}
 		return client.Quit()
@@ -2379,7 +2416,7 @@ func (s *Server) testSMTPConnection(host string, port int, username, password, t
 			return fmt.Errorf("STARTTLS failed: %v", err)
 		}
 
-		if err := s.authenticateSMTP(client, host, username, password); err != nil {
+		if err := authenticateWithOAuth(client); err != nil {
 			return err
 		}
 		return client.Quit()
@@ -2401,7 +2438,7 @@ func (s *Server) testSMTPConnection(host string, port int, username, password, t
 			return fmt.Errorf("EHLO error: %v", err)
 		}
 
-		if err := s.authenticateSMTP(client, host, username, password); err != nil {
+		if err := authenticateWithOAuth(client); err != nil {
 			return err
 		}
 		return client.Quit()
@@ -3014,6 +3051,30 @@ func (a *warmupLoginAuthStruct) Next(fromServer []byte, more bool) ([]byte, erro
 		default:
 			return nil, fmt.Errorf("unknown from server: %s", string(fromServer))
 		}
+	}
+	return nil, nil
+}
+
+// xoauth2SMTPAuth implements XOAUTH2 authentication for SMTP (Microsoft OAuth2)
+type xoauth2SMTPAuth struct {
+	username    string
+	accessToken string
+}
+
+func newXOAuth2SMTPAuth(username, accessToken string) smtp.Auth {
+	return &xoauth2SMTPAuth{username, accessToken}
+}
+
+func (a *xoauth2SMTPAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	// XOAUTH2 format: "user=<email>\x01auth=Bearer <token>\x01\x01"
+	authStr := fmt.Sprintf("user=%s\x01auth=Bearer %s\x01\x01", a.username, a.accessToken)
+	return "XOAUTH2", []byte(authStr), nil
+}
+
+func (a *xoauth2SMTPAuth) Next(fromServer []byte, more bool) ([]byte, error) {
+	if more {
+		// Server sent an error response, return empty to abort
+		return nil, fmt.Errorf("XOAUTH2 error: %s", string(fromServer))
 	}
 	return nil, nil
 }
