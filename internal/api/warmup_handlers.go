@@ -3548,11 +3548,12 @@ func (s *Server) processSeedToSMTPEmails() {
 	totalSent := 0
 	for _, seed := range seeds {
 		// Check how many this seed already sent today (from warmup_seed_emails, NOT warmup_emails)
+		// Use CURRENT_DATE from PostgreSQL to avoid timezone issues
 		var sentToday int
 		s.db.QueryRow(`
 			SELECT COUNT(*) FROM warmup_seed_emails
-			WHERE seed_id = $1 AND DATE(sent_at) = $2
-		`, seed.ID, now.Format("2006-01-02")).Scan(&sentToday)
+			WHERE seed_id = $1 AND DATE(sent_at) = CURRENT_DATE
+		`, seed.ID).Scan(&sentToday)
 
 		// Check daily limit
 		if sentToday >= seed.EmailsPerDay {
