@@ -24,6 +24,19 @@ import (
 	"github.com/google/uuid"
 )
 
+// Package-level variables for seed batch rotation
+var (
+	seedBatchOffset int
+	seedBatchMutex  sync.Mutex
+)
+
+// Constants for seed processing
+const (
+	maxSeedsPerCycle    = 50 // Maximum seeds to process per cycle
+	minDelayBetweenSeed = 5  // Minimum seconds between each seed
+	maxDelayBetweenSeed = 10 // Maximum seconds between each seed
+)
+
 // ============================================
 // DATABASE MIGRATIONS
 // ============================================
@@ -3445,14 +3458,45 @@ func (s *Server) processSeedToSMTPEmails() {
 	now := time.Now()
 	currentHour := now.Hour()
 
-	// Get active seeds with SMTP settings AND their warmup config (including OAuth)
+	// Get total count of active seeds first
+	var totalSeeds int
+	s.db.QueryRow(`
+		SELECT COUNT(*) FROM warmup_seeds
+		WHERE status = 'active' AND smtp_host IS NOT NULL AND smtp_host != ''
+	`).Scan(&totalSeeds)
+
+	if totalSeeds == 0 {
+		log.Printf("[Warmup Seed→SMTP] No active seeds with SMTP configured")
+		return
+	}
+
+	// Get current batch offset (thread-safe)
+	seedBatchMutex.Lock()
+	currentOffset := seedBatchOffset
+	// Update offset for next cycle
+	seedBatchOffset += maxSeedsPerCycle
+	if seedBatchOffset >= totalSeeds {
+		seedBatchOffset = 0 // Reset to beginning
+	}
+	seedBatchMutex.Unlock()
+
+	// Calculate batch info
+	batchNumber := (currentOffset / maxSeedsPerCycle) + 1
+	totalBatches := (totalSeeds + maxSeedsPerCycle - 1) / maxSeedsPerCycle
+
+	log.Printf("[Warmup Seed→SMTP] Processing batch %d/%d (seeds %d-%d of %d total, hour: %d)",
+		batchNumber, totalBatches, currentOffset+1, min(currentOffset+maxSeedsPerCycle, totalSeeds), totalSeeds, currentHour)
+
+	// Get only this batch of seeds (with LIMIT and OFFSET)
 	seedRows, err := s.db.Query(`
 		SELECT id, email, password, smtp_host, smtp_port, use_tls,
 		       COALESCE(send_rate, 50), COALESCE(emails_per_day, 20),
 		       COALESCE(oauth_token, ''), COALESCE(oauth_client_id, '')
 		FROM warmup_seeds
 		WHERE status = 'active' AND smtp_host IS NOT NULL AND smtp_host != ''
-	`)
+		ORDER BY id
+		LIMIT $1 OFFSET $2
+	`, maxSeedsPerCycle, currentOffset)
 	if err != nil {
 		log.Printf("[Warmup Seed→SMTP] Error getting seeds: %v", err)
 		return
@@ -3481,11 +3525,11 @@ func (s *Server) processSeedToSMTPEmails() {
 	}
 
 	if len(seeds) == 0 {
-		log.Printf("[Warmup Seed→SMTP] No active seeds with SMTP configured")
+		log.Printf("[Warmup Seed→SMTP] No seeds in this batch")
 		return
 	}
 
-	log.Printf("[Warmup Seed→SMTP] Found %d seeds with SMTP (current hour: %d)", len(seeds), currentHour)
+	log.Printf("[Warmup Seed→SMTP] Batch has %d seeds to process", len(seeds))
 
 	// Get active warmup SMTPs and their senders (only those within their configured hours)
 	// Also get start_hour and end_hour to calculate sending window
@@ -3637,12 +3681,18 @@ func (s *Server) processSeedToSMTPEmails() {
 			log.Printf("[Warmup Seed→SMTP] ✉️ Sent from %s to %s: %s", seed.Email, target.SenderEmail, subject)
 			totalSent++
 
-			// Small delay between sends
+			// Small delay between sends from same seed
 			time.Sleep(200 * time.Millisecond)
 		}
+
+		// Random delay between different seeds (5-10 seconds) to appear more human-like
+		// This prevents all seeds from connecting to Outlook/Hotmail simultaneously
+		delaySeconds := minDelayBetweenSeed + rand.Intn(maxDelayBetweenSeed-minDelayBetweenSeed+1)
+		log.Printf("[Warmup Seed→SMTP] Waiting %ds before next seed...", delaySeconds)
+		time.Sleep(time.Duration(delaySeconds) * time.Second)
 	}
 
-	log.Printf("[Warmup Seed→SMTP] Cycle complete: sent %d emails", totalSent)
+	log.Printf("[Warmup Seed→SMTP] Batch complete: sent %d emails", totalSent)
 }
 
 // ============================================
