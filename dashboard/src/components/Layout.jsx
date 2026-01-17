@@ -9,13 +9,17 @@ import {
   LogOut,
   Zap,
   Settings,
-  Flame
+  Flame,
+  Sun,
+  Moon
 } from 'lucide-react'
 import { removeToken, getUser } from '../services/auth'
+import { useTheme } from '../contexts/ThemeContext'
 
 function Layout({ onLogout }) {
   const navigate = useNavigate()
   const user = getUser()
+  const { theme, toggleTheme } = useTheme()
 
   const handleLogout = () => {
     removeToken()
@@ -35,10 +39,10 @@ function Layout({ onLogout }) {
   ]
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex min-h-screen bg-gray-100 dark:bg-gray-900 transition-colors duration-200">
       {/* Sidebar */}
-      <aside className="w-64 bg-gray-800 text-white flex flex-col">
-        <div className="p-4 border-b border-gray-700">
+      <aside className="w-64 bg-gray-800 dark:bg-gray-950 text-white flex flex-col">
+        <div className="p-4 border-b border-gray-700 dark:border-gray-800">
           <div className="flex items-center gap-2">
             <Zap className="w-8 h-8 text-blue-400" />
             <span className="text-xl font-bold">SMTPENVIADOR</span>
@@ -61,7 +65,27 @@ function Layout({ onLogout }) {
           ))}
         </nav>
 
-        <div className="p-4 border-t border-gray-700">
+        {/* Theme Toggle */}
+        <div className="px-4 py-3 border-t border-gray-700 dark:border-gray-800">
+          <button
+            onClick={toggleTheme}
+            className="flex items-center gap-3 w-full px-4 py-3 text-gray-300 hover:bg-gray-700 hover:text-white rounded-lg transition-colors"
+          >
+            {theme === 'light' ? (
+              <>
+                <Moon className="w-5 h-5" />
+                <span>Modo Escuro</span>
+              </>
+            ) : (
+              <>
+                <Sun className="w-5 h-5" />
+                <span>Modo Claro</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        <div className="p-4 border-t border-gray-700 dark:border-gray-800">
           <div className="text-sm text-gray-400 mb-2">
             {user?.email || 'admin@admin.com'}
           </div>
