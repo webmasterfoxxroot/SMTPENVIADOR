@@ -82,47 +82,32 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 	s.db.QueryRow(`SELECT COUNT(*) FROM smtp_servers WHERE active = true`).Scan(&totalSMTPs)
 	s.db.QueryRow(`SELECT COUNT(*) FROM email_lists`).Scan(&totalLists)
 
-	// Try ClickHouse first for email count (where bulk emails are stored)
-	if s.ch != nil {
+	// Get total emails by summing from email_lists table (most accurate)
+	// This matches what's shown on the Lists page
+	s.db.QueryRow(`SELECT COALESCE(SUM(total_emails), 0) FROM email_lists`).Scan(&totalEmails)
+
+	// If PostgreSQL sum is 0, try ClickHouse as fallback
+	if totalEmails == 0 && s.ch != nil {
 		ctx := context.Background()
-		chCount, err := s.ch.GetTotalEmailCount(ctx)
-		log.Printf("[Stats] ClickHouse GetTotalEmailCount: count=%d, err=%v", chCount, err)
-		if err == nil && chCount > 0 {
-			totalEmails = int64(chCount)
-		} else if err != nil || chCount == 0 {
-			// Fallback: sum counts from all lists (this method works in list handler)
-			log.Printf("[Stats] GetTotalEmailCount failed, trying sum of list counts")
-			rows, err := s.db.Query(`SELECT id FROM email_lists`)
-			if err == nil {
-				defer rows.Close()
-				var sumCount uint64
-				for rows.Next() {
-					var listID string
-					if rows.Scan(&listID) == nil {
-						count, err := s.ch.GetEmailCountByList(ctx, listID)
-						if err == nil {
-							sumCount += count
-						}
+		// Sum counts from each list in ClickHouse
+		rows, err := s.db.Query(`SELECT id FROM email_lists`)
+		if err == nil {
+			defer rows.Close()
+			var sumCount uint64
+			for rows.Next() {
+				var listID string
+				if rows.Scan(&listID) == nil {
+					count, err := s.ch.GetEmailCountByList(ctx, listID)
+					if err == nil {
+						sumCount += count
 					}
 				}
-				if sumCount > 0 {
-					totalEmails = int64(sumCount)
-					log.Printf("[Stats] Sum of list counts: %d", sumCount)
-				}
+			}
+			if sumCount > 0 {
+				totalEmails = int64(sumCount)
 			}
 		}
-	} else {
-		log.Printf("[Stats] ClickHouse client is nil, falling back to PostgreSQL")
 	}
-
-	// Fallback to PostgreSQL if ClickHouse count is still 0
-	if totalEmails == 0 {
-		var pgCount int
-		s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE valid = true`).Scan(&pgCount)
-		log.Printf("[Stats] PostgreSQL fallback email count: %d", pgCount)
-		totalEmails = int64(pgCount)
-	}
-	log.Printf("[Stats] Final total emails: %d", totalEmails)
 
 	stats["total_smtps"] = totalSMTPs
 	stats["total_lists"] = totalLists
