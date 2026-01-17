@@ -2646,10 +2646,10 @@ func (s *Server) startWarmupEngine() {
 	go s.safeRun("Initial Seed→SMTP", s.processSeedToSMTPEmails)
 
 	// Get configurable intervals from settings
-	// imapInterval := s.getWarmupSettingInt("imap_check_interval", 5) // DISABLED
+	imapInterval := s.getWarmupSettingInt("imap_check_interval", 5)
 	internalCycleInterval := s.getWarmupSettingInt("internal_cycle_minutes", 2)
 
-	log.Printf("[Warmup Engine] Intervals: External=1m, Seed→SMTP=3m, Internal=%dm (IMAP disabled)", internalCycleInterval)
+	log.Printf("[Warmup Engine] Intervals: External=1m, Seed→SMTP=3m, Internal=%dm, InternalIMAP=%dm (Seed IMAP disabled)", internalCycleInterval, imapInterval)
 
 	// Create all tickers
 	externalTicker := time.NewTicker(1 * time.Minute)
