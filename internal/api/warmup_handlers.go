@@ -3486,8 +3486,9 @@ func (s *Server) processSeedToSMTPEmails() {
 	log.Printf("[Warmup Seed→SMTP] Found %d seeds with SMTP (current hour: %d)", len(seeds), currentHour)
 
 	// Get active warmup SMTPs and their senders (only those within their configured hours)
+	// Also get start_hour and end_hour to calculate sending window
 	smtpRows, err := s.db.Query(`
-		SELECT w.id, w.smtp_id, ss.email as sender_email
+		SELECT w.id, w.smtp_id, ss.email as sender_email, w.start_hour, w.end_hour
 		FROM warmup_smtps w
 		JOIN smtp_senders ss ON ss.smtp_id = w.smtp_id
 		WHERE w.status = 'active' AND ss.active = true
@@ -3505,14 +3506,27 @@ func (s *Server) processSeedToSMTPEmails() {
 		SenderEmail string
 	}
 
+	// Track min/max hours from the SMTPs we're actually using
+	minStartHour := 24
+	maxEndHour := 0
+
 	for smtpRows.Next() {
 		var target struct {
 			WarmupID    string
 			SMTPID      string
 			SenderEmail string
 		}
-		smtpRows.Scan(&target.WarmupID, &target.SMTPID, &target.SenderEmail)
+		var startHour, endHour int
+		smtpRows.Scan(&target.WarmupID, &target.SMTPID, &target.SenderEmail, &startHour, &endHour)
 		targets = append(targets, target)
+
+		// Track the actual hours from configured SMTPs
+		if startHour < minStartHour {
+			minStartHour = startHour
+		}
+		if endHour > maxEndHour {
+			maxEndHour = endHour
+		}
 	}
 
 	if len(targets) == 0 {
@@ -3520,16 +3534,22 @@ func (s *Server) processSeedToSMTPEmails() {
 		return
 	}
 
-	log.Printf("[Warmup Seed→SMTP] Found %d SMTP senders as targets", len(targets))
+	// Calculate sending hours from the configured SMTP hours
+	sendingHours := maxEndHour - minStartHour
+	if sendingHours <= 0 {
+		sendingHours = 1 // minimum 1 hour to avoid division by zero
+	}
+
+	log.Printf("[Warmup Seed→SMTP] Found %d SMTP senders as targets (sending hours: %d-%d = %dh)", len(targets), minStartHour, maxEndHour, sendingHours)
 
 	// Process each seed
 	totalSent := 0
 	for _, seed := range seeds {
-		// Check how many this seed already sent today
+		// Check how many this seed already sent today (from warmup_seed_emails, NOT warmup_emails)
 		var sentToday int
 		s.db.QueryRow(`
-			SELECT COUNT(*) FROM warmup_emails
-			WHERE seed_id = $1 AND DATE(sent_at) = $2 AND status = 'sent'
+			SELECT COUNT(*) FROM warmup_seed_emails
+			WHERE seed_id = $1 AND DATE(sent_at) = $2
 		`, seed.ID, now.Format("2006-01-02")).Scan(&sentToday)
 
 		// Check daily limit
@@ -3540,8 +3560,6 @@ func (s *Server) processSeedToSMTPEmails() {
 
 		// Calculate how many to send this cycle
 		// Seed→SMTP runs every 3 minutes = 20 cycles per hour
-		// Sending hours = 16 (6-22), total cycles = 320
-		sendingHours := 16
 		cyclesPerHour := 20
 		totalCycles := sendingHours * cyclesPerHour
 		remaining := seed.EmailsPerDay - sentToday
