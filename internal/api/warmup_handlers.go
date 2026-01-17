@@ -1763,7 +1763,10 @@ func (s *Server) getWarmupDiagnostic(c *fiber.Ctx) error {
 		smtpRows.Scan(&host, &status, &internal, &startHour, &endHour,
 			&minEmails, &maxEmails, &recipeType, &startDate, &serverActive, &serverID)
 
-		currentDay := int(now.Sub(startDate).Hours()/24) + 1
+		// Calculate current day based on calendar days (not hours)
+		startDay := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 0, 0, 0, 0, startDate.Location())
+		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		currentDay := int(today.Sub(startDay).Hours()/24) + 1
 		if currentDay < 1 {
 			currentDay = 1
 		}
@@ -2737,8 +2740,10 @@ func (s *Server) processWarmupEmails() {
 			&recipeType, &customSchedule, &replyRate, &startHour, &endHour,
 			&host, &port, &username, &password, &tlsMode)
 
-		// Calculate current day based on start date
-		currentDay := int(now.Sub(startDate).Hours()/24) + 1
+		// Calculate current day based on calendar days (not hours)
+		startDay := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 0, 0, 0, 0, startDate.Location())
+		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		currentDay := int(today.Sub(startDay).Hours()/24) + 1
 		if currentDay < 1 {
 			currentDay = 1
 		}
@@ -4108,8 +4113,10 @@ func (s *Server) processInternalWarmup() {
 	// Process each SMTP - calculate how many to send based on schedule
 	totalEmailsSent := 0
 	for _, fromSMTP := range activeSmtps {
-		// Calculate current day based on start date
-		currentDay := int(now.Sub(fromSMTP.StartDate).Hours()/24) + 1
+		// Calculate current day based on calendar days (not hours)
+		startDay := time.Date(fromSMTP.StartDate.Year(), fromSMTP.StartDate.Month(), fromSMTP.StartDate.Day(), 0, 0, 0, 0, fromSMTP.StartDate.Location())
+		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		currentDay := int(today.Sub(startDay).Hours()/24) + 1
 		if currentDay < 1 {
 			currentDay = 1
 		}
