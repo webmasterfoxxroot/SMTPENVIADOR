@@ -3522,14 +3522,25 @@ func (s *Server) processSeedToSMTPEmails() {
 
 	log.Printf("[Warmup Seed→SMTP] Found %d SMTP senders as targets", len(targets))
 
+	// Calculate sending hours based on active SMTPs (get min start_hour and max end_hour)
+	var minStartHour, maxEndHour int
+	s.db.QueryRow(`
+		SELECT MIN(start_hour), MAX(end_hour) FROM warmup_smtps
+		WHERE status = 'active'
+	`).Scan(&minStartHour, &maxEndHour)
+	sendingHours := maxEndHour - minStartHour
+	if sendingHours <= 0 {
+		sendingHours = 16 // fallback
+	}
+
 	// Process each seed
 	totalSent := 0
 	for _, seed := range seeds {
-		// Check how many this seed already sent today
+		// Check how many this seed already sent today (from warmup_seed_emails, NOT warmup_emails)
 		var sentToday int
 		s.db.QueryRow(`
-			SELECT COUNT(*) FROM warmup_emails
-			WHERE seed_id = $1 AND DATE(sent_at) = $2 AND status = 'sent'
+			SELECT COUNT(*) FROM warmup_seed_emails
+			WHERE seed_id = $1 AND DATE(sent_at) = $2
 		`, seed.ID, now.Format("2006-01-02")).Scan(&sentToday)
 
 		// Check daily limit
@@ -3540,8 +3551,6 @@ func (s *Server) processSeedToSMTPEmails() {
 
 		// Calculate how many to send this cycle
 		// Seed→SMTP runs every 3 minutes = 20 cycles per hour
-		// Sending hours = 16 (6-22), total cycles = 320
-		sendingHours := 16
 		cyclesPerHour := 20
 		totalCycles := sendingHours * cyclesPerHour
 		remaining := seed.EmailsPerDay - sentToday
