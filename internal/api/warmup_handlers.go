@@ -2776,25 +2776,27 @@ func (s *Server) processWarmupEmails() {
 			continue
 		}
 
-		// Calculate how many to send this minute (spread throughout the day)
+		// Calculate how many to send this minute (spread throughout remaining time)
 		remaining := todayLimit - sentToday
 		sendingHours := endHour - startHour
 		if sendingHours <= 0 {
 			sendingHours = 1
 		}
-		sendingMinutes := sendingHours * 60
-		emailsPerMinute := remaining / sendingMinutes
 
-		// Always send at least 1 if there's remaining quota (probabilistic for low volume)
+		// Calculate remaining minutes in the sending window
+		currentMinuteInWindow := (currentHour - startHour) * 60 + time.Now().Minute()
+		totalSendingMinutes := sendingHours * 60
+		remainingMinutes := totalSendingMinutes - currentMinuteInWindow
+		if remainingMinutes <= 0 {
+			remainingMinutes = 1
+		}
+
+		// Use remaining minutes to calculate rate (so it catches up if behind)
+		emailsPerMinute := (remaining + remainingMinutes - 1) / remainingMinutes // Round up division
 		if emailsPerMinute < 1 && remaining > 0 {
-			// Calculate probability: remaining emails / remaining minutes in window
-			currentMinuteInWindow := (currentHour-startHour)*60 + time.Now().Minute()
-			remainingMinutes := sendingMinutes - currentMinuteInWindow
-			if remainingMinutes <= 0 {
-				remainingMinutes = 1
-			}
+			// For low volume, use probability
 			probability := float64(remaining) / float64(remainingMinutes)
-			if rand.Float64() < probability || remaining >= remainingMinutes {
+			if rand.Float64() < probability {
 				emailsPerMinute = 1
 			}
 		}
