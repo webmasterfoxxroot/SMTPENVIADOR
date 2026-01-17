@@ -12,8 +12,6 @@ import {
   Activity,
   Flame,
   AlertTriangle,
-  Clock,
-  BarChart3,
   Users,
   Zap,
   RefreshCw
@@ -37,18 +35,18 @@ function StatCard({ icon: Icon, label, value, change, changeType, subtitle, onCl
   return (
     <div
       onClick={onClick}
-      className={`bg-white rounded-2xl p-6 border transition-all duration-200 ${
-        onClick ? 'cursor-pointer hover:shadow-lg hover:border-gray-200' : ''
-      } ${highlight ? 'border-blue-200 bg-blue-50/30' : 'border-gray-100'}`}
+      className={`bg-white dark:bg-gray-800 rounded-2xl p-6 border transition-all duration-200 ${
+        onClick ? 'cursor-pointer hover:shadow-lg hover:border-gray-200 dark:hover:border-gray-600' : ''
+      } ${highlight ? 'border-blue-200 dark:border-blue-800 bg-blue-50/30 dark:bg-blue-900/20' : 'border-gray-100 dark:border-gray-700'}`}
     >
       <div className="flex items-start justify-between">
-        <div className={`p-3 rounded-xl ${highlight ? 'bg-blue-100' : 'bg-gray-100'}`}>
-          <Icon className={`h-5 w-5 ${highlight ? 'text-blue-600' : 'text-gray-600'}`} />
+        <div className={`p-3 rounded-xl ${highlight ? 'bg-blue-100 dark:bg-blue-900/50' : 'bg-gray-100 dark:bg-gray-700'}`}>
+          <Icon className={`h-5 w-5 ${highlight ? 'text-blue-600 dark:text-blue-400' : 'text-gray-600 dark:text-gray-400'}`} />
         </div>
         {change !== undefined && (
           <div className={`flex items-center gap-1 text-sm font-medium ${
-            changeType === 'positive' ? 'text-emerald-600' :
-            changeType === 'negative' ? 'text-red-500' : 'text-gray-400'
+            changeType === 'positive' ? 'text-emerald-600 dark:text-emerald-400' :
+            changeType === 'negative' ? 'text-red-500 dark:text-red-400' : 'text-gray-400 dark:text-gray-500'
           }`}>
             {changeType === 'positive' ? <ArrowUpRight className="h-4 w-4" /> :
              changeType === 'negative' ? <ArrowDownRight className="h-4 w-4" /> : null}
@@ -57,22 +55,9 @@ function StatCard({ icon: Icon, label, value, change, changeType, subtitle, onCl
         )}
       </div>
       <div className="mt-4">
-        <p className="text-3xl font-bold text-gray-900">{value}</p>
-        <p className="text-sm text-gray-500 mt-1">{label}</p>
-        {subtitle && <p className="text-xs text-gray-400 mt-1">{subtitle}</p>}
-      </div>
-    </div>
-  )
-}
-
-// Mini Stat for inline display
-function MiniStat({ label, value, icon: Icon }) {
-  return (
-    <div className="flex items-center gap-3 px-4 py-3 bg-gray-50 rounded-xl">
-      {Icon && <Icon className="h-4 w-4 text-gray-400" />}
-      <div>
-        <p className="text-lg font-semibold text-gray-900">{value}</p>
-        <p className="text-xs text-gray-500">{label}</p>
+        <p className="text-3xl font-bold text-gray-900 dark:text-white">{value}</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{label}</p>
+        {subtitle && <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{subtitle}</p>}
       </div>
     </div>
   )
@@ -88,7 +73,7 @@ function ProgressRing({ value, size = 120, strokeWidth = 10, color = '#3b82f6' }
     <div className="relative" style={{ width: size, height: size }}>
       <svg className="transform -rotate-90" width={size} height={size}>
         <circle
-          className="text-gray-100"
+          className="text-gray-100 dark:text-gray-700"
           strokeWidth={strokeWidth}
           stroke="currentColor"
           fill="transparent"
@@ -110,7 +95,7 @@ function ProgressRing({ value, size = 120, strokeWidth = 10, color = '#3b82f6' }
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-2xl font-bold text-gray-900">{value}%</span>
+        <span className="text-2xl font-bold text-gray-900 dark:text-white">{value}%</span>
       </div>
     </div>
   )
@@ -119,14 +104,14 @@ function ProgressRing({ value, size = 120, strokeWidth = 10, color = '#3b82f6' }
 // Activity Item
 function ActivityItem({ type, email, time }) {
   return (
-    <div className="flex items-center gap-3 py-3 border-b border-gray-50 last:border-0">
+    <div className="flex items-center gap-3 py-3 border-b border-gray-50 dark:border-gray-700/50 last:border-0">
       <div className={`w-2 h-2 rounded-full ${
         type === 'open' ? 'bg-emerald-500' :
-        type === 'click' ? 'bg-blue-500' : 'bg-gray-300'
+        type === 'click' ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'
       }`} />
       <div className="flex-1 min-w-0">
-        <p className="text-sm text-gray-700 truncate">{email}</p>
-        <p className="text-xs text-gray-400">{type === 'open' ? 'Abriu' : 'Clicou'} - {time}</p>
+        <p className="text-sm text-gray-700 dark:text-gray-300 truncate">{email}</p>
+        <p className="text-xs text-gray-400 dark:text-gray-500">{type === 'open' ? 'Abriu' : 'Clicou'} - {time}</p>
       </div>
     </div>
   )
@@ -136,8 +121,8 @@ function ActivityItem({ type, email, time }) {
 function CustomTooltip({ active, payload, label }) {
   if (active && payload && payload.length) {
     return (
-      <div className="bg-white px-4 py-3 rounded-xl shadow-lg border border-gray-100">
-        <p className="text-sm font-medium text-gray-900 mb-1">{label}</p>
+      <div className="bg-white dark:bg-gray-800 px-4 py-3 rounded-xl shadow-lg border border-gray-100 dark:border-gray-700">
+        <p className="text-sm font-medium text-gray-900 dark:text-white mb-1">{label}</p>
         {payload.map((entry, index) => (
           <p key={index} className="text-sm" style={{ color: entry.color }}>
             {entry.name}: {entry.value?.toLocaleString()}
@@ -269,13 +254,13 @@ function Dashboard() {
     <div className="space-y-6 pb-8">
       {/* Alert Banner */}
       {smtpHealth.length > 0 && (
-        <div className="bg-red-50 border border-red-100 rounded-2xl p-4 flex items-center gap-4">
-          <div className="p-2 bg-red-100 rounded-xl">
-            <AlertTriangle className="h-5 w-5 text-red-600" />
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800 rounded-2xl p-4 flex items-center gap-4">
+          <div className="p-2 bg-red-100 dark:bg-red-900/50 rounded-xl">
+            <AlertTriangle className="h-5 w-5 text-red-600 dark:text-red-400" />
           </div>
           <div className="flex-1">
-            <p className="font-medium text-red-800">{smtpHealth.length} SMTP(s) com problemas</p>
-            <p className="text-sm text-red-600">{smtpHealth.map(s => s.host).join(', ')}</p>
+            <p className="font-medium text-red-800 dark:text-red-300">{smtpHealth.length} SMTP(s) com problemas</p>
+            <p className="text-sm text-red-600 dark:text-red-400">{smtpHealth.map(s => s.host).join(', ')}</p>
           </div>
           <button
             onClick={() => navigate('/smtp')}
@@ -289,13 +274,13 @@ function Dashboard() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-          <p className="text-gray-500 mt-1">Visao geral do sistema</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">Visao geral do sistema</p>
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-xl">
+          <div className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-800 rounded-xl">
             <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-            <span className="text-sm text-gray-600">{stats.sending_rate}/s</span>
+            <span className="text-sm text-gray-600 dark:text-gray-400">{stats.sending_rate}/s</span>
           </div>
           <button
             onClick={() => navigate('/campaigns')}
@@ -307,13 +292,13 @@ function Dashboard() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit">
+      <div className="flex gap-1 p-1 bg-gray-100 dark:bg-gray-800 rounded-xl w-fit">
         <button
           onClick={() => setActiveTab('campaigns')}
           className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-all ${
             activeTab === 'campaigns'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-600 hover:text-gray-900'
+              ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+              : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
           }`}
         >
           Campanhas
@@ -322,8 +307,8 @@ function Dashboard() {
           onClick={() => setActiveTab('warmup')}
           className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-all ${
             activeTab === 'warmup'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-600 hover:text-gray-900'
+              ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+              : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
           }`}
         >
           Warmup
@@ -367,42 +352,42 @@ function Dashboard() {
 
           {/* Secondary Stats Row */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-white rounded-2xl p-5 border border-gray-100">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 border border-gray-100 dark:border-gray-700">
               <div className="flex items-center gap-3">
                 <Server className="h-5 w-5 text-gray-400" />
                 <div>
-                  <p className="text-2xl font-bold text-gray-900">{stats.active_smtps}/{stats.total_smtps}</p>
-                  <p className="text-sm text-gray-500">SMTPs Ativos</p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{stats.active_smtps}/{stats.total_smtps}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">SMTPs Ativos</p>
                 </div>
               </div>
             </div>
-            <div className="bg-white rounded-2xl p-5 border border-gray-100">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 border border-gray-100 dark:border-gray-700">
               <div className="flex items-center gap-3">
                 <TrendingUp className="h-5 w-5 text-gray-400" />
                 <div>
-                  <p className="text-2xl font-bold text-gray-900">{stats.active_campaigns}</p>
-                  <p className="text-sm text-gray-500">Campanhas Ativas</p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{stats.active_campaigns}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Campanhas Ativas</p>
                 </div>
               </div>
             </div>
             <div
-              className="bg-white rounded-2xl p-5 border border-gray-100 cursor-pointer hover:border-gray-200 transition-colors"
+              className="bg-white dark:bg-gray-800 rounded-2xl p-5 border border-gray-100 dark:border-gray-700 cursor-pointer hover:border-gray-200 dark:hover:border-gray-600 transition-colors"
               onClick={() => navigate('/lists')}
             >
               <div className="flex items-center gap-3">
                 <Mail className="h-5 w-5 text-gray-400" />
                 <div>
-                  <p className="text-2xl font-bold text-gray-900">{formatNumber(stats.total_emails)}</p>
-                  <p className="text-sm text-gray-500">{stats.total_lists} listas</p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{formatNumber(stats.total_emails)}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">{stats.total_lists} listas</p>
                 </div>
               </div>
             </div>
-            <div className="bg-white rounded-2xl p-5 border border-gray-100">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 border border-gray-100 dark:border-gray-700">
               <div className="flex items-center gap-3">
                 <CheckCircle className="h-5 w-5 text-gray-400" />
                 <div>
-                  <p className="text-2xl font-bold text-gray-900">{deliveryRate}%</p>
-                  <p className="text-sm text-gray-500">Taxa de Entrega</p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{deliveryRate}%</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Taxa de Entrega</p>
                 </div>
               </div>
             </div>
@@ -411,23 +396,23 @@ function Dashboard() {
           {/* Chart and Activity */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Chart */}
-            <div className="lg:col-span-2 bg-white rounded-2xl p-6 border border-gray-100">
+            <div className="lg:col-span-2 bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
               <div className="flex items-center justify-between mb-6">
                 <div>
-                  <h2 className="text-lg font-semibold text-gray-900">Atividade</h2>
-                  <p className="text-sm text-gray-500">
+                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Atividade</h2>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
                     {period === 'today' ? 'Hoje por hora' : period === 'week' ? 'Ultimos 7 dias' : 'Ultimos 30 dias'}
                   </p>
                 </div>
-                <div className="flex gap-1 p-1 bg-gray-100 rounded-lg">
+                <div className="flex gap-1 p-1 bg-gray-100 dark:bg-gray-700 rounded-lg">
                   {['today', 'week', 'month'].map((p) => (
                     <button
                       key={p}
                       onClick={() => setPeriod(p)}
                       className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                         period === p
-                          ? 'bg-white text-gray-900 shadow-sm'
-                          : 'text-gray-600 hover:text-gray-900'
+                          ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm'
+                          : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
                       }`}
                     >
                       {p === 'today' ? 'Hoje' : p === 'week' ? '7D' : '30D'}
@@ -439,15 +424,15 @@ function Dashboard() {
               <div className="flex gap-6 mb-4">
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded-full bg-blue-500" />
-                  <span className="text-sm text-gray-600">Enviados</span>
+                  <span className="text-sm text-gray-600 dark:text-gray-400">Enviados</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded-full bg-emerald-500" />
-                  <span className="text-sm text-gray-600">Abertos</span>
+                  <span className="text-sm text-gray-600 dark:text-gray-400">Abertos</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded-full bg-amber-500" />
-                  <span className="text-sm text-gray-600">Cliques</span>
+                  <span className="text-sm text-gray-600 dark:text-gray-400">Cliques</span>
                 </div>
               </div>
 
@@ -465,17 +450,19 @@ function Dashboard() {
                           <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
                         </linearGradient>
                       </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                      <CartesianGrid strokeDasharray="3 3" className="stroke-gray-200 dark:stroke-gray-700" />
                       <XAxis
                         dataKey="hour"
                         tickFormatter={(val) => `${val}h`}
-                        stroke="#9ca3af"
+                        className="text-gray-500 dark:text-gray-400"
+                        stroke="currentColor"
                         fontSize={12}
                         axisLine={false}
                         tickLine={false}
                       />
                       <YAxis
-                        stroke="#9ca3af"
+                        className="text-gray-500 dark:text-gray-400"
+                        stroke="currentColor"
                         fontSize={12}
                         axisLine={false}
                         tickLine={false}
@@ -500,16 +487,18 @@ function Dashboard() {
                     </AreaChart>
                   ) : (
                     <BarChart data={stats.hourly || []}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                      <CartesianGrid strokeDasharray="3 3" className="stroke-gray-200 dark:stroke-gray-700" />
                       <XAxis
                         dataKey="label"
-                        stroke="#9ca3af"
+                        className="text-gray-500 dark:text-gray-400"
+                        stroke="currentColor"
                         fontSize={11}
                         axisLine={false}
                         tickLine={false}
                       />
                       <YAxis
-                        stroke="#9ca3af"
+                        className="text-gray-500 dark:text-gray-400"
+                        stroke="currentColor"
                         fontSize={12}
                         axisLine={false}
                         tickLine={false}
@@ -524,9 +513,9 @@ function Dashboard() {
             </div>
 
             {/* Live Activity */}
-            <div className="bg-white rounded-2xl p-6 border border-gray-100">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-gray-900">Atividade ao Vivo</h2>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Atividade ao Vivo</h2>
                 <div className="flex items-center gap-2">
                   <RefreshCw className="h-3 w-3 text-gray-400 animate-spin" />
                   <span className="text-xs text-gray-400">Auto</span>
@@ -545,7 +534,7 @@ function Dashboard() {
                   ))}
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-12 text-gray-400">
+                <div className="flex flex-col items-center justify-center py-12 text-gray-400 dark:text-gray-500">
                   <Activity className="h-10 w-10 mb-3 opacity-50" />
                   <p className="text-sm">Nenhuma atividade</p>
                 </div>
@@ -577,11 +566,11 @@ function Dashboard() {
               value={warmupStats.active_smtps || 0}
               subtitle="Em warmup"
             />
-            <div className="bg-white rounded-2xl p-6 border border-gray-100">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-gray-500 mb-1">Inbox Rate</p>
-                  <p className="text-3xl font-bold text-gray-900">
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Inbox Rate</p>
+                  <p className="text-3xl font-bold text-gray-900 dark:text-white">
                     {warmupStats.inbox_rate?.toFixed(1) || 0}%
                   </p>
                 </div>
@@ -596,72 +585,72 @@ function Dashboard() {
           </div>
 
           {/* Warmup Quick Actions */}
-          <div className="bg-white rounded-2xl p-6 border border-gray-100">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Acoes Rapidas</h2>
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Acoes Rapidas</h2>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <button
                 onClick={() => navigate('/warmup')}
-                className="flex items-center gap-4 p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-left"
+                className="flex items-center gap-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-left"
               >
-                <div className="p-3 bg-orange-100 rounded-xl">
-                  <Flame className="h-5 w-5 text-orange-600" />
+                <div className="p-3 bg-orange-100 dark:bg-orange-900/30 rounded-xl">
+                  <Flame className="h-5 w-5 text-orange-600 dark:text-orange-400" />
                 </div>
                 <div>
-                  <p className="font-medium text-gray-900">Gerenciar Warmup</p>
-                  <p className="text-sm text-gray-500">Configurar SMTPs e Seeds</p>
+                  <p className="font-medium text-gray-900 dark:text-white">Gerenciar Warmup</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Configurar SMTPs e Seeds</p>
                 </div>
               </button>
               <button
                 onClick={() => navigate('/smtp')}
-                className="flex items-center gap-4 p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-left"
+                className="flex items-center gap-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-left"
               >
-                <div className="p-3 bg-blue-100 rounded-xl">
-                  <Server className="h-5 w-5 text-blue-600" />
+                <div className="p-3 bg-blue-100 dark:bg-blue-900/30 rounded-xl">
+                  <Server className="h-5 w-5 text-blue-600 dark:text-blue-400" />
                 </div>
                 <div>
-                  <p className="font-medium text-gray-900">Servidores SMTP</p>
-                  <p className="text-sm text-gray-500">Adicionar novos servidores</p>
+                  <p className="font-medium text-gray-900 dark:text-white">Servidores SMTP</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Adicionar novos servidores</p>
                 </div>
               </button>
               <button
                 onClick={() => navigate('/warmup')}
-                className="flex items-center gap-4 p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-left"
+                className="flex items-center gap-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-left"
               >
-                <div className="p-3 bg-emerald-100 rounded-xl">
-                  <Users className="h-5 w-5 text-emerald-600" />
+                <div className="p-3 bg-emerald-100 dark:bg-emerald-900/30 rounded-xl">
+                  <Users className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
                 </div>
                 <div>
-                  <p className="font-medium text-gray-900">Seeds</p>
-                  <p className="text-sm text-gray-500">Gerenciar contas seed</p>
+                  <p className="font-medium text-gray-900 dark:text-white">Seeds</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Gerenciar contas seed</p>
                 </div>
               </button>
             </div>
           </div>
 
           {/* Warmup Info Card */}
-          <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-2xl p-6 border border-orange-100">
+          <div className="bg-gradient-to-br from-orange-50 to-amber-50 dark:from-orange-900/20 dark:to-amber-900/20 rounded-2xl p-6 border border-orange-100 dark:border-orange-800">
             <div className="flex items-start gap-4">
-              <div className="p-3 bg-orange-100 rounded-xl">
-                <Flame className="h-6 w-6 text-orange-600" />
+              <div className="p-3 bg-orange-100 dark:bg-orange-900/50 rounded-xl">
+                <Flame className="h-6 w-6 text-orange-600 dark:text-orange-400" />
               </div>
               <div>
-                <h3 className="font-semibold text-gray-900">Sobre o Warmup</h3>
-                <p className="text-sm text-gray-600 mt-1">
+                <h3 className="font-semibold text-gray-900 dark:text-white">Sobre o Warmup</h3>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                   O warmup ajuda a construir a reputacao dos seus servidores SMTP enviando emails
                   gradualmente para contas seed. Isso aumenta a taxa de entrega na caixa de entrada.
                 </p>
                 <div className="flex gap-6 mt-4">
                   <div>
-                    <p className="text-2xl font-bold text-orange-600">{warmupStats.active_smtps || 0}</p>
-                    <p className="text-xs text-gray-500">SMTPs em warmup</p>
+                    <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">{warmupStats.active_smtps || 0}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">SMTPs em warmup</p>
                   </div>
                   <div>
-                    <p className="text-2xl font-bold text-orange-600">{formatNumber(warmupStats.total_sent || 0)}</p>
-                    <p className="text-xs text-gray-500">Emails enviados</p>
+                    <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">{formatNumber(warmupStats.total_sent || 0)}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">Emails enviados</p>
                   </div>
                   <div>
-                    <p className="text-2xl font-bold text-orange-600">{warmupStats.inbox_rate?.toFixed(0) || 0}%</p>
-                    <p className="text-xs text-gray-500">Taxa inbox</p>
+                    <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">{warmupStats.inbox_rate?.toFixed(0) || 0}%</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">Taxa inbox</p>
                   </div>
                 </div>
               </div>
