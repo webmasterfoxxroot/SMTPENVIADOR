@@ -881,11 +881,11 @@ func (s *Server) sendWarmupEmailWithResult(warmupID, smtpID, host string, port i
 		fromAddress = fmt.Sprintf("%s <%s>", senderName.String, senderEmail)
 	}
 
-	// Get a random template
+	// Get a random template (only 'send' type, not 'reply')
 	var subject, body string
 	err = s.db.QueryRow(`
 		SELECT subject, body FROM warmup_templates
-		WHERE active = true
+		WHERE active = true AND template_type = 'send'
 		ORDER BY RANDOM()
 		LIMIT 1
 	`).Scan(&subject, &body)
@@ -1569,9 +1569,9 @@ func (s *Server) triggerSeedSend(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Nenhum SMTP ativo encontrado"})
 	}
 
-	// Get random template
+	// Get random template (only 'send' type, not 'reply')
 	var subject, body string
-	s.db.QueryRow(`SELECT subject, body FROM warmup_templates WHERE active = true ORDER BY RANDOM() LIMIT 1`).Scan(&subject, &body)
+	s.db.QueryRow(`SELECT subject, body FROM warmup_templates WHERE active = true AND template_type = 'send' ORDER BY RANDOM() LIMIT 1`).Scan(&subject, &body)
 
 	subject = subject + " #" + fmt.Sprintf("%d", rand.Intn(9999))
 	messageID := fmt.Sprintf("<%s@seed-warmup>", uuid.New().String())
@@ -2898,11 +2898,11 @@ func (s *Server) sendWarmupEmail(warmupID, smtpID, host string, port int, userna
 		fromAddress = fmt.Sprintf("%s <%s>", senderName.String, senderEmail)
 	}
 
-	// Get a random template
+	// Get a random template (only 'send' type, not 'reply')
 	var subject, body string
 	err = s.db.QueryRow(`
 		SELECT subject, body FROM warmup_templates
-		WHERE active = true
+		WHERE active = true AND template_type = 'send'
 		ORDER BY RANDOM()
 		LIMIT 1
 	`).Scan(&subject, &body)
@@ -3633,11 +3633,11 @@ func (s *Server) processSeedToSMTPEmails() {
 			// Pick random target
 			target := targets[rand.Intn(len(targets))]
 
-			// Get a random template
+			// Get a random template (only 'send' type, not 'reply')
 			var subject, body string
 			err = s.db.QueryRow(`
 				SELECT subject, body FROM warmup_templates
-				WHERE active = true ORDER BY RANDOM() LIMIT 1
+				WHERE active = true AND template_type = 'send' ORDER BY RANDOM() LIMIT 1
 			`).Scan(&subject, &body)
 			if err != nil {
 				continue
@@ -4284,11 +4284,11 @@ func (s *Server) processInternalWarmup() {
 				continue
 			}
 
-			// Get a random template
+			// Get a random template (only 'send' type, not 'reply')
 			var subject, body string
 			err = s.db.QueryRow(`
 				SELECT subject, body FROM warmup_templates
-				WHERE active = true ORDER BY RANDOM() LIMIT 1
+				WHERE active = true AND template_type = 'send' ORDER BY RANDOM() LIMIT 1
 			`).Scan(&subject, &body)
 			if err != nil {
 				continue
