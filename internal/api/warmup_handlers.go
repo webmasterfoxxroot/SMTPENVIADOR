@@ -3486,8 +3486,9 @@ func (s *Server) processSeedToSMTPEmails() {
 	log.Printf("[Warmup Seed→SMTP] Found %d seeds with SMTP (current hour: %d)", len(seeds), currentHour)
 
 	// Get active warmup SMTPs and their senders (only those within their configured hours)
+	// Also get start_hour and end_hour to calculate sending window
 	smtpRows, err := s.db.Query(`
-		SELECT w.id, w.smtp_id, ss.email as sender_email
+		SELECT w.id, w.smtp_id, ss.email as sender_email, w.start_hour, w.end_hour
 		FROM warmup_smtps w
 		JOIN smtp_senders ss ON ss.smtp_id = w.smtp_id
 		WHERE w.status = 'active' AND ss.active = true
@@ -3505,14 +3506,27 @@ func (s *Server) processSeedToSMTPEmails() {
 		SenderEmail string
 	}
 
+	// Track min/max hours from the SMTPs we're actually using
+	minStartHour := 24
+	maxEndHour := 0
+
 	for smtpRows.Next() {
 		var target struct {
 			WarmupID    string
 			SMTPID      string
 			SenderEmail string
 		}
-		smtpRows.Scan(&target.WarmupID, &target.SMTPID, &target.SenderEmail)
+		var startHour, endHour int
+		smtpRows.Scan(&target.WarmupID, &target.SMTPID, &target.SenderEmail, &startHour, &endHour)
 		targets = append(targets, target)
+
+		// Track the actual hours from configured SMTPs
+		if startHour < minStartHour {
+			minStartHour = startHour
+		}
+		if endHour > maxEndHour {
+			maxEndHour = endHour
+		}
 	}
 
 	if len(targets) == 0 {
@@ -3520,18 +3534,13 @@ func (s *Server) processSeedToSMTPEmails() {
 		return
 	}
 
-	log.Printf("[Warmup Seed→SMTP] Found %d SMTP senders as targets", len(targets))
-
-	// Calculate sending hours based on active SMTPs (get min start_hour and max end_hour)
-	var minStartHour, maxEndHour int
-	s.db.QueryRow(`
-		SELECT MIN(start_hour), MAX(end_hour) FROM warmup_smtps
-		WHERE status = 'active'
-	`).Scan(&minStartHour, &maxEndHour)
+	// Calculate sending hours from the configured SMTP hours
 	sendingHours := maxEndHour - minStartHour
 	if sendingHours <= 0 {
-		sendingHours = 16 // fallback
+		sendingHours = 1 // minimum 1 hour to avoid division by zero
 	}
+
+	log.Printf("[Warmup Seed→SMTP] Found %d SMTP senders as targets (sending hours: %d-%d = %dh)", len(targets), minStartHour, maxEndHour, sendingHours)
 
 	// Process each seed
 	totalSent := 0
