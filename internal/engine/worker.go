@@ -34,9 +34,9 @@ func NewWorker(id int, cfg *config.Config, db *sql.DB, q *queue.Manager, pool *S
 	}
 }
 
-// Start starts the worker loop
+// Start starts the worker loop (legacy - uses all queues)
 func (w *Worker) Start(stopChan chan struct{}) {
-	log.Printf("👷 Worker %d started", w.id)
+	log.Printf("👷 Worker %d started (legacy)", w.id)
 	w.stats.ActiveWorkers.Add(1)
 	defer w.stats.ActiveWorkers.Add(-1)
 
@@ -47,6 +47,40 @@ func (w *Worker) Start(stopChan chan struct{}) {
 			return
 		default:
 			w.processJob()
+		}
+	}
+}
+
+// StartCampaign starts a dedicated campaign worker (uses campaign queue only)
+func (w *Worker) StartCampaign(stopChan chan struct{}) {
+	log.Printf("📧 Campaign Worker %d started", w.id)
+	w.stats.ActiveWorkers.Add(1)
+	defer w.stats.ActiveWorkers.Add(-1)
+
+	for {
+		select {
+		case <-stopChan:
+			log.Printf("📧 Campaign Worker %d stopping", w.id)
+			return
+		default:
+			w.processCampaignJob()
+		}
+	}
+}
+
+// StartWarmup starts a dedicated warmup worker (uses warmup queue only)
+func (w *Worker) StartWarmup(stopChan chan struct{}) {
+	log.Printf("🔥 Warmup Worker %d started", w.id)
+	w.stats.ActiveWorkers.Add(1)
+	defer w.stats.ActiveWorkers.Add(-1)
+
+	for {
+		select {
+		case <-stopChan:
+			log.Printf("🔥 Warmup Worker %d stopping", w.id)
+			return
+		default:
+			w.processWarmupJob()
 		}
 	}
 }
@@ -182,6 +216,178 @@ func (w *Worker) processJob() {
 	// Log every email sent for monitoring
 	sent := w.stats.TotalSent.Load()
 	log.Printf("✅ [%d] Email enviado para %s via %s", sent, job.To, smtp.Name)
+}
+
+// processCampaignJob processes jobs from the CAMPAIGN queue only
+func (w *Worker) processCampaignJob() {
+	// Get job from CAMPAIGN queue only
+	job, err := w.queue.PopCampaign()
+	if err != nil {
+		log.Printf("⚠️ Campaign Worker %d: Failed to pop job: %v", w.id, err)
+		time.Sleep(500 * time.Millisecond)
+		return
+	}
+
+	// No job available, wait a bit
+	if job == nil {
+		time.Sleep(100 * time.Millisecond)
+		return
+	}
+
+	// Process the job (same logic as processJob but uses campaign queue for retries)
+	w.processJobWithQueue(job, "campaign")
+}
+
+// processWarmupJob processes jobs from the WARMUP queue only
+func (w *Worker) processWarmupJob() {
+	// Get job from WARMUP queue only
+	job, err := w.queue.PopWarmup()
+	if err != nil {
+		log.Printf("⚠️ Warmup Worker %d: Failed to pop job: %v", w.id, err)
+		time.Sleep(500 * time.Millisecond)
+		return
+	}
+
+	// No job available, wait a bit (warmup can wait longer)
+	if job == nil {
+		time.Sleep(500 * time.Millisecond)
+		return
+	}
+
+	// Process the job (same logic as processJob but uses warmup queue for retries)
+	w.processJobWithQueue(job, "warmup")
+}
+
+// processJobWithQueue processes a job using the specified queue for retries
+func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
+	// Check job age - if job is too old and has been retried many times, skip it
+	if job.Retries > 10 {
+		log.Printf("⚠️ Worker %d: Job for %s exceeded max retries (%d), marking as failed", w.id, job.To, job.Retries)
+		w.queue.PushFailed(job, "Max retries exceeded")
+		w.updateEmailStatus(job.ID, "failed", "Max retries exceeded")
+		w.updateCampaignFailedCount(job.CampaignID)
+		return
+	}
+
+	// Get SMTP connection
+	smtp := w.smtpPool.GetNextSMTP()
+	if smtp == nil {
+		// No SMTPs available - wait longer before pushing back
+		if job.Retries == 0 {
+			log.Printf("⚠️ Worker %d: No SMTP available for %s, will retry", w.id, job.To)
+		}
+		job.Retries++
+		w.pushToQueue(job, queueType)
+		time.Sleep(5 * time.Second)
+		return
+	}
+
+	// Get next sender from SMTP (rotates automatically)
+	sender := smtp.GetNextSender()
+	if sender == nil {
+		if job.Retries == 0 {
+			log.Printf("⚠️ Worker %d: No senders for SMTP %s", w.id, smtp.Name)
+		}
+		job.Retries++
+		w.pushToQueue(job, queueType)
+		time.Sleep(2 * time.Second)
+		return
+	}
+
+	// Check rate limit
+	if !w.queue.CheckRateLimit(smtp.ID, smtp.MaxPerMinute) {
+		// Rate limited, push back without incrementing retries (this is normal)
+		w.pushToQueue(job, queueType)
+		time.Sleep(100 * time.Millisecond)
+		return
+	}
+
+	// Process variables in content
+	htmlContent := w.processVariables(job.HTMLContent, job.Variables, job.To, job.ToName)
+	textContent := w.processVariables(job.TextContent, job.Variables, job.To, job.ToName)
+	subject := w.processVariables(job.Subject, job.Variables, job.To, job.ToName)
+
+	// Get tracking domain (from job or fallback to config)
+	trackingDomain := job.TrackingDomain
+	if trackingDomain == "" {
+		trackingDomain = w.cfg.TrackingDomain
+	}
+
+	// Add tracking pixel for open tracking
+	if job.TrackOpens && trackingDomain != "" {
+		trackingPixel := w.generateTrackingPixel(trackingDomain, job.CampaignID, job.EmailID)
+		htmlContent = strings.Replace(htmlContent, "</body>", trackingPixel+"</body>", 1)
+	}
+
+	// Process links for click tracking
+	if job.TrackClicks && trackingDomain != "" {
+		htmlContent = w.processLinks(trackingDomain, htmlContent, job.CampaignID, job.EmailID)
+	}
+
+	// Use email from SMTP sender, but name from campaign
+	fromEmail := sender.Email
+	fromName := job.FromName
+	replyTo := sender.ReplyTo
+	if replyTo == "" {
+		replyTo = job.ReplyTo
+	}
+
+	// Send email
+	err := smtp.Send(SendParams{
+		From:        fromEmail,
+		FromName:    fromName,
+		To:          job.To,
+		ToName:      job.ToName,
+		ReplyTo:     replyTo,
+		Subject:     subject,
+		HTMLContent: htmlContent,
+		TextContent: textContent,
+	})
+
+	if err != nil {
+		w.stats.TotalFailed.Add(1)
+		w.queue.IncrementStat("failed", 1)
+		w.updateEmailStatus(job.ID, "failed", err.Error())
+
+		// Retry logic
+		if job.Retries < 3 {
+			job.Retries++
+			log.Printf("🔄 Worker %d: Retry %d for %s", w.id, job.Retries, job.To)
+			w.pushToQueue(job, queueType)
+		} else {
+			w.queue.PushFailed(job, err.Error())
+			w.updateCampaignFailedCount(job.CampaignID)
+		}
+
+		log.Printf("❌ Worker %d: Failed to send to %s: %v", w.id, job.To, err)
+		return
+	}
+
+	// Success
+	w.stats.TotalSent.Add(1)
+	w.queue.IncrementStat("sent", 1)
+	w.updateEmailStatus(job.ID, "sent", "")
+	w.updateSMTPStats(smtp.ID, true)
+	w.updateCampaignSentCount(job.CampaignID)
+
+	sent := w.stats.TotalSent.Load()
+	prefix := "📧"
+	if queueType == "warmup" {
+		prefix = "🔥"
+	}
+	log.Printf("%s [%d] Email enviado para %s via %s", prefix, sent, job.To, smtp.Name)
+}
+
+// pushToQueue pushes a job back to the appropriate queue
+func (w *Worker) pushToQueue(job *queue.EmailJob, queueType string) {
+	switch queueType {
+	case "campaign":
+		w.queue.PushCampaign(job)
+	case "warmup":
+		w.queue.PushWarmup(job)
+	default:
+		w.queue.Push(job)
+	}
 }
 
 // updateCampaignSentCount updates the campaign sent_count
