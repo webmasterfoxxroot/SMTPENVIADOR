@@ -97,6 +97,7 @@ func (s *Server) initWarmupTables() {
 	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS warmup_smtps (
 			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+			user_id UUID REFERENCES users(id) ON DELETE CASCADE,
 			smtp_id UUID NOT NULL REFERENCES smtp_servers(id) ON DELETE CASCADE,
 			status VARCHAR(20) DEFAULT 'active',
 			recipe_type VARCHAR(20) DEFAULT 'progressive',
@@ -118,6 +119,8 @@ func (s *Server) initWarmupTables() {
 			updated_at TIMESTAMP DEFAULT NOW()
 		)
 	`)
+	// Add user_id column if missing (migration)
+	s.db.Exec(`ALTER TABLE warmup_smtps ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE`)
 	if err != nil {
 		log.Printf("[Warmup] Error creating warmup_smtps table: %v", err)
 	}
@@ -131,7 +134,8 @@ func (s *Server) initWarmupTables() {
 	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS warmup_seeds (
 			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-			email VARCHAR(255) NOT NULL UNIQUE,
+			user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+			email VARCHAR(255) NOT NULL,
 			password VARCHAR(255) NOT NULL,
 			provider VARCHAR(50) DEFAULT 'other',
 			imap_host VARCHAR(255) NOT NULL,
@@ -147,9 +151,15 @@ func (s *Server) initWarmupTables() {
 			last_check TIMESTAMP,
 			error_message TEXT,
 			created_at TIMESTAMP DEFAULT NOW(),
-			updated_at TIMESTAMP DEFAULT NOW()
+			updated_at TIMESTAMP DEFAULT NOW(),
+			UNIQUE(user_id, email)
 		)
 	`)
+	// Add user_id column if missing (migration)
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE`)
+	// Update unique constraint for multi-tenancy (drop old, add new)
+	s.db.Exec(`ALTER TABLE warmup_seeds DROP CONSTRAINT IF EXISTS warmup_seeds_email_key`)
+	s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS warmup_seeds_user_email_unique ON warmup_seeds(user_id, email)`)
 	// Add new columns if they don't exist (migration)
 	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS send_rate INT DEFAULT 50`)
 	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS reply_rate INT DEFAULT 50`)
@@ -213,6 +223,7 @@ func (s *Server) initWarmupTables() {
 	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS warmup_templates (
 			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+			user_id UUID REFERENCES users(id) ON DELETE CASCADE,
 			subject VARCHAR(500) NOT NULL,
 			body TEXT NOT NULL,
 			category VARCHAR(50) DEFAULT 'business',
@@ -221,6 +232,8 @@ func (s *Server) initWarmupTables() {
 			created_at TIMESTAMP DEFAULT NOW()
 		)
 	`)
+	// Add user_id column if missing (migration)
+	s.db.Exec(`ALTER TABLE warmup_templates ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE`)
 	if err != nil {
 		log.Printf("[Warmup] Error creating warmup_templates table: %v", err)
 	}
@@ -292,6 +305,7 @@ func (s *Server) initWarmupTables() {
 	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS warmup_activity (
 			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+			user_id UUID REFERENCES users(id) ON DELETE CASCADE,
 			activity_type VARCHAR(50) NOT NULL,
 			email_id UUID,
 			seed_id UUID REFERENCES warmup_seeds(id) ON DELETE SET NULL,
@@ -303,6 +317,8 @@ func (s *Server) initWarmupTables() {
 			created_at TIMESTAMP DEFAULT NOW()
 		)
 	`)
+	// Add user_id column if missing (migration)
+	s.db.Exec(`ALTER TABLE warmup_activity ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE`)
 	if err != nil {
 		log.Printf("[Warmup] Error creating warmup_activity table: %v", err)
 	}
@@ -314,16 +330,23 @@ func (s *Server) initWarmupTables() {
 	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS warmup_settings (
 			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-			setting_key VARCHAR(100) UNIQUE NOT NULL,
+			user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+			setting_key VARCHAR(100) NOT NULL,
 			setting_value TEXT NOT NULL,
 			description TEXT,
 			created_at TIMESTAMP DEFAULT NOW(),
-			updated_at TIMESTAMP DEFAULT NOW()
+			updated_at TIMESTAMP DEFAULT NOW(),
+			UNIQUE(user_id, setting_key)
 		)
 	`)
 	if err != nil {
 		log.Printf("[Warmup] Error creating warmup_settings table: %v", err)
 	}
+	// Add user_id column if missing (migration)
+	s.db.Exec(`ALTER TABLE warmup_settings ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE`)
+	// Update unique constraint for multi-tenancy
+	s.db.Exec(`ALTER TABLE warmup_settings DROP CONSTRAINT IF EXISTS warmup_settings_setting_key_key`)
+	s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS warmup_settings_user_key_unique ON warmup_settings(user_id, setting_key)`)
 
 	// Insert default settings
 	s.insertDefaultWarmupSettings()
@@ -496,6 +519,7 @@ func (s *Server) insertDefaultWarmupTemplates() {
 
 // listWarmupSMTPs returns all SMTPs enrolled in warmup
 func (s *Server) listWarmupSMTPs(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	rows, err := s.db.Query(`
 		SELECT
 			w.id, w.smtp_id, COALESCE(s.name, 'Unknown') as smtp_name,
@@ -510,8 +534,9 @@ func (s *Server) listWarmupSMTPs(c *fiber.Ctx) error {
 			COALESCE(w.created_at, NOW()), COALESCE(w.updated_at, NOW())
 		FROM warmup_smtps w
 		JOIN smtp_servers s ON w.smtp_id = s.id
+		WHERE w.user_id = $1
 		ORDER BY w.created_at DESC
-	`)
+	`, userID)
 	if err != nil {
 		log.Printf("[Warmup API] listWarmupSMTPs query error: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -600,6 +625,7 @@ func (s *Server) listWarmupSMTPs(c *fiber.Ctx) error {
 
 // createWarmupSMTP adds an SMTP to warmup program
 func (s *Server) createWarmupSMTP(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	var req struct {
 		SMTPID          string `json:"smtp_id"`
 		RecipeType      string `json:"recipe_type"`
@@ -618,15 +644,15 @@ func (s *Server) createWarmupSMTP(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
 	}
 
-	// Validate SMTP exists
+	// Validate SMTP exists and belongs to user
 	var exists bool
-	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM smtp_servers WHERE id = $1)`, req.SMTPID).Scan(&exists)
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM smtp_servers WHERE id = $1 AND user_id = $2)`, req.SMTPID, userID).Scan(&exists)
 	if !exists {
 		return c.Status(404).JSON(fiber.Map{"error": "SMTP not found"})
 	}
 
 	// Check if already enrolled
-	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM warmup_smtps WHERE smtp_id = $1)`, req.SMTPID).Scan(&exists)
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM warmup_smtps WHERE smtp_id = $1 AND user_id = $2)`, req.SMTPID, userID).Scan(&exists)
 	if exists {
 		return c.Status(400).JSON(fiber.Map{"error": "SMTP already enrolled in warmup"})
 	}
@@ -681,11 +707,11 @@ func (s *Server) createWarmupSMTP(c *fiber.Ctx) error {
 
 	_, err := s.db.Exec(`
 		INSERT INTO warmup_smtps (
-			id, smtp_id, status, recipe_type, start_date, end_date,
+			id, user_id, smtp_id, status, recipe_type, start_date, end_date,
 			min_emails_per_day, max_emails_per_day, send_rate, reply_rate,
 			start_hour, end_hour, custom_schedule
-		) VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-	`, id, req.SMTPID, req.RecipeType, startDate, endDate,
+		) VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+	`, id, userID, req.SMTPID, req.RecipeType, startDate, endDate,
 		req.MinEmailsPerDay, req.MaxEmailsPerDay, req.SendRate, req.ReplyRate,
 		req.StartHour, req.EndHour, customScheduleJSON)
 
@@ -703,6 +729,7 @@ func (s *Server) createWarmupSMTP(c *fiber.Ctx) error {
 
 // updateWarmupSMTP updates warmup settings for an SMTP
 func (s *Server) updateWarmupSMTP(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	var req struct {
@@ -741,9 +768,9 @@ func (s *Server) updateWarmupSMTP(c *fiber.Ctx) error {
 			end_hour = CASE WHEN $8 > 0 THEN $8 ELSE end_hour END,
 			custom_schedule = COALESCE($9, custom_schedule),
 			updated_at = NOW()
-		WHERE id = $10
+		WHERE id = $10 AND user_id = $11
 	`, req.Status, req.RecipeType, req.MinEmailsPerDay, req.MaxEmailsPerDay,
-		req.SendRate, req.ReplyRate, req.StartHour, req.EndHour, customScheduleJSON, id)
+		req.SendRate, req.ReplyRate, req.StartHour, req.EndHour, customScheduleJSON, id, userID)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -754,9 +781,10 @@ func (s *Server) updateWarmupSMTP(c *fiber.Ctx) error {
 
 // deleteWarmupSMTP removes an SMTP from warmup program
 func (s *Server) deleteWarmupSMTP(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
-	_, err := s.db.Exec(`DELETE FROM warmup_smtps WHERE id = $1`, id)
+	_, err := s.db.Exec(`DELETE FROM warmup_smtps WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -766,10 +794,11 @@ func (s *Server) deleteWarmupSMTP(c *fiber.Ctx) error {
 
 // toggleWarmupSMTP toggles warmup on/off for an SMTP
 func (s *Server) toggleWarmupSMTP(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	var currentStatus string
-	err := s.db.QueryRow(`SELECT status FROM warmup_smtps WHERE id = $1`, id).Scan(&currentStatus)
+	err := s.db.QueryRow(`SELECT status FROM warmup_smtps WHERE id = $1 AND user_id = $2`, id, userID).Scan(&currentStatus)
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Warmup SMTP not found"})
 	}
@@ -779,13 +808,14 @@ func (s *Server) toggleWarmupSMTP(c *fiber.Ctx) error {
 		newStatus = "paused"
 	}
 
-	s.db.Exec(`UPDATE warmup_smtps SET status = $1, updated_at = NOW() WHERE id = $2`, newStatus, id)
+	s.db.Exec(`UPDATE warmup_smtps SET status = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3`, newStatus, id, userID)
 
 	return c.JSON(fiber.Map{"status": newStatus})
 }
 
 // triggerWarmupSMTP manually sends warmup emails for testing
 func (s *Server) triggerWarmupSMTP(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	// Get number of emails to send (default 1)
@@ -807,16 +837,16 @@ func (s *Server) triggerWarmupSMTP(c *fiber.Ctx) error {
 			   s.host, s.port, s.username, s.password, s.tls_mode
 		FROM warmup_smtps w
 		JOIN smtp_servers s ON w.smtp_id = s.id
-		WHERE w.id = $1
-	`, id).Scan(&smtpID, &recipeType, &replyRate, &host, &port, &username, &password, &tlsMode)
+		WHERE w.id = $1 AND w.user_id = $2
+	`, id, userID).Scan(&smtpID, &recipeType, &replyRate, &host, &port, &username, &password, &tlsMode)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Warmup SMTP not found"})
 	}
 
-	// Check for active seeds
+	// Check for active seeds (for this user)
 	var activeSeeds int
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'active'`).Scan(&activeSeeds)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'active' AND user_id = $1`, userID).Scan(&activeSeeds)
 	if activeSeeds == 0 {
 		return c.Status(400).JSON(fiber.Map{"error": "No active seed accounts available"})
 	}
@@ -931,7 +961,15 @@ func (s *Server) sendWarmupEmailWithResult(warmupID, smtpID, host string, port i
 
 // getWarmupSMTPStats gets detailed stats for a warmup SMTP
 func (s *Server) getWarmupSMTPStats(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
+
+	// Verify warmup SMTP belongs to user
+	var exists bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM warmup_smtps WHERE id = $1 AND user_id = $2)`, id, userID).Scan(&exists)
+	if !exists {
+		return c.Status(404).JSON(fiber.Map{"error": "Warmup SMTP not found"})
+	}
 
 	// Get daily stats for the last 30 days
 	rows, err := s.db.Query(`
@@ -1023,6 +1061,7 @@ func (s *Server) getWarmupSMTPStats(c *fiber.Ctx) error {
 
 // updateWarmupSchedule updates the custom schedule (from draggable chart)
 func (s *Server) updateWarmupSchedule(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	var req struct {
@@ -1038,8 +1077,8 @@ func (s *Server) updateWarmupSchedule(c *fiber.Ctx) error {
 	_, err := s.db.Exec(`
 		UPDATE warmup_smtps
 		SET custom_schedule = $1, recipe_type = 'custom', updated_at = NOW()
-		WHERE id = $2
-	`, string(jsonBytes), id)
+		WHERE id = $2 AND user_id = $3
+	`, string(jsonBytes), id, userID)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -1054,6 +1093,7 @@ func (s *Server) updateWarmupSchedule(c *fiber.Ctx) error {
 
 // listWarmupSeeds returns all seed accounts with statistics
 func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	rows, err := s.db.Query(`
 		SELECT
 			ws.id, COALESCE(ws.email, ''), COALESCE(ws.provider, 'other'),
@@ -1082,8 +1122,9 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 			FROM warmup_emails
 			GROUP BY seed_id
 		) stats ON ws.id = stats.seed_id
+		WHERE ws.user_id = $1
 		ORDER BY ws.created_at DESC
-	`)
+	`, userID)
 	if err != nil {
 		log.Printf("[Warmup API] listWarmupSeeds query error: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -1156,6 +1197,7 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 
 // createWarmupSeed adds a new seed account
 func (s *Server) createWarmupSeed(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	var req struct {
 		Email         string `json:"email"`
 		Password      string `json:"password"`
@@ -1237,10 +1279,10 @@ func (s *Server) createWarmupSeed(c *fiber.Ctx) error {
 	}
 
 	_, err := s.db.Exec(`
-		INSERT INTO warmup_seeds (id, email, password, provider, imap_host, imap_port, imap_tls_mode,
+		INSERT INTO warmup_seeds (id, user_id, email, password, provider, imap_host, imap_port, imap_tls_mode,
 			smtp_host, smtp_port, smtp_tls_mode, send_rate, reply_rate, emails_per_day, auto_reply, oauth_token, oauth_client_id, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'active')
-	`, id, req.Email, req.Password, req.Provider, req.IMAPHost, req.IMAPPort, req.IMAPTLSMode,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'active')
+	`, id, userID, req.Email, req.Password, req.Provider, req.IMAPHost, req.IMAPPort, req.IMAPTLSMode,
 		req.SMTPHost, req.SMTPPort, req.SMTPTLSMode, req.SendRate, req.ReplyRate, req.EmailsPerDay, autoReply, oauthToken, oauthClientID)
 
 	if err != nil {
@@ -1258,6 +1300,7 @@ func (s *Server) createWarmupSeed(c *fiber.Ctx) error {
 
 // updateWarmupSeed updates a seed account
 func (s *Server) updateWarmupSeed(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	var req struct {
@@ -1339,8 +1382,8 @@ func (s *Server) updateWarmupSeed(c *fiber.Ctx) error {
 		paramIdx++
 	}
 
-	query += fmt.Sprintf(" WHERE id = $%d", paramIdx)
-	params = append(params, id)
+	query += fmt.Sprintf(" WHERE id = $%d AND user_id = $%d", paramIdx, paramIdx+1)
+	params = append(params, id, userID)
 
 	_, err := s.db.Exec(query, params...)
 	if err != nil {
@@ -1352,9 +1395,10 @@ func (s *Server) updateWarmupSeed(c *fiber.Ctx) error {
 
 // deleteSeed removes a seed account
 func (s *Server) deleteWarmupSeed(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
-	_, err := s.db.Exec(`DELETE FROM warmup_seeds WHERE id = $1`, id)
+	_, err := s.db.Exec(`DELETE FROM warmup_seeds WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -1364,6 +1408,7 @@ func (s *Server) deleteWarmupSeed(c *fiber.Ctx) error {
 
 // testWarmupSeed tests IMAP connection for a seed (with OAuth2 support)
 func (s *Server) testWarmupSeed(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	var email, password, imapHost string
@@ -1372,8 +1417,8 @@ func (s *Server) testWarmupSeed(c *fiber.Ctx) error {
 
 	err := s.db.QueryRow(`
 		SELECT email, password, imap_host, imap_port, COALESCE(imap_tls_mode, 'tls'), oauth_token, oauth_client_id
-		FROM warmup_seeds WHERE id = $1
-	`, id).Scan(&email, &password, &imapHost, &imapPort, &imapTLSMode, &oauthToken, &oauthClientID)
+		FROM warmup_seeds WHERE id = $1 AND user_id = $2
+	`, id, userID).Scan(&email, &password, &imapHost, &imapPort, &imapTLSMode, &oauthToken, &oauthClientID)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Seed not found"})
@@ -1398,22 +1443,23 @@ func (s *Server) testWarmupSeed(c *fiber.Ctx) error {
 	err = testIMAPConnectionWithOAuth(imapHost, imapPort, email, password, tlsMode, oauth, clientID)
 	if err != nil {
 		// Set status to error and store the error message
-		s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2`,
-			err.Error(), id)
+		s.db.Exec(`UPDATE warmup_seeds SET status = 'error', error_message = $1, last_check = NOW() WHERE id = $2 AND user_id = $3`,
+			err.Error(), id, userID)
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	s.db.Exec(`UPDATE warmup_seeds SET status = 'active', error_message = NULL, last_check = NOW() WHERE id = $1`, id)
+	s.db.Exec(`UPDATE warmup_seeds SET status = 'active', error_message = NULL, last_check = NOW() WHERE id = $1 AND user_id = $2`, id, userID)
 
 	return c.JSON(fiber.Map{"message": "Connection successful"})
 }
 
 // toggleWarmupSeed toggles a seed between active and paused
 func (s *Server) toggleWarmupSeed(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	var currentStatus string
-	err := s.db.QueryRow(`SELECT status FROM warmup_seeds WHERE id = $1`, id).Scan(&currentStatus)
+	err := s.db.QueryRow(`SELECT status FROM warmup_seeds WHERE id = $1 AND user_id = $2`, id, userID).Scan(&currentStatus)
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Seed not found"})
 	}
@@ -1423,21 +1469,23 @@ func (s *Server) toggleWarmupSeed(c *fiber.Ctx) error {
 		newStatus = "active"
 	}
 
-	s.db.Exec(`UPDATE warmup_seeds SET status = $1 WHERE id = $2`, newStatus, id)
+	s.db.Exec(`UPDATE warmup_seeds SET status = $1 WHERE id = $2 AND user_id = $3`, newStatus, id, userID)
 
 	return c.JSON(fiber.Map{"status": newStatus, "message": "Seed status updated"})
 }
 
 // verifyAllSeeds tests IMAP connection for all seeds and marks errors
 func (s *Server) verifyAllSeeds(c *fiber.Ctx) error {
-	// Get all seeds
+	userID := getUserID(c)
+	// Get all seeds for this user
 	rows, err := s.db.Query(`
 		SELECT id, email, password, imap_host, imap_port,
 		       COALESCE(imap_tls_mode, 'tls'),
 		       COALESCE(oauth_token, ''),
 		       COALESCE(oauth_client_id, '')
 		FROM warmup_seeds
-	`)
+		WHERE user_id = $1
+	`, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to get seeds"})
 	}
@@ -1509,16 +1557,17 @@ func (s *Server) verifyAllSeeds(c *fiber.Ctx) error {
 
 // deleteErrorSeeds deletes all seeds with error status
 func (s *Server) deleteErrorSeeds(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	// Count how many will be deleted
 	var count int
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'error'`).Scan(&count)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'error' AND user_id = $1`, userID).Scan(&count)
 
 	if count == 0 {
 		return c.JSON(fiber.Map{"message": "Nenhuma seed com erro para excluir", "deleted_count": 0})
 	}
 
 	// Delete all seeds with error status
-	result, err := s.db.Exec(`DELETE FROM warmup_seeds WHERE status = 'error'`)
+	result, err := s.db.Exec(`DELETE FROM warmup_seeds WHERE status = 'error' AND user_id = $1`, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Falha ao excluir seeds"})
 	}
@@ -1535,6 +1584,7 @@ func (s *Server) deleteErrorSeeds(c *fiber.Ctx) error {
 
 // triggerSeedSend forces the seed to send an email to a random SMTP
 func (s *Server) triggerSeedSend(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	// Get seed info including OAuth credentials
@@ -1543,8 +1593,8 @@ func (s *Server) triggerSeedSend(c *fiber.Ctx) error {
 	var oauthToken, oauthClientID sql.NullString
 	err := s.db.QueryRow(`
 		SELECT email, password, smtp_host, smtp_port, oauth_token, oauth_client_id
-		FROM warmup_seeds WHERE id = $1
-	`, id).Scan(&email, &password, &smtpHost, &smtpPort, &oauthToken, &oauthClientID)
+		FROM warmup_seeds WHERE id = $1 AND user_id = $2
+	`, id, userID).Scan(&email, &password, &smtpHost, &smtpPort, &oauthToken, &oauthClientID)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Seed not found"})
@@ -1554,24 +1604,28 @@ func (s *Server) triggerSeedSend(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Seed não tem SMTP configurado"})
 	}
 
-	// Get a random SMTP sender to send to
+	// Get a random SMTP sender to send to (from user's warmup SMTPs)
 	var targetEmail string
 	err = s.db.QueryRow(`
 		SELECT ss.email
 		FROM warmup_smtps w
 		JOIN smtp_senders ss ON ss.smtp_id = w.smtp_id
-		WHERE w.status = 'active' AND ss.active = true
+		WHERE w.status = 'active' AND ss.active = true AND w.user_id = $1
 		ORDER BY RANDOM()
 		LIMIT 1
-	`).Scan(&targetEmail)
+	`, userID).Scan(&targetEmail)
 
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Nenhum SMTP ativo encontrado"})
 	}
 
-	// Get random template (only 'send' type, not 'reply')
+	// Get random template (only 'send' type, not 'reply') - prefer user's templates, fallback to system templates
 	var subject, body string
-	s.db.QueryRow(`SELECT subject, body FROM warmup_templates WHERE active = true AND template_type = 'send' ORDER BY RANDOM() LIMIT 1`).Scan(&subject, &body)
+	err = s.db.QueryRow(`SELECT subject, body FROM warmup_templates WHERE active = true AND template_type = 'send' AND (user_id = $1 OR user_id IS NULL) ORDER BY RANDOM() LIMIT 1`, userID).Scan(&subject, &body)
+	if err != nil {
+		// Fallback to any template
+		s.db.QueryRow(`SELECT subject, body FROM warmup_templates WHERE active = true AND template_type = 'send' ORDER BY RANDOM() LIMIT 1`).Scan(&subject, &body)
+	}
 
 	subject = subject + " #" + fmt.Sprintf("%d", rand.Intn(9999))
 	messageID := fmt.Sprintf("<%s@seed-warmup>", uuid.New().String())
@@ -1597,7 +1651,7 @@ func (s *Server) triggerSeedSend(c *fiber.Ctx) error {
 	}
 
 	// Update counter
-	s.db.Exec(`UPDATE warmup_seeds SET total_sent = total_sent + 1 WHERE id = $1`, id)
+	s.db.Exec(`UPDATE warmup_seeds SET total_sent = total_sent + 1 WHERE id = $1 AND user_id = $2`, id, userID)
 
 	log.Printf("[Warmup Seed Manual] ✉️ Sent from %s to %s: %s", email, targetEmail, subject)
 
@@ -1610,25 +1664,39 @@ func (s *Server) triggerSeedSend(c *fiber.Ctx) error {
 
 // getWarmupStats returns overall warmup statistics
 func (s *Server) getWarmupStats(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	var totalSMTPs, activeSMTPs, totalSeeds, activeSeeds int
 	var totalSent, totalInbox, totalSpam, totalReplies int
 
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps`).Scan(&totalSMTPs)
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeSMTPs)
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds`).Scan(&totalSeeds)
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'active'`).Scan(&activeSeeds)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE user_id = $1`, userID).Scan(&totalSMTPs)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active' AND user_id = $1`, userID).Scan(&activeSMTPs)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE user_id = $1`, userID).Scan(&totalSeeds)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'active' AND user_id = $1`, userID).Scan(&activeSeeds)
 
 	s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_sent), 0), COALESCE(SUM(total_inbox), 0),
 			   COALESCE(SUM(total_spam), 0), COALESCE(SUM(total_replies), 0)
 		FROM warmup_smtps
-	`).Scan(&totalSent, &totalInbox, &totalSpam, &totalReplies)
+		WHERE user_id = $1
+	`, userID).Scan(&totalSent, &totalInbox, &totalSpam, &totalReplies)
 
-	// Add internal warmup email counts
+	// Add internal warmup email counts (filter by user's SMTPs)
 	var internalSent, internalReceived, internalReplies int
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_internal_emails`).Scan(&internalSent)
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_internal_emails WHERE received = true`).Scan(&internalReceived)
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_internal_emails WHERE replied = true`).Scan(&internalReplies)
+	s.db.QueryRow(`
+		SELECT COUNT(*) FROM warmup_internal_emails ie
+		JOIN smtp_servers s ON ie.from_smtp_id = s.id
+		WHERE s.user_id = $1
+	`, userID).Scan(&internalSent)
+	s.db.QueryRow(`
+		SELECT COUNT(*) FROM warmup_internal_emails ie
+		JOIN smtp_servers s ON ie.from_smtp_id = s.id
+		WHERE s.user_id = $1 AND ie.received = true
+	`, userID).Scan(&internalReceived)
+	s.db.QueryRow(`
+		SELECT COUNT(*) FROM warmup_internal_emails ie
+		JOIN smtp_servers s ON ie.from_smtp_id = s.id
+		WHERE s.user_id = $1 AND ie.replied = true
+	`, userID).Scan(&internalReplies)
 	totalSent += internalSent
 	totalInbox += internalReceived // Internal received = inbox (found in INBOX, not spam)
 	totalReplies += internalReplies
@@ -1654,44 +1722,45 @@ func (s *Server) getWarmupStats(c *fiber.Ctx) error {
 
 // getWarmupDiagnostic returns detailed diagnostic info to troubleshoot warmup issues
 func (s *Server) getWarmupDiagnostic(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	now := time.Now()
 	currentHour := now.Hour()
 
-	// Check warmup enabled
-	warmupEnabled := s.getWarmupSetting("warmup_enabled", "true")
+	// Check warmup enabled (user-specific or global)
+	warmupEnabled := s.getWarmupSettingForUser(userID, "warmup_enabled", "true")
 
-	// Count active elements
+	// Count active elements for this user
 	var activeSeeds, activeTemplates, activeSMTPs, smtpsWithInternal int
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'active'`).Scan(&activeSeeds)
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_templates WHERE active = true`).Scan(&activeTemplates)
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeSMTPs)
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active' AND internal_warmup = true`).Scan(&smtpsWithInternal)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'active' AND user_id = $1`, userID).Scan(&activeSeeds)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_templates WHERE active = true AND (user_id = $1 OR user_id IS NULL)`, userID).Scan(&activeTemplates)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active' AND user_id = $1`, userID).Scan(&activeSMTPs)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active' AND internal_warmup = true AND user_id = $1`, userID).Scan(&smtpsWithInternal)
 
 	// SMTPs with active underlying smtp_server
 	var smtpsWithActiveServer int
 	s.db.QueryRow(`
 		SELECT COUNT(*) FROM warmup_smtps w
 		JOIN smtp_servers s ON w.smtp_id = s.id
-		WHERE w.status = 'active' AND s.active = true
-	`).Scan(&smtpsWithActiveServer)
+		WHERE w.status = 'active' AND s.active = true AND w.user_id = $1
+	`, userID).Scan(&smtpsWithActiveServer)
 
 	// SMTPs in valid hours for external warmup
 	var smtpsInValidHours int
 	s.db.QueryRow(`
 		SELECT COUNT(*) FROM warmup_smtps w
 		JOIN smtp_servers s ON w.smtp_id = s.id
-		WHERE w.status = 'active' AND s.active = true
-		AND $1 >= w.start_hour AND $1 < w.end_hour
-	`, currentHour).Scan(&smtpsInValidHours)
+		WHERE w.status = 'active' AND s.active = true AND w.user_id = $1
+		AND $2 >= w.start_hour AND $2 < w.end_hour
+	`, userID, currentHour).Scan(&smtpsInValidHours)
 
 	// SMTPs with internal warmup in valid hours
 	var internalInValidHours int
 	s.db.QueryRow(`
 		SELECT COUNT(*) FROM warmup_smtps w
 		JOIN smtp_servers s ON w.smtp_id = s.id
-		WHERE w.status = 'active' AND s.active = true AND w.internal_warmup = true
-		AND $1 >= w.start_hour AND $1 < w.end_hour
-	`, currentHour).Scan(&internalInValidHours)
+		WHERE w.status = 'active' AND s.active = true AND w.internal_warmup = true AND w.user_id = $1
+		AND $2 >= w.start_hour AND $2 < w.end_hour
+	`, userID, currentHour).Scan(&internalInValidHours)
 
 	// Senders with IMAP configured (needed for internal warmup)
 	var sendersWithIMAP int
@@ -1699,14 +1768,22 @@ func (s *Server) getWarmupDiagnostic(c *fiber.Ctx) error {
 		SELECT COUNT(*) FROM smtp_senders ss
 		JOIN smtp_servers s ON ss.smtp_id = s.id
 		JOIN warmup_smtps w ON w.smtp_id = s.id
-		WHERE ss.active = true AND s.active = true AND w.status = 'active' AND w.internal_warmup = true
+		WHERE ss.active = true AND s.active = true AND w.status = 'active' AND w.internal_warmup = true AND w.user_id = $1
 		AND ss.imap_host IS NOT NULL AND ss.imap_host != ''
-	`).Scan(&sendersWithIMAP)
+	`, userID).Scan(&sendersWithIMAP)
 
-	// Today's sent count
+	// Today's sent count for this user
 	var sentTodayExternal, sentTodayInternal int
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_emails WHERE DATE(sent_at) = $1`, now.Format("2006-01-02")).Scan(&sentTodayExternal)
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_internal_emails WHERE DATE(sent_at) = $1`, now.Format("2006-01-02")).Scan(&sentTodayInternal)
+	s.db.QueryRow(`
+		SELECT COUNT(*) FROM warmup_emails e
+		JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
+		WHERE DATE(e.sent_at) = $1 AND w.user_id = $2
+	`, now.Format("2006-01-02"), userID).Scan(&sentTodayExternal)
+	s.db.QueryRow(`
+		SELECT COUNT(*) FROM warmup_internal_emails ie
+		JOIN smtp_servers s ON ie.from_smtp_id = s.id
+		WHERE DATE(ie.sent_at) = $1 AND s.user_id = $2
+	`, now.Format("2006-01-02"), userID).Scan(&sentTodayInternal)
 
 	// Build issues list
 	issues := []string{}
@@ -1764,7 +1841,8 @@ func (s *Server) getWarmupDiagnostic(c *fiber.Ctx) error {
 		       s.active, s.id
 		FROM warmup_smtps w
 		JOIN smtp_servers s ON w.smtp_id = s.id
-	`)
+		WHERE w.user_id = $1
+	`, userID)
 	defer smtpRows.Close()
 
 	var smtpDetails []smtpDetail
@@ -1859,6 +1937,7 @@ func (s *Server) triggerWarmup(c *fiber.Ctx) error {
 
 // getWarmupActivity returns recent warmup activity (including all types)
 func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	// Query all warmup activity types:
 	// 1. SMTP → Seed emails (warmup_emails)
 	// 2. Replies (warmup_emails with replied_at)
@@ -1879,7 +1958,7 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 			JOIN warmup_seeds s ON e.seed_id = s.id
 			JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
 			JOIN smtp_servers sm ON w.smtp_id = sm.id
-			WHERE e.status != 'replied' OR e.replied_at IS NULL
+			WHERE (e.status != 'replied' OR e.replied_at IS NULL) AND w.user_id = $1
 		)
 		UNION ALL
 		(
@@ -1889,7 +1968,8 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 				   'reply' as warmup_type
 			FROM warmup_emails e
 			JOIN warmup_seeds s ON e.seed_id = s.id
-			WHERE e.replied_at IS NOT NULL
+			JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
+			WHERE e.replied_at IS NOT NULL AND w.user_id = $1
 		)
 		UNION ALL
 		(
@@ -1899,6 +1979,8 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 				   'internal' as warmup_type
 			FROM warmup_internal_emails ie
 			LEFT JOIN smtp_senders ss ON ie.to_sender_id = ss.id
+			JOIN smtp_servers sm ON ie.from_smtp_id = sm.id
+			WHERE sm.user_id = $1
 		)
 		UNION ALL
 		(
@@ -1908,6 +1990,7 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 				   'seed_to_smtp' as warmup_type
 			FROM warmup_seed_emails se
 			JOIN warmup_seeds s ON se.seed_id = s.id
+			WHERE s.user_id = $1
 		)
 		UNION ALL
 		(
@@ -1916,10 +1999,11 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 				   COALESCE(a.to_email, '') as to_email,
 				   a.activity_type as warmup_type
 			FROM warmup_activity a
+			WHERE a.user_id = $1
 		)
 		ORDER BY sent_at DESC
 		LIMIT 50
-	`)
+	`, userID)
 	if err != nil {
 		log.Printf("[Warmup API] getWarmupActivity main query error: %v", err)
 		// Fallback to simpler query without new tables
@@ -1937,7 +2021,7 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 				JOIN warmup_seeds s ON e.seed_id = s.id
 				JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
 				JOIN smtp_servers sm ON w.smtp_id = sm.id
-				WHERE e.status != 'replied' OR e.replied_at IS NULL
+				WHERE (e.status != 'replied' OR e.replied_at IS NULL) AND w.user_id = $1
 			)
 			UNION ALL
 			(
@@ -1947,11 +2031,12 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 					   'reply' as warmup_type
 				FROM warmup_emails e
 				JOIN warmup_seeds s ON e.seed_id = s.id
-				WHERE e.replied_at IS NOT NULL
+				JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
+				WHERE e.replied_at IS NOT NULL AND w.user_id = $1
 			)
 			ORDER BY sent_at DESC
 			LIMIT 50
-		`)
+		`, userID)
 		if err != nil {
 			log.Printf("[Warmup API] getWarmupActivity fallback query error: %v", err)
 			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -1990,13 +2075,15 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 
 // listWarmupTemplates returns all warmup templates
 func (s *Server) listWarmupTemplates(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	rows, err := s.db.Query(`
 		SELECT id, COALESCE(subject, ''), COALESCE(body, ''),
 		       COALESCE(category, 'business'), COALESCE(template_type, 'send'),
 		       COALESCE(active, true), COALESCE(created_at, NOW())
 		FROM warmup_templates
+		WHERE user_id = $1 OR user_id IS NULL
 		ORDER BY template_type, category, created_at
-	`)
+	`, userID)
 	if err != nil {
 		log.Printf("[Warmup API] listWarmupTemplates query error: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -2035,6 +2122,7 @@ func (s *Server) listWarmupTemplates(c *fiber.Ctx) error {
 
 // createWarmupTemplate creates a new warmup template
 func (s *Server) createWarmupTemplate(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	var req struct {
 		Subject      string `json:"subject"`
 		Body         string `json:"body"`
@@ -2056,9 +2144,9 @@ func (s *Server) createWarmupTemplate(c *fiber.Ctx) error {
 	id := uuid.New().String()
 
 	_, err := s.db.Exec(`
-		INSERT INTO warmup_templates (id, subject, body, category, template_type, active)
-		VALUES ($1, $2, $3, $4, $5, true)
-	`, id, req.Subject, req.Body, req.Category, req.TemplateType)
+		INSERT INTO warmup_templates (id, user_id, subject, body, category, template_type, active)
+		VALUES ($1, $2, $3, $4, $5, $6, true)
+	`, id, userID, req.Subject, req.Body, req.Category, req.TemplateType)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -2069,9 +2157,11 @@ func (s *Server) createWarmupTemplate(c *fiber.Ctx) error {
 
 // deleteWarmupTemplate deletes a warmup template
 func (s *Server) deleteWarmupTemplate(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
-	_, err := s.db.Exec(`DELETE FROM warmup_templates WHERE id = $1`, id)
+	// Only allow deleting user's own templates (not system templates where user_id IS NULL)
+	_, err := s.db.Exec(`DELETE FROM warmup_templates WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -4712,11 +4802,13 @@ func (s *Server) toggleInternalWarmup(c *fiber.Ctx) error {
 
 // getWarmupSettings returns all warmup settings
 func (s *Server) getWarmupSettings(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	rows, err := s.db.Query(`
 		SELECT setting_key, setting_value, description
 		FROM warmup_settings
+		WHERE user_id = $1 OR user_id IS NULL
 		ORDER BY setting_key
-	`)
+	`, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Erro ao carregar configurações"})
 	}
@@ -4738,6 +4830,7 @@ func (s *Server) getWarmupSettings(c *fiber.Ctx) error {
 
 // updateWarmupSettings updates warmup settings
 func (s *Server) updateWarmupSettings(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	var req map[string]string
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Requisição inválida"})
@@ -4745,11 +4838,13 @@ func (s *Server) updateWarmupSettings(c *fiber.Ctx) error {
 
 	updated := 0
 	for key, value := range req {
+		// Use UPSERT to insert or update user-specific settings
 		result, err := s.db.Exec(`
-			UPDATE warmup_settings
-			SET setting_value = $1, updated_at = NOW()
-			WHERE setting_key = $2
-		`, value, key)
+			INSERT INTO warmup_settings (id, user_id, setting_key, setting_value, updated_at)
+			VALUES (uuid_generate_v4(), $1, $2, $3, NOW())
+			ON CONFLICT (user_id, setting_key) DO UPDATE
+			SET setting_value = $3, updated_at = NOW()
+		`, userID, key, value)
 		if err == nil {
 			if rows, _ := result.RowsAffected(); rows > 0 {
 				updated++
@@ -4763,10 +4858,26 @@ func (s *Server) updateWarmupSettings(c *fiber.Ctx) error {
 	})
 }
 
-// getWarmupSetting helper to get a single setting value
+// getWarmupSetting helper to get a single setting value (global, for background processes)
 func (s *Server) getWarmupSetting(key string, defaultValue string) string {
 	var value string
-	err := s.db.QueryRow(`SELECT setting_value FROM warmup_settings WHERE setting_key = $1`, key).Scan(&value)
+	err := s.db.QueryRow(`SELECT setting_value FROM warmup_settings WHERE setting_key = $1 AND user_id IS NULL`, key).Scan(&value)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
+// getWarmupSettingForUser helper to get a user-specific setting value (falls back to global)
+func (s *Server) getWarmupSettingForUser(userID string, key string, defaultValue string) string {
+	var value string
+	// First try to get user-specific setting
+	err := s.db.QueryRow(`SELECT setting_value FROM warmup_settings WHERE setting_key = $1 AND user_id = $2`, key, userID).Scan(&value)
+	if err == nil {
+		return value
+	}
+	// Fall back to global setting
+	err = s.db.QueryRow(`SELECT setting_value FROM warmup_settings WHERE setting_key = $1 AND user_id IS NULL`, key).Scan(&value)
 	if err != nil {
 		return defaultValue
 	}

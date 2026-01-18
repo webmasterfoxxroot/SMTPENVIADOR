@@ -21,15 +21,17 @@ type Group struct {
 
 // listGroups returns all groups
 func (s *Server) listGroups(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	rows, err := s.db.Query(`
 		SELECT
 			g.id, g.name, g.description, g.color, g.created_at, g.updated_at,
 			COUNT(l.id) as list_count
 		FROM email_list_groups g
-		LEFT JOIN email_lists l ON l.group_id = g.id
+		LEFT JOIN email_lists l ON l.group_id = g.id AND l.user_id = $1
+		WHERE g.user_id = $1
 		GROUP BY g.id
 		ORDER BY g.name ASC
-	`)
+	`, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch groups"})
 	}
@@ -50,6 +52,7 @@ func (s *Server) listGroups(c *fiber.Ctx) error {
 
 // createGroup creates a new group
 func (s *Server) createGroup(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	var body struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
@@ -70,9 +73,9 @@ func (s *Server) createGroup(c *fiber.Ctx) error {
 
 	id := uuid.New().String()
 	_, err := s.db.Exec(`
-		INSERT INTO email_list_groups (id, name, description, color)
-		VALUES ($1, $2, $3, $4)
-	`, id, body.Name, body.Description, body.Color)
+		INSERT INTO email_list_groups (id, name, description, color, user_id)
+		VALUES ($1, $2, $3, $4, $5)
+	`, id, body.Name, body.Description, body.Color, userID)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to create group"})
@@ -86,6 +89,7 @@ func (s *Server) createGroup(c *fiber.Ctx) error {
 
 // updateGroup updates a group
 func (s *Server) updateGroup(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	var body struct {
@@ -101,8 +105,8 @@ func (s *Server) updateGroup(c *fiber.Ctx) error {
 	_, err := s.db.Exec(`
 		UPDATE email_list_groups
 		SET name = $1, description = $2, color = $3, updated_at = NOW()
-		WHERE id = $4
-	`, body.Name, body.Description, body.Color, id)
+		WHERE id = $4 AND user_id = $5
+	`, body.Name, body.Description, body.Color, id, userID)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update group"})
@@ -113,13 +117,14 @@ func (s *Server) updateGroup(c *fiber.Ctx) error {
 
 // deleteGroup deletes a group (lists are moved to "no group")
 func (s *Server) deleteGroup(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
-	// First, remove group_id from all lists in this group
-	s.db.Exec(`UPDATE email_lists SET group_id = NULL WHERE group_id = $1`, id)
+	// First, remove group_id from all lists in this group (only for this user's lists)
+	s.db.Exec(`UPDATE email_lists SET group_id = NULL WHERE group_id = $1 AND user_id = $2`, id, userID)
 
 	// Then delete the group
-	_, err := s.db.Exec(`DELETE FROM email_list_groups WHERE id = $1`, id)
+	_, err := s.db.Exec(`DELETE FROM email_list_groups WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete group"})
 	}
@@ -129,6 +134,7 @@ func (s *Server) deleteGroup(c *fiber.Ctx) error {
 
 // moveListToGroup moves a list to a group
 func (s *Server) moveListToGroup(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	listID := c.Params("id")
 
 	var body struct {
@@ -141,9 +147,9 @@ func (s *Server) moveListToGroup(c *fiber.Ctx) error {
 
 	var err error
 	if body.GroupID == nil || *body.GroupID == "" {
-		_, err = s.db.Exec(`UPDATE email_lists SET group_id = NULL WHERE id = $1`, listID)
+		_, err = s.db.Exec(`UPDATE email_lists SET group_id = NULL WHERE id = $1 AND user_id = $2`, listID, userID)
 	} else {
-		_, err = s.db.Exec(`UPDATE email_lists SET group_id = $1 WHERE id = $2`, *body.GroupID, listID)
+		_, err = s.db.Exec(`UPDATE email_lists SET group_id = $1 WHERE id = $2 AND user_id = $3`, *body.GroupID, listID, userID)
 	}
 
 	if err != nil {
@@ -155,12 +161,13 @@ func (s *Server) moveListToGroup(c *fiber.Ctx) error {
 
 // downloadList exports a list as CSV
 func (s *Server) downloadList(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	listID := c.Params("id")
 	format := c.Query("format", "csv") // csv or txt
 
-	// Get list name
+	// Verify list belongs to user and get list name
 	var listName string
-	err := s.db.QueryRow(`SELECT name FROM email_lists WHERE id = $1`, listID).Scan(&listName)
+	err := s.db.QueryRow(`SELECT name FROM email_lists WHERE id = $1 AND user_id = $2`, listID, userID).Scan(&listName)
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "List not found"})
 	}

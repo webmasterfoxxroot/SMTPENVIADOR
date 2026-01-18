@@ -13,6 +13,7 @@ import (
 // getStats returns dashboard statistics
 func (s *Server) getStats(c *fiber.Ctx) error {
 	stats := make(map[string]interface{})
+	userID := getUserID(c)
 
 	// Get period filter (today, week, month)
 	period := c.Query("period", "today")
@@ -25,39 +26,42 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 	var dateFilter string
 	switch period {
 	case "week":
-		dateFilter = "created_at >= CURRENT_DATE - INTERVAL '7 days'"
+		dateFilter = "ce.created_at >= CURRENT_DATE - INTERVAL '7 days'"
 	case "month":
-		dateFilter = "created_at >= CURRENT_DATE - INTERVAL '30 days'"
+		dateFilter = "ce.created_at >= CURRENT_DATE - INTERVAL '30 days'"
 	default: // today
-		dateFilter = "DATE(created_at) = CURRENT_DATE"
+		dateFilter = "DATE(ce.created_at) = CURRENT_DATE"
 	}
 
 	// Get today's stats from database (more reliable than Redis)
-	// Sent/Failed today - based on when email was processed
+	// Sent/Failed today - based on when email was processed, filtered by user's campaigns
 	var todaySent, todayFailed int
 	s.db.QueryRow(`
 		SELECT
-			COUNT(CASE WHEN status = 'sent' THEN 1 END),
-			COUNT(CASE WHEN status = 'failed' THEN 1 END)
-		FROM campaign_emails
-		WHERE ` + dateFilter + `
-	`).Scan(&todaySent, &todayFailed)
+			COUNT(CASE WHEN ce.status = 'sent' THEN 1 END),
+			COUNT(CASE WHEN ce.status = 'failed' THEN 1 END)
+		FROM campaign_emails ce
+		JOIN campaigns c ON ce.campaign_id = c.id
+		WHERE c.user_id = $1 AND `+dateFilter+`
+	`, userID).Scan(&todaySent, &todayFailed)
 
 	// Opened - based on when email was opened
 	var todayOpened int
-	openedDateFilter := strings.Replace(dateFilter, "created_at", "opened_at", 1)
+	openedDateFilter := strings.Replace(dateFilter, "ce.created_at", "ce.opened_at", 1)
 	s.db.QueryRow(`
-		SELECT COUNT(*) FROM campaign_emails
-		WHERE ` + openedDateFilter + `
-	`).Scan(&todayOpened)
+		SELECT COUNT(*) FROM campaign_emails ce
+		JOIN campaigns c ON ce.campaign_id = c.id
+		WHERE c.user_id = $1 AND `+openedDateFilter+`
+	`, userID).Scan(&todayOpened)
 
 	// Clicked - based on when link was clicked
 	var todayClicked int
-	clickedDateFilter := strings.Replace(dateFilter, "created_at", "clicked_at", 1)
+	clickedDateFilter := strings.Replace(dateFilter, "ce.created_at", "ce.clicked_at", 1)
 	s.db.QueryRow(`
-		SELECT COUNT(*) FROM campaign_emails
-		WHERE ` + clickedDateFilter + `
-	`).Scan(&todayClicked)
+		SELECT COUNT(*) FROM campaign_emails ce
+		JOIN campaigns c ON ce.campaign_id = c.id
+		WHERE c.user_id = $1 AND `+clickedDateFilter+`
+	`, userID).Scan(&todayClicked)
 
 	stats["today_sent"] = todaySent
 	stats["today_failed"] = todayFailed
@@ -72,24 +76,24 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 
 	// Get active campaigns count
 	var activeCampaigns int
-	s.db.QueryRow(`SELECT COUNT(*) FROM campaigns WHERE status = 'running'`).Scan(&activeCampaigns)
+	s.db.QueryRow(`SELECT COUNT(*) FROM campaigns WHERE status = 'running' AND user_id = $1`, userID).Scan(&activeCampaigns)
 	stats["active_campaigns"] = activeCampaigns
 
-	// Get total counts
+	// Get total counts (filtered by user)
 	var totalSMTPs, totalLists int
 	var totalEmails int64
-	s.db.QueryRow(`SELECT COUNT(*) FROM smtp_servers WHERE active = true`).Scan(&totalSMTPs)
-	s.db.QueryRow(`SELECT COUNT(*) FROM email_lists`).Scan(&totalLists)
+	s.db.QueryRow(`SELECT COUNT(*) FROM smtp_servers WHERE active = true AND user_id = $1`, userID).Scan(&totalSMTPs)
+	s.db.QueryRow(`SELECT COUNT(*) FROM email_lists WHERE user_id = $1`, userID).Scan(&totalLists)
 
 	// Get total emails by summing from email_lists table (most accurate)
 	// This matches what's shown on the Lists page
-	s.db.QueryRow(`SELECT COALESCE(SUM(total_emails), 0) FROM email_lists`).Scan(&totalEmails)
+	s.db.QueryRow(`SELECT COALESCE(SUM(total_emails), 0) FROM email_lists WHERE user_id = $1`, userID).Scan(&totalEmails)
 
 	// If PostgreSQL sum is 0, try ClickHouse as fallback
 	if totalEmails == 0 && s.ch != nil {
 		ctx := context.Background()
-		// Sum counts from each list in ClickHouse
-		rows, err := s.db.Query(`SELECT id FROM email_lists`)
+		// Sum counts from each list in ClickHouse (user's lists only)
+		rows, err := s.db.Query(`SELECT id FROM email_lists WHERE user_id = $1`, userID)
 		if err == nil {
 			defer rows.Close()
 			var sumCount uint64
@@ -116,25 +120,27 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 	var chartStats []map[string]interface{}
 
 	if period == "today" {
-		// Hourly stats for today
+		// Hourly stats for today (filtered by user's campaigns)
 		hourlyRows, _ := s.db.Query(`
 			SELECT
-				EXTRACT(HOUR FROM sent_at)::int as hour,
+				EXTRACT(HOUR FROM ce.sent_at)::int as hour,
 				COUNT(*) as sent,
 				0 as failed
-			FROM campaign_emails
-			WHERE DATE(sent_at) = CURRENT_DATE AND status = 'sent'
-			GROUP BY EXTRACT(HOUR FROM sent_at)
+			FROM campaign_emails ce
+			JOIN campaigns c ON ce.campaign_id = c.id
+			WHERE c.user_id = $1 AND DATE(ce.sent_at) = CURRENT_DATE AND ce.status = 'sent'
+			GROUP BY EXTRACT(HOUR FROM ce.sent_at)
 			UNION ALL
 			SELECT
-				EXTRACT(HOUR FROM created_at)::int as hour,
+				EXTRACT(HOUR FROM ce.created_at)::int as hour,
 				0 as sent,
 				COUNT(*) as failed
-			FROM campaign_emails
-			WHERE DATE(created_at) = CURRENT_DATE AND status = 'failed'
-			GROUP BY EXTRACT(HOUR FROM created_at)
+			FROM campaign_emails ce
+			JOIN campaigns c ON ce.campaign_id = c.id
+			WHERE c.user_id = $1 AND DATE(ce.created_at) = CURRENT_DATE AND ce.status = 'failed'
+			GROUP BY EXTRACT(HOUR FROM ce.created_at)
 			ORDER BY hour
-		`)
+		`, userID)
 
 		hourlyMap := make(map[int]map[string]int)
 		if hourlyRows != nil {
@@ -152,11 +158,12 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 
 		// Get opens by hour
 		openRows, _ := s.db.Query(`
-			SELECT EXTRACT(HOUR FROM opened_at)::int as hour, COUNT(*) as opened
-			FROM campaign_emails
-			WHERE DATE(opened_at) = CURRENT_DATE AND opened_at IS NOT NULL
-			GROUP BY EXTRACT(HOUR FROM opened_at)
-		`)
+			SELECT EXTRACT(HOUR FROM ce.opened_at)::int as hour, COUNT(*) as opened
+			FROM campaign_emails ce
+			JOIN campaigns c ON ce.campaign_id = c.id
+			WHERE c.user_id = $1 AND DATE(ce.opened_at) = CURRENT_DATE AND ce.opened_at IS NOT NULL
+			GROUP BY EXTRACT(HOUR FROM ce.opened_at)
+		`, userID)
 		if openRows != nil {
 			defer openRows.Close()
 			for openRows.Next() {
@@ -171,11 +178,12 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 
 		// Get clicks by hour
 		clickRows, _ := s.db.Query(`
-			SELECT EXTRACT(HOUR FROM clicked_at)::int as hour, COUNT(*) as clicked
-			FROM campaign_emails
-			WHERE DATE(clicked_at) = CURRENT_DATE AND clicked_at IS NOT NULL
-			GROUP BY EXTRACT(HOUR FROM clicked_at)
-		`)
+			SELECT EXTRACT(HOUR FROM ce.clicked_at)::int as hour, COUNT(*) as clicked
+			FROM campaign_emails ce
+			JOIN campaigns c ON ce.campaign_id = c.id
+			WHERE c.user_id = $1 AND DATE(ce.clicked_at) = CURRENT_DATE AND ce.clicked_at IS NOT NULL
+			GROUP BY EXTRACT(HOUR FROM ce.clicked_at)
+		`, userID)
 		if clickRows != nil {
 			defer clickRows.Close()
 			for clickRows.Next() {
@@ -209,16 +217,17 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 
 		dailyRows, _ := s.db.Query(`
 			SELECT
-				DATE(sent_at) as day,
-				COUNT(CASE WHEN status = 'sent' THEN 1 END) as sent,
-				COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed,
-				COUNT(CASE WHEN opened_at IS NOT NULL THEN 1 END) as opened,
-				COUNT(CASE WHEN clicked_at IS NOT NULL THEN 1 END) as clicked
-			FROM campaign_emails
-			WHERE sent_at >= CURRENT_DATE - INTERVAL '1 day' * $1
-			GROUP BY DATE(sent_at)
+				DATE(ce.sent_at) as day,
+				COUNT(CASE WHEN ce.status = 'sent' THEN 1 END) as sent,
+				COUNT(CASE WHEN ce.status = 'failed' THEN 1 END) as failed,
+				COUNT(CASE WHEN ce.opened_at IS NOT NULL THEN 1 END) as opened,
+				COUNT(CASE WHEN ce.clicked_at IS NOT NULL THEN 1 END) as clicked
+			FROM campaign_emails ce
+			JOIN campaigns c ON ce.campaign_id = c.id
+			WHERE c.user_id = $1 AND ce.sent_at >= CURRENT_DATE - INTERVAL '1 day' * $2
+			GROUP BY DATE(ce.sent_at)
 			ORDER BY day
-		`, days)
+		`, userID, days)
 
 		if dailyRows != nil {
 			defer dailyRows.Close()
@@ -239,7 +248,7 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 	}
 	stats["hourly"] = chartStats
 
-	// Get stats by SMTP provider (today)
+	// Get stats by SMTP provider (today, filtered by user's campaigns)
 	smtpRows, _ := s.db.Query(`
 		SELECT
 			COALESCE(ss.host, 'Desconhecido') as provider,
@@ -248,12 +257,13 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 			COUNT(CASE WHEN ce.opened_at IS NOT NULL THEN 1 END) as opened,
 			COUNT(CASE WHEN ce.clicked_at IS NOT NULL THEN 1 END) as clicked
 		FROM campaign_emails ce
+		JOIN campaigns c ON ce.campaign_id = c.id
 		LEFT JOIN smtp_servers ss ON ce.smtp_id = ss.id
-		WHERE DATE(ce.created_at) = CURRENT_DATE
+		WHERE c.user_id = $1 AND DATE(ce.created_at) = CURRENT_DATE
 		GROUP BY ss.host
 		ORDER BY sent DESC
 		LIMIT 10
-	`)
+	`, userID)
 	if smtpRows != nil {
 		defer smtpRows.Close()
 
@@ -274,7 +284,7 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 	}
 
 	// Get stats by email domain (today) - gmail.com, hotmail.com, etc.
-	// Use stored email directly from campaign_emails
+	// Use stored email directly from campaign_emails (filtered by user's campaigns)
 	domainRows, _ := s.db.Query(`
 		SELECT
 			LOWER(SPLIT_PART(ce.email, '@', 2)) as domain,
@@ -283,11 +293,12 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 			COUNT(CASE WHEN ce.opened_at IS NOT NULL THEN 1 END) as opened,
 			COUNT(CASE WHEN ce.clicked_at IS NOT NULL THEN 1 END) as clicked
 		FROM campaign_emails ce
-		WHERE DATE(ce.created_at) = CURRENT_DATE AND ce.email IS NOT NULL
+		JOIN campaigns c ON ce.campaign_id = c.id
+		WHERE c.user_id = $1 AND DATE(ce.created_at) = CURRENT_DATE AND ce.email IS NOT NULL
 		GROUP BY LOWER(SPLIT_PART(ce.email, '@', 2))
 		ORDER BY sent DESC
 		LIMIT 15
-	`)
+	`, userID)
 	if domainRows != nil {
 		defer domainRows.Close()
 
@@ -313,8 +324,9 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 // getRecentActivity returns recent opens and clicks for live feed
 func (s *Server) getRecentActivity(c *fiber.Ctx) error {
 	limit := c.QueryInt("limit", 20)
+	userID := getUserID(c)
 
-	// Join with campaign_emails to get stored email instead of emails table
+	// Join with campaign_emails to get stored email instead of emails table (filtered by user)
 	rows, err := s.db.Query(`
 		SELECT
 			te.event_type,
@@ -325,10 +337,10 @@ func (s *Server) getRecentActivity(c *fiber.Ctx) error {
 		FROM tracking_events te
 		JOIN campaign_emails ce ON te.email_id = ce.email_id AND te.campaign_id = ce.campaign_id
 		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE te.event_type IN ('open', 'click') AND ce.email IS NOT NULL
+		WHERE c.user_id = $1 AND te.event_type IN ('open', 'click') AND ce.email IS NOT NULL
 		ORDER BY te.created_at DESC
-		LIMIT $1
-	`, limit)
+		LIMIT $2
+	`, userID, limit)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch activity"})
