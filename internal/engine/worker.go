@@ -282,8 +282,8 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 			break
 		}
 
-		// Check rate limits before using this SMTP
-		if !w.queue.CheckBothRateLimits(smtp.ID, smtp.MaxPerMinute, smtp.MaxPerHour) {
+		// Check rate limits for THIS queue type (campaign/warmup have separate limits)
+		if !w.queue.CheckBothRateLimitsForType(smtp.ID, smtp.MaxPerMinute, smtp.MaxPerHour, queueType) {
 			smtp = nil // Try another SMTP
 			continue
 		}
@@ -371,8 +371,8 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 		return
 	}
 
-	// Success - increment rate limit AFTER successful send
-	w.queue.IncrementRateLimit(smtp.ID)
+	// Success - increment rate limit for THIS queue type AFTER successful send
+	w.queue.IncrementRateLimitForType(smtp.ID, queueType)
 	w.stats.TotalSent.Add(1)
 	w.queue.IncrementStat("sent", 1)
 	w.updateEmailStatus(job.ID, "sent", "")
