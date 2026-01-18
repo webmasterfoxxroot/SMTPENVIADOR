@@ -37,8 +37,11 @@ function Layout({ onLogout }) {
     { path: '/campaigns', icon: Send, label: 'Campanhas' },
     { path: '/templates', icon: FileText, label: 'Templates' },
     { path: '/blacklist', icon: Ban, label: 'Blacklist' },
-    { path: '/settings', icon: Settings, label: 'Configuracoes' },
-    ...(user?.role === 'admin' ? [{ path: '/users', icon: Users, label: 'Usuários' }] : []),
+    // Admin only
+    ...(user?.role === 'admin' ? [
+      { path: '/settings', icon: Settings, label: 'Configuracoes' },
+      { path: '/users', icon: Users, label: 'Usuários' }
+    ] : []),
   ]
 
   return (
