@@ -206,7 +206,8 @@ func (w *Worker) processJob() {
 		return
 	}
 
-	// Success
+	// Success - increment rate limit AFTER successful send
+	w.queue.IncrementRateLimit(smtp.ID)
 	w.stats.TotalSent.Add(1)
 	w.queue.IncrementStat("sent", 1)
 	w.updateEmailStatus(job.ID, "sent", "")
@@ -370,7 +371,8 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 		return
 	}
 
-	// Success
+	// Success - increment rate limit AFTER successful send
+	w.queue.IncrementRateLimit(smtp.ID)
 	w.stats.TotalSent.Add(1)
 	w.queue.IncrementStat("sent", 1)
 	w.updateEmailStatus(job.ID, "sent", "")
