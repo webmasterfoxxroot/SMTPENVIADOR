@@ -128,24 +128,24 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
   const goRight = () => setStartIndex(Math.min(totalBars - visibleBars, startIndex + visibleBars))
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-6">
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
       {/* Navigation header */}
       <div className="flex items-center justify-between mb-4">
-        <div className="text-sm text-gray-500">
+        <div className="text-sm text-gray-500 dark:text-gray-400">
           Dias {startIndex + 1} - {Math.min(startIndex + visibleBars, totalBars)} de {totalBars}
         </div>
         <div className="flex gap-2">
           <button
             onClick={goLeft}
             disabled={!canGoLeft}
-            className={`p-2 rounded-lg transition-colors ${canGoLeft ? 'hover:bg-gray-100 text-gray-600' : 'text-gray-300 cursor-not-allowed'}`}
+            className={`p-2 rounded-lg transition-colors ${canGoLeft ? 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300' : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'}`}
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
           <button
             onClick={goRight}
             disabled={!canGoRight}
-            className={`p-2 rounded-lg transition-colors ${canGoRight ? 'hover:bg-gray-100 text-gray-600' : 'text-gray-300 cursor-not-allowed'}`}
+            className={`p-2 rounded-lg transition-colors ${canGoRight ? 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300' : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'}`}
           >
             <ChevronRight className="w-5 h-5" />
           </button>
@@ -158,7 +158,7 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
         className="mb-4 cursor-pointer"
         onMouseDown={handleSliderMouseDown}
       >
-        <div className="h-3 bg-gray-200 rounded-full relative">
+        <div className="h-3 bg-gray-200 dark:bg-gray-600 rounded-full relative">
           <div
             className={`h-3 bg-blue-500 rounded-full absolute transition-all ${isDraggingSlider ? 'bg-blue-600' : 'hover:bg-blue-600'}`}
             style={{
@@ -175,7 +175,7 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
         style={{ height: '280px', cursor: dragging !== null ? 'ns-resize' : 'default' }}
       >
         {/* Y-axis */}
-        <div className="absolute left-0 top-0 bottom-8 w-10 flex flex-col justify-between text-xs text-gray-400">
+        <div className="absolute left-0 top-0 bottom-8 w-10 flex flex-col justify-between text-xs text-gray-400 dark:text-gray-500">
           {[...yAxisSteps].reverse().map((val, i) => (
             <span key={i} className="text-right pr-2">{val}</span>
           ))}
@@ -186,7 +186,7 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
           {[0, 25, 50, 75, 100].map((percent) => (
             <div
               key={percent}
-              className="absolute left-0 right-0 border-t border-gray-100"
+              className="absolute left-0 right-0 border-t border-gray-100 dark:border-gray-700"
               style={{ top: `${percent}%` }}
             ></div>
           ))}
@@ -204,7 +204,7 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
                 onMouseDown={(e) => handleMouseDown(index, e)}
               >
                 {/* Value label above bar */}
-                <div className="absolute text-xs font-medium text-gray-600 select-none" style={{ bottom: `calc(${barHeight}% + 24px)` }}>
+                <div className="absolute text-xs font-medium text-gray-600 dark:text-gray-300 select-none" style={{ bottom: `calc(${barHeight}% + 24px)` }}>
                   {value}
                 </div>
 
@@ -228,7 +228,7 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
                 ></div>
 
                 {/* Date label */}
-                <div className="absolute -bottom-6 text-[10px] text-gray-400 whitespace-nowrap select-none">
+                <div className="absolute -bottom-6 text-[10px] text-gray-400 dark:text-gray-500 whitespace-nowrap select-none">
                   {getDateLabel(actualIndex)}
                 </div>
               </div>
@@ -237,7 +237,7 @@ function WarmupChart({ schedule, onChange, maxEmails, startDate }) {
         </div>
       </div>
 
-      <p className="text-xs text-gray-400 mt-6 text-center">
+      <p className="text-xs text-gray-400 dark:text-gray-500 mt-6 text-center">
         Arraste os circulos azuis para ajustar | Arraste a barra azul acima para navegar entre os dias
       </p>
     </div>
@@ -352,19 +352,19 @@ function EditWarmupModal({ warmupSMTP, onClose, onSave }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-100 sticky top-0 bg-white">
+        <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800">
           <div className="flex items-center gap-3">
-            <div className="p-3 bg-orange-100 rounded-xl">
+            <div className="p-3 bg-orange-100 dark:bg-orange-900/30 rounded-xl">
               <Settings className="w-6 h-6 text-orange-600" />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-gray-900">Configurar Warmup</h2>
-              <p className="text-sm text-gray-500">{warmupSMTP.smtp_name}</p>
+              <h2 className="text-lg font-bold text-gray-900 dark:text-white">Configurar Warmup</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">{warmupSMTP.smtp_name}</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg">
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
             <X className="w-5 h-5 text-gray-400" />
           </button>
         </div>
@@ -372,7 +372,7 @@ function EditWarmupModal({ warmupSMTP, onClose, onSave }) {
         <div className="p-6 space-y-6">
           {/* Recipe Type */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-3">Tipo de Aquecimento</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Tipo de Aquecimento</label>
             <div className="grid grid-cols-4 gap-3">
               {[
                 { value: 'progressive', label: 'Progressivo', desc: 'Recomendado', icon: TrendingUp },
@@ -386,15 +386,15 @@ function EditWarmupModal({ warmupSMTP, onClose, onSave }) {
                   onClick={() => handleRecipeChange(recipe.value)}
                   className={`p-3 rounded-xl border-2 transition-all text-center ${
                     form.recipe_type === recipe.value
-                      ? 'border-orange-500 bg-orange-50'
-                      : 'border-gray-200 hover:border-gray-300'
+                      ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/30'
+                      : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                   }`}
                 >
                   <recipe.icon className={`w-5 h-5 mx-auto mb-1 ${
                     form.recipe_type === recipe.value ? 'text-orange-600' : 'text-gray-400'
                   }`} />
-                  <div className="font-medium text-sm">{recipe.label}</div>
-                  <div className="text-xs text-gray-500">{recipe.desc}</div>
+                  <div className="font-medium text-sm dark:text-gray-200">{recipe.label}</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">{recipe.desc}</div>
                 </button>
               ))}
             </div>
@@ -403,71 +403,71 @@ function EditWarmupModal({ warmupSMTP, onClose, onSave }) {
           {/* Settings Grid */}
           <div className="grid grid-cols-3 gap-4 mb-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Min/dia</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Min/dia</label>
               <input
                 type="number"
                 value={form.min_emails_per_day}
                 onChange={(e) => handleMinChange(parseInt(e.target.value) || 1)}
                 min="1"
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+                className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center bg-white dark:bg-gray-700 dark:text-white"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Max/dia</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Max/dia</label>
               <input
                 type="number"
                 value={form.max_emails_per_day}
                 onChange={(e) => handleMaxChange(parseInt(e.target.value) || 40)}
                 min="1"
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+                className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center bg-white dark:bg-gray-700 dark:text-white"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Envio %</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Envio %</label>
               <input
                 type="number"
                 value={form.send_rate}
                 onChange={(e) => setForm({ ...form, send_rate: parseInt(e.target.value) || 30 })}
                 min="1"
                 max="100"
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+                className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center bg-white dark:bg-gray-700 dark:text-white"
               />
               <p className="text-xs text-gray-400 mt-1">Chance de enviar</p>
             </div>
           </div>
           <div className="grid grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Resposta %</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Resposta %</label>
               <input
                 type="number"
                 value={form.reply_rate}
                 onChange={(e) => setForm({ ...form, reply_rate: parseInt(e.target.value) || 0 })}
                 min="0"
                 max="100"
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+                className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center bg-white dark:bg-gray-700 dark:text-white"
               />
               <p className="text-xs text-gray-400 mt-1">Chance de responder</p>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Hora inicio</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Hora inicio</label>
               <input
                 type="number"
                 value={form.start_hour}
                 onChange={(e) => setForm({ ...form, start_hour: parseInt(e.target.value) || 0 })}
                 min="0"
                 max="23"
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+                className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center bg-white dark:bg-gray-700 dark:text-white"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Hora fim</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Hora fim</label>
               <input
                 type="number"
                 value={form.end_hour}
                 onChange={(e) => setForm({ ...form, end_hour: parseInt(e.target.value) || 18 })}
                 min="0"
                 max="23"
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+                className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center bg-white dark:bg-gray-700 dark:text-white"
               />
             </div>
           </div>
@@ -488,12 +488,12 @@ function EditWarmupModal({ warmupSMTP, onClose, onSave }) {
 
           {/* Daily Stats Table (if any) */}
           {dailyStats.length > 0 && (
-            <div className="bg-gray-50 rounded-xl p-4">
-              <h4 className="font-medium text-gray-700 mb-3">Historico Recente</h4>
+            <div className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-4">
+              <h4 className="font-medium text-gray-700 dark:text-gray-200 mb-3">Historico Recente</h4>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="text-left text-gray-500">
+                    <tr className="text-left text-gray-500 dark:text-gray-400">
                       <th className="pb-2">Data</th>
                       <th className="pb-2 text-center">Agendado</th>
                       <th className="pb-2 text-center">Enviado</th>
@@ -503,17 +503,17 @@ function EditWarmupModal({ warmupSMTP, onClose, onSave }) {
                       <th className="pb-2 text-center">Progresso</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-200">
+                  <tbody className="divide-y divide-gray-200 dark:divide-gray-600">
                     {dailyStats.slice(0, 10).map((stat, idx) => (
-                      <tr key={idx}>
+                      <tr key={idx} className="dark:text-gray-300">
                         <td className="py-2">{stat.date}</td>
                         <td className="py-2 text-center">{stat.scheduled}</td>
                         <td className="py-2 text-center font-medium">{stat.sent}</td>
-                        <td className="py-2 text-center text-green-600">{stat.inbox}</td>
-                        <td className="py-2 text-center text-red-600">{stat.spam}</td>
-                        <td className="py-2 text-center text-purple-600">{stat.replies}</td>
+                        <td className="py-2 text-center text-green-600 dark:text-green-400">{stat.inbox}</td>
+                        <td className="py-2 text-center text-red-600 dark:text-red-400">{stat.spam}</td>
+                        <td className="py-2 text-center text-purple-600 dark:text-purple-400">{stat.replies}</td>
                         <td className="py-2">
-                          <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2">
                             <div
                               className="bg-green-500 h-2 rounded-full"
                               style={{ width: `${stat.scheduled > 0 ? (stat.sent / stat.scheduled) * 100 : 0}%` }}
@@ -530,11 +530,11 @@ function EditWarmupModal({ warmupSMTP, onClose, onSave }) {
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end gap-3 p-6 border-t border-gray-100 sticky bottom-0 bg-white">
+        <div className="flex justify-end gap-3 p-6 border-t border-gray-100 dark:border-gray-700 sticky bottom-0 bg-white dark:bg-gray-800">
           <button
             type="button"
             onClick={onClose}
-            className="px-6 py-3 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50"
+            className="px-6 py-3 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-xl font-medium hover:bg-gray-50 dark:hover:bg-gray-700"
           >
             Cancelar
           </button>
@@ -630,18 +630,18 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-6 border-b border-gray-100 sticky top-0 bg-white">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800">
           <div className="flex items-center gap-3">
-            <div className="p-3 bg-orange-100 rounded-xl">
+            <div className="p-3 bg-orange-100 dark:bg-orange-900/30 rounded-xl">
               <Flame className="w-6 h-6 text-orange-600" />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-gray-900">Adicionar SMTP ao Warmup</h2>
-              <p className="text-sm text-gray-500">Configure o aquecimento do servidor</p>
+              <h2 className="text-lg font-bold text-gray-900 dark:text-white">Adicionar SMTP ao Warmup</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Configure o aquecimento do servidor</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg">
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
             <X className="w-5 h-5 text-gray-400" />
           </button>
         </div>
@@ -649,11 +649,11 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
         <form onSubmit={handleSubmit} className="p-6 space-y-6">
           {/* SMTP Selection */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Servidor SMTP</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Servidor SMTP</label>
             <select
               value={form.smtp_id}
               onChange={(e) => setForm({ ...form, smtp_id: e.target.value })}
-              className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none"
+              className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none bg-white dark:bg-gray-700 dark:text-white"
               required
             >
               <option value="">Selecione um SMTP...</option>
@@ -665,7 +665,7 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
 
           {/* Recipe Type */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-3">Tipo de Aquecimento</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Tipo de Aquecimento</label>
             <div className="grid grid-cols-4 gap-3">
               {[
                 { value: 'progressive', label: 'Progressivo', desc: 'Recomendado', icon: TrendingUp },
@@ -679,15 +679,15 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
                   onClick={() => handleRecipeChange(recipe.value)}
                   className={`p-3 rounded-xl border-2 transition-all text-center ${
                     form.recipe_type === recipe.value
-                      ? 'border-orange-500 bg-orange-50'
-                      : 'border-gray-200 hover:border-gray-300'
+                      ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/30'
+                      : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                   }`}
                 >
                   <recipe.icon className={`w-5 h-5 mx-auto mb-1 ${
                     form.recipe_type === recipe.value ? 'text-orange-600' : 'text-gray-400'
                   }`} />
-                  <div className="font-medium text-sm">{recipe.label}</div>
-                  <div className="text-xs text-gray-500">{recipe.desc}</div>
+                  <div className="font-medium text-sm dark:text-gray-200">{recipe.label}</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">{recipe.desc}</div>
                 </button>
               ))}
             </div>
@@ -706,71 +706,71 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
           {/* Settings Grid */}
           <div className="grid grid-cols-3 gap-4 mb-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Min/dia</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Min/dia</label>
               <input
                 type="number"
                 value={form.min_emails_per_day}
                 onChange={(e) => handleMinChange(parseInt(e.target.value) || 1)}
                 min="1"
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+                className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center bg-white dark:bg-gray-700 dark:text-white"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Max/dia</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Max/dia</label>
               <input
                 type="number"
                 value={form.max_emails_per_day}
                 onChange={(e) => handleMaxChange(parseInt(e.target.value) || 40)}
                 min="1"
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+                className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center bg-white dark:bg-gray-700 dark:text-white"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Envio %</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Envio %</label>
               <input
                 type="number"
                 value={form.send_rate}
                 onChange={(e) => setForm({ ...form, send_rate: parseInt(e.target.value) || 30 })}
                 min="1"
                 max="100"
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+                className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center bg-white dark:bg-gray-700 dark:text-white"
               />
               <p className="text-xs text-gray-400 mt-1">Chance de enviar</p>
             </div>
           </div>
           <div className="grid grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Resposta %</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Resposta %</label>
               <input
                 type="number"
                 value={form.reply_rate}
                 onChange={(e) => setForm({ ...form, reply_rate: parseInt(e.target.value) || 0 })}
                 min="0"
                 max="100"
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+                className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center bg-white dark:bg-gray-700 dark:text-white"
               />
               <p className="text-xs text-gray-400 mt-1">Chance de responder</p>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Hora inicio</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Hora inicio</label>
               <input
                 type="number"
                 value={form.start_hour}
                 onChange={(e) => setForm({ ...form, start_hour: parseInt(e.target.value) || 0 })}
                 min="0"
                 max="23"
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+                className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center bg-white dark:bg-gray-700 dark:text-white"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Hora fim</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Hora fim</label>
               <input
                 type="number"
                 value={form.end_hour}
                 onChange={(e) => setForm({ ...form, end_hour: parseInt(e.target.value) || 18 })}
                 min="0"
                 max="23"
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center"
+                className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-center bg-white dark:bg-gray-700 dark:text-white"
               />
             </div>
           </div>
@@ -778,28 +778,28 @@ function AddWarmupSMTPModal({ smtps, onClose, onSave }) {
           {/* Date Range */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Data Inicio</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Data Inicio</label>
               <input
                 type="date"
                 value={form.start_date}
                 onChange={(e) => setForm({ ...form, start_date: e.target.value })}
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none"
+                className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none bg-white dark:bg-gray-700 dark:text-white"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Data Fim (opcional)</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Data Fim (opcional)</label>
               <input
                 type="date"
                 value={form.end_date}
                 onChange={(e) => setForm({ ...form, end_date: e.target.value })}
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none"
+                className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none bg-white dark:bg-gray-700 dark:text-white"
               />
               <p className="text-xs text-gray-400 mt-1">45 dias minimo recomendado</p>
             </div>
           </div>
 
-          <div className="flex justify-end gap-3 pt-4 border-t sticky bottom-0 bg-white">
-            <button type="button" onClick={onClose} className="px-6 py-3 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50">
+          <div className="flex justify-end gap-3 pt-4 border-t dark:border-gray-700 sticky bottom-0 bg-white dark:bg-gray-800">
+            <button type="button" onClick={onClose} className="px-6 py-3 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-xl font-medium hover:bg-gray-50 dark:hover:bg-gray-700">
               Cancelar
             </button>
             <button type="submit" disabled={loading} className="px-6 py-3 bg-orange-600 text-white rounded-xl font-medium hover:bg-orange-700 flex items-center gap-2">
@@ -1092,18 +1092,18 @@ function AddSeedModal({ onClose, onSave }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-6 border-b border-gray-100">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700">
           <div className="flex items-center gap-3">
-            <div className="p-3 bg-blue-100 rounded-xl">
+            <div className="p-3 bg-blue-100 dark:bg-blue-900/30 rounded-xl">
               <Mail className="w-6 h-6 text-blue-600" />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-gray-900">Adicionar Conta Seed</h2>
-              <p className="text-sm text-gray-500">Conta IMAP para receber emails de warmup</p>
+              <h2 className="text-lg font-bold text-gray-900 dark:text-white">Adicionar Conta Seed</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Conta IMAP para receber emails de warmup</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg">
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
             <X className="w-5 h-5 text-gray-400" />
           </button>
         </div>
@@ -1115,11 +1115,11 @@ function AddSeedModal({ onClose, onSave }) {
               type="checkbox"
               checked={bulkMode}
               onChange={(e) => setBulkMode(e.target.checked)}
-              className="w-5 h-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              className="w-5 h-5 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
             />
             <div>
-              <span className="font-medium text-gray-900">Importar em Massa</span>
-              <p className="text-xs text-gray-500">Adicionar múltiplas contas de uma vez</p>
+              <span className="font-medium text-gray-900 dark:text-white">Importar em Massa</span>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Adicionar multiplas contas de uma vez</p>
             </div>
           </label>
         </div>
@@ -1569,40 +1569,40 @@ function EditSeedModal({ seed, onClose, onSave }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-6 border-b border-gray-100">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700">
           <div className="flex items-center gap-3">
-            <div className="p-3 bg-green-100 rounded-xl">
+            <div className="p-3 bg-green-100 dark:bg-green-900/30 rounded-xl">
               <Settings className="w-6 h-6 text-green-600" />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-gray-900">Editar Conta Seed</h2>
-              <p className="text-sm text-gray-500">{seed.email}</p>
+              <h2 className="text-lg font-bold text-gray-900 dark:text-white">Editar Conta Seed</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">{seed.email}</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg">
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
             <X className="w-5 h-5 text-gray-400" />
           </button>
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Email</label>
             <input
               type="email"
               value={form.email}
               disabled
-              className="w-full px-4 py-3 border border-gray-200 rounded-xl bg-gray-50 text-gray-500 cursor-not-allowed"
+              className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-xl bg-gray-50 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Nova Senha (deixe vazio para manter)</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Nova Senha (deixe vazio para manter)</label>
             <input
               type="password"
               value={form.password}
               onChange={(e) => setForm({ ...form, password: e.target.value })}
-              className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none"
+              className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none bg-white dark:bg-gray-700 dark:text-white"
               placeholder="Deixe vazio para manter a senha atual"
             />
           </div>
@@ -1767,8 +1767,8 @@ function EditSeedModal({ seed, onClose, onSave }) {
             </div>
           </div>
 
-          <div className="flex justify-end gap-3 pt-4 border-t">
-            <button type="button" onClick={onClose} className="px-6 py-3 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50">
+          <div className="flex justify-end gap-3 pt-4 border-t dark:border-gray-700">
+            <button type="button" onClick={onClose} className="px-6 py-3 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-xl font-medium hover:bg-gray-50 dark:hover:bg-gray-700">
               Cancelar
             </button>
             <button
@@ -2072,11 +2072,11 @@ function Warmup() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
             <Flame className="w-7 h-7 text-orange-500" />
             Warmup de SMTP
           </h1>
-          <p className="text-sm text-gray-500 mt-1">Aquecimento automatico com interacao simulada</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Aquecimento automatico com interacao simulada</p>
         </div>
         <div className="flex gap-3">
           {activeTab === 'dashboard' && (
@@ -2117,13 +2117,13 @@ function Warmup() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-6 border-b border-gray-200">
+      <div className="flex gap-2 mb-6 border-b border-gray-200 dark:border-gray-700">
         <button
           onClick={() => setActiveTab('dashboard')}
           className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${
             activeTab === 'dashboard'
               ? 'text-orange-600 border-orange-600'
-              : 'text-gray-500 border-transparent hover:text-gray-700'
+              : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300'
           }`}
         >
           <div className="flex items-center gap-2">
@@ -2136,13 +2136,13 @@ function Warmup() {
           className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${
             activeTab === 'smtps'
               ? 'text-orange-600 border-orange-600'
-              : 'text-gray-500 border-transparent hover:text-gray-700'
+              : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300'
           }`}
         >
           <div className="flex items-center gap-2">
             <Server className="w-4 h-4" />
             SMTPs
-            <span className="px-2 py-0.5 text-xs bg-gray-100 rounded-full">{warmupSMTPs.length}</span>
+            <span className="px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-700 rounded-full">{warmupSMTPs.length}</span>
           </div>
         </button>
         <button
@@ -2150,13 +2150,13 @@ function Warmup() {
           className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${
             activeTab === 'seeds'
               ? 'text-orange-600 border-orange-600'
-              : 'text-gray-500 border-transparent hover:text-gray-700'
+              : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300'
           }`}
         >
           <div className="flex items-center gap-2">
             <Mail className="w-4 h-4" />
             Seeds
-            <span className="px-2 py-0.5 text-xs bg-gray-100 rounded-full">{seeds.length}</span>
+            <span className="px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-700 rounded-full">{seeds.length}</span>
           </div>
         </button>
         <button
@@ -2164,13 +2164,13 @@ function Warmup() {
           className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${
             activeTab === 'templates'
               ? 'text-orange-600 border-orange-600'
-              : 'text-gray-500 border-transparent hover:text-gray-700'
+              : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300'
           }`}
         >
           <div className="flex items-center gap-2">
             <FileText className="w-4 h-4" />
             Templates
-            <span className="px-2 py-0.5 text-xs bg-gray-100 rounded-full">{templates.length}</span>
+            <span className="px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-700 rounded-full">{templates.length}</span>
           </div>
         </button>
       </div>
@@ -2180,50 +2180,50 @@ function Warmup() {
         <>
       {/* Stats Cards */}
       <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-white rounded-2xl p-6 border border-gray-100">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
           <div className="flex items-center gap-4">
-            <div className="p-3 bg-blue-100 rounded-xl">
+            <div className="p-3 bg-blue-100 dark:bg-blue-900/30 rounded-xl">
               <Mail className="w-6 h-6 text-blue-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900">{stats.total_sent || 0}</p>
-              <p className="text-sm text-gray-500">Emails Enviados</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">{stats.total_sent || 0}</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Emails Enviados</p>
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl p-6 border border-gray-100">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
           <div className="flex items-center gap-4">
-            <div className="p-3 bg-green-100 rounded-xl">
+            <div className="p-3 bg-green-100 dark:bg-green-900/30 rounded-xl">
               <Inbox className="w-6 h-6 text-green-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900">{stats.total_interactions || 0}</p>
-              <p className="text-sm text-gray-500">Interacoes</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">{stats.total_interactions || 0}</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Interacoes</p>
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl p-6 border border-gray-100">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
           <div className="flex items-center gap-4">
-            <div className="p-3 bg-purple-100 rounded-xl">
+            <div className="p-3 bg-purple-100 dark:bg-purple-900/30 rounded-xl">
               <MessageSquare className="w-6 h-6 text-purple-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900">{stats.total_replies || 0}</p>
-              <p className="text-sm text-gray-500">Respostas</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">{stats.total_replies || 0}</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Respostas</p>
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl p-6 border border-gray-100">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
           <div className="flex items-center gap-4">
-            <div className="p-3 bg-red-100 rounded-xl">
+            <div className="p-3 bg-red-100 dark:bg-red-900/30 rounded-xl">
               <AlertCircle className="w-6 h-6 text-red-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900">{stats.spam_rate?.toFixed(1) || 0}%</p>
-              <p className="text-sm text-gray-500">Taxa de Spam</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">{stats.spam_rate?.toFixed(1) || 0}%</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Taxa de Spam</p>
             </div>
           </div>
         </div>
@@ -2232,8 +2232,8 @@ function Warmup() {
       {/* Dashboard Stats Grid */}
       <div className="grid grid-cols-2 gap-6 mb-6">
         {/* Entrada vs Spam Donut */}
-        <div className="bg-white rounded-2xl p-6 border border-gray-100">
-          <h3 className="font-semibold text-gray-900 mb-4">Entrada vs Spam</h3>
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
+          <h3 className="font-semibold text-gray-900 dark:text-white mb-4">Entrada vs Spam</h3>
           <div className="relative w-40 h-40 mx-auto">
             <svg className="w-full h-full" viewBox="0 0 36 36">
               <path
@@ -2241,6 +2241,7 @@ function Warmup() {
                 fill="none"
                 stroke="#E5E7EB"
                 strokeWidth="3"
+                className="dark:stroke-gray-600"
               />
               <path
                 d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
@@ -2254,44 +2255,44 @@ function Warmup() {
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="text-center">
                 <p className="text-2xl font-bold text-blue-600">{stats.inbox_rate?.toFixed(1) || 100}%</p>
-                <p className="text-xs text-gray-500">Entrada</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Entrada</p>
               </div>
             </div>
           </div>
           <div className="flex justify-center gap-6 mt-4">
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-              <span className="text-sm text-gray-600">Entrada</span>
+              <span className="text-sm text-gray-600 dark:text-gray-400">Entrada</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 bg-gray-200 rounded-full"></div>
-              <span className="text-sm text-gray-600">Spam</span>
+              <div className="w-3 h-3 bg-gray-200 dark:bg-gray-600 rounded-full"></div>
+              <span className="text-sm text-gray-600 dark:text-gray-400">Spam</span>
             </div>
           </div>
         </div>
 
         {/* Resumo Rápido */}
-        <div className="bg-white rounded-2xl p-6 border border-gray-100">
-          <h3 className="font-semibold text-gray-900 mb-4">Resumo</h3>
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
+          <h3 className="font-semibold text-gray-900 dark:text-white mb-4">Resumo</h3>
           <div className="space-y-4">
-            <div className="flex items-center justify-between p-3 bg-orange-50 rounded-lg">
+            <div className="flex items-center justify-between p-3 bg-orange-50 dark:bg-orange-900/20 rounded-lg">
               <div className="flex items-center gap-3">
                 <Server className="w-5 h-5 text-orange-600" />
-                <span className="text-gray-700">SMTPs em Aquecimento</span>
+                <span className="text-gray-700 dark:text-gray-300">SMTPs em Aquecimento</span>
               </div>
               <span className="text-xl font-bold text-orange-600">{warmupSMTPs.length}</span>
             </div>
-            <div className="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
+            <div className="flex items-center justify-between p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
               <div className="flex items-center gap-3">
                 <Mail className="w-5 h-5 text-blue-600" />
-                <span className="text-gray-700">Contas Seed</span>
+                <span className="text-gray-700 dark:text-gray-300">Contas Seed</span>
               </div>
               <span className="text-xl font-bold text-blue-600">{seeds.length}</span>
             </div>
-            <div className="flex items-center justify-between p-3 bg-purple-50 rounded-lg">
+            <div className="flex items-center justify-between p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
               <div className="flex items-center gap-3">
                 <FileText className="w-5 h-5 text-purple-600" />
-                <span className="text-gray-700">Templates</span>
+                <span className="text-gray-700 dark:text-gray-300">Templates</span>
               </div>
               <span className="text-xl font-bold text-purple-600">{templates.length}</span>
             </div>
@@ -2300,14 +2301,14 @@ function Warmup() {
       </div>
 
       {/* Recent Activity */}
-      <div className="bg-white rounded-2xl p-6 border border-gray-100">
-        <h3 className="font-semibold text-gray-900 mb-4">Atividade Recente</h3>
+      <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
+        <h3 className="font-semibold text-gray-900 dark:text-white mb-4">Atividade Recente</h3>
         {activity.length === 0 ? (
-          <p className="text-gray-500 text-center py-8">Nenhuma atividade recente</p>
+          <p className="text-gray-500 dark:text-gray-400 text-center py-8">Nenhuma atividade recente</p>
         ) : (
           <div className="space-y-3 max-h-80 overflow-y-auto">
             {activity.map(item => (
-              <div key={item.id} className="flex items-center gap-4 p-3 bg-gray-50 rounded-lg">
+              <div key={item.id} className="flex items-center gap-4 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
                 <div className={`p-2 rounded-lg ${
                   item.warmup_type === 'reply' ? 'bg-indigo-100' :
                   item.warmup_type === 'internal' ? 'bg-purple-100' :
@@ -2331,7 +2332,7 @@ function Warmup() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <p className="text-sm font-medium text-gray-900 truncate">{item.subject}</p>
+                    <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{item.subject}</p>
                     {item.warmup_type === 'reply' && (
                       <span className="px-1.5 py-0.5 text-xs font-medium bg-indigo-100 text-indigo-700 rounded">Resposta</span>
                     )}
@@ -2348,7 +2349,7 @@ function Warmup() {
                       <span className="px-1.5 py-0.5 text-xs font-medium bg-green-100 text-green-700 rounded">Movido p/ Entrada</span>
                     )}
                   </div>
-                  <p className="text-xs text-gray-500 truncate">
+                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
                     {item.from_email && item.to_email
                       ? `${item.from_email} → ${item.to_email}`
                       : item.to_email || item.from_email || item.seed_email}
@@ -2368,9 +2369,9 @@ function Warmup() {
       {/* SMTPs Tab */}
       {activeTab === 'smtps' && (
         <div className="space-y-6">
-          <div className="bg-white rounded-2xl p-6 border border-gray-100">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-gray-900">SMTPs em Aquecimento</h3>
+              <h3 className="font-semibold text-gray-900 dark:text-white">SMTPs em Aquecimento</h3>
               <button
                 onClick={() => setShowAddSMTP(true)}
                 className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
@@ -2380,7 +2381,7 @@ function Warmup() {
               </button>
             </div>
             {warmupSMTPs.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
+              <div className="text-center py-12 text-gray-500 dark:text-gray-400">
                 <Server className="w-16 h-16 mx-auto mb-4 opacity-30" />
                 <p className="text-lg">Nenhum SMTP em aquecimento</p>
                 <p className="text-sm mt-2">Adicione um SMTP para começar o aquecimento</p>
@@ -2388,40 +2389,40 @@ function Warmup() {
             ) : (
               <div className="space-y-4">
                 {warmupSMTPs.map(smtp => (
-                  <div key={smtp.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-100">
+                  <div key={smtp.id} className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl border border-gray-100 dark:border-gray-700">
                     <div className="flex items-center gap-4">
-                      <div className={`p-3 rounded-xl ${smtp.status === 'active' ? 'bg-green-100' : 'bg-gray-200'}`}>
+                      <div className={`p-3 rounded-xl ${smtp.status === 'active' ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-200 dark:bg-gray-600'}`}>
                         <Server className={`w-6 h-6 ${smtp.status === 'active' ? 'text-green-600' : 'text-gray-400'}`} />
                       </div>
                       <div>
-                        <p className="font-semibold text-gray-900">{smtp.smtp_name}</p>
-                        <p className="text-sm text-gray-500">
+                        <p className="font-semibold text-gray-900 dark:text-white">{smtp.smtp_name}</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">
                           Dia {smtp.current_day} | {smtp.min_emails_per_day}-{smtp.max_emails_per_day} emails/dia
                         </p>
                         <div className="flex gap-4 mt-1 text-xs">
-                          <span className="text-blue-600">Enviados: {smtp.total_sent}</span>
-                          <span className="text-green-600">Entrada: {smtp.total_inbox}</span>
-                          <span className="text-red-600">Spam: {smtp.total_spam}</span>
-                          <span className="text-purple-600">Respostas: {smtp.total_replies}</span>
+                          <span className="text-blue-600 dark:text-blue-400">Enviados: {smtp.total_sent}</span>
+                          <span className="text-green-600 dark:text-green-400">Entrada: {smtp.total_inbox}</span>
+                          <span className="text-red-600 dark:text-red-400">Spam: {smtp.total_spam}</span>
+                          <span className="text-purple-600 dark:text-purple-400">Respostas: {smtp.total_replies}</span>
                         </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                        smtp.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'
+                        smtp.status === 'active' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300'
                       }`}>
                         {smtp.status === 'active' ? 'Ativo' : 'Pausado'}
                       </span>
                       <button
                         onClick={() => triggerWarmup(smtp.id)}
-                        className="p-2 hover:bg-blue-50 rounded-lg"
+                        className="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg"
                         title="Enviar email"
                       >
                         <Send className="w-5 h-5 text-blue-500" />
                       </button>
                       <button
                         onClick={() => toggleWarmup(smtp.id)}
-                        className="p-2 hover:bg-gray-100 rounded-lg"
+                        className="p-2 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-lg"
                         title={smtp.status === 'active' ? 'Pausar' : 'Ativar'}
                       >
                         {smtp.status === 'active' ? (
@@ -2432,14 +2433,14 @@ function Warmup() {
                       </button>
                       <button
                         onClick={() => setEditingWarmup(smtp)}
-                        className="p-2 hover:bg-gray-100 rounded-lg"
+                        className="p-2 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-lg"
                         title="Editar"
                       >
                         <Settings className="w-5 h-5 text-gray-400" />
                       </button>
                       <button
                         onClick={() => deleteWarmupSMTP(smtp.id)}
-                        className="p-2 hover:bg-red-50 rounded-lg"
+                        className="p-2 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg"
                         title="Remover"
                       >
                         <Trash2 className="w-5 h-5 text-red-400" />
@@ -2456,9 +2457,9 @@ function Warmup() {
       {/* Seeds Tab */}
       {activeTab === 'seeds' && (
         <div className="space-y-6">
-          <div className="bg-white rounded-2xl p-6 border border-gray-100">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-gray-900">Contas Seed (IMAP)</h3>
+              <h3 className="font-semibold text-gray-900 dark:text-white">Contas Seed (IMAP)</h3>
               <div className="flex items-center gap-2">
                 <button
                   onClick={verifyAllSeeds}
@@ -2497,7 +2498,7 @@ function Warmup() {
               </div>
             </div>
             {seeds.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
+              <div className="text-center py-12 text-gray-500 dark:text-gray-400">
                 <Mail className="w-16 h-16 mx-auto mb-4 opacity-30" />
                 <p className="text-lg">Nenhuma conta seed cadastrada</p>
                 <p className="text-sm mt-2">Adicione contas seed para receber emails de warmup</p>
@@ -2506,53 +2507,53 @@ function Warmup() {
               <div className="grid grid-cols-2 gap-4">
                 {seeds.map(seed => (
                   <div key={seed.id} className={`p-4 border rounded-xl transition-colors ${
-                    seed.status === 'error' ? 'border-red-300 bg-red-50/30' : 'border-gray-200 hover:border-gray-300'
+                    seed.status === 'error' ? 'border-red-300 dark:border-red-800 bg-red-50/30 dark:bg-red-900/20' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
                   }`}>
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-2">
                         <span className={`px-2 py-1 rounded text-xs font-medium ${
-                          seed.status === 'active' ? 'bg-green-100 text-green-700' :
-                          seed.status === 'error' ? 'bg-red-100 text-red-700' :
-                          'bg-gray-100 text-gray-700'
+                          seed.status === 'active' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' :
+                          seed.status === 'error' ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400' :
+                          'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
                         }`}>
                           {seed.status === 'active' ? 'ATIVO' : seed.status === 'error' ? 'ERRO' : 'PAUSADO'}
                         </span>
-                        <span className="px-2 py-1 rounded text-xs font-medium bg-blue-50 text-blue-600">
+                        <span className="px-2 py-1 rounded text-xs font-medium bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">
                           {seed.provider?.toUpperCase()}
                         </span>
                       </div>
                       <div className="flex gap-1">
-                        <button onClick={() => triggerSeedSend(seed.id)} className="p-1.5 hover:bg-cyan-50 rounded-lg" title="Enviar email">
+                        <button onClick={() => triggerSeedSend(seed.id)} className="p-1.5 hover:bg-cyan-50 dark:hover:bg-cyan-900/30 rounded-lg" title="Enviar email">
                           <Send className="w-4 h-4 text-cyan-500" />
                         </button>
-                        <button onClick={() => toggleSeed(seed.id)} className="p-1.5 hover:bg-gray-100 rounded-lg">
+                        <button onClick={() => toggleSeed(seed.id)} className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-lg">
                           {seed.status === 'active' ? <Pause className="w-4 h-4 text-gray-400" /> : <Play className="w-4 h-4 text-green-500" />}
                         </button>
-                        <button onClick={() => setEditingSeed(seed)} className="p-1.5 hover:bg-gray-100 rounded-lg">
+                        <button onClick={() => setEditingSeed(seed)} className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-lg">
                           <Edit className="w-4 h-4 text-gray-400" />
                         </button>
-                        <button onClick={() => deleteSeed(seed.id)} className="p-1.5 hover:bg-red-50 rounded-lg">
+                        <button onClick={() => deleteSeed(seed.id)} className="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg">
                           <Trash2 className="w-4 h-4 text-red-400" />
                         </button>
                       </div>
                     </div>
-                    <p className="font-medium text-gray-900 truncate">{seed.email}</p>
-                    <p className="text-xs text-gray-500 mt-1">{seed.imap_host}</p>
+                    <p className="font-medium text-gray-900 dark:text-white truncate">{seed.email}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{seed.imap_host}</p>
                     {seed.status === 'error' && seed.error_message && (
-                      <p className="text-xs text-red-600 mt-2 bg-red-50 p-2 rounded truncate" title={seed.error_message}>
+                      <p className="text-xs text-red-600 dark:text-red-400 mt-2 bg-red-50 dark:bg-red-900/20 p-2 rounded truncate" title={seed.error_message}>
                         {seed.error_message.length > 80 ? seed.error_message.substring(0, 80) + '...' : seed.error_message}
                       </p>
                     )}
-                    <div className="mt-3 pt-3 border-t border-gray-100">
+                    <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700">
                       <div className="grid grid-cols-3 gap-2 text-xs">
-                        <div><span className="text-gray-500">Enviados:</span> <span className="font-medium">{seed.total_sent || 0}</span></div>
-                        <div><span className="text-gray-500">Recebidos:</span> <span className="font-medium">{seed.total_received || 0}</span></div>
-                        <div><span className="text-gray-500">Respondidos:</span> <span className="font-medium">{seed.total_replied || 0}</span></div>
+                        <div><span className="text-gray-500 dark:text-gray-400">Enviados:</span> <span className="font-medium dark:text-gray-300">{seed.total_sent || 0}</span></div>
+                        <div><span className="text-gray-500 dark:text-gray-400">Recebidos:</span> <span className="font-medium dark:text-gray-300">{seed.total_received || 0}</span></div>
+                        <div><span className="text-gray-500 dark:text-gray-400">Respondidos:</span> <span className="font-medium dark:text-gray-300">{seed.total_replied || 0}</span></div>
                       </div>
                       <div className="flex justify-between mt-2 text-xs">
-                        <span className="text-green-600">Entrada: {seed.total_inbox || 0}</span>
-                        <span className="text-red-600">Spam: {seed.total_spam || 0}</span>
-                        <span className="text-orange-600">Movidos: {seed.total_moved || 0}</span>
+                        <span className="text-green-600 dark:text-green-400">Entrada: {seed.total_inbox || 0}</span>
+                        <span className="text-red-600 dark:text-red-400">Spam: {seed.total_spam || 0}</span>
+                        <span className="text-orange-600 dark:text-orange-400">Movidos: {seed.total_moved || 0}</span>
                       </div>
                     </div>
                     <div className="mt-2 text-xs text-gray-400">
@@ -2570,47 +2571,47 @@ function Warmup() {
       {activeTab === 'templates' && (
         <div className="space-y-6">
           {/* Send Templates */}
-          <div className="bg-white rounded-2xl p-6 border border-gray-100">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-blue-100 rounded-lg">
+                <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
                   <Send className="w-5 h-5 text-blue-600" />
                 </div>
                 <div>
-                  <h3 className="font-semibold text-gray-900">Templates de Envio</h3>
-                  <p className="text-sm text-gray-500">Usados para enviar emails de warmup</p>
+                  <h3 className="font-semibold text-gray-900 dark:text-white">Templates de Envio</h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Usados para enviar emails de warmup</p>
                 </div>
               </div>
-              <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-medium">
+              <span className="px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-full text-sm font-medium">
                 {sendTemplates.length} templates
               </span>
             </div>
             {sendTemplates.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
+              <div className="text-center py-8 text-gray-500 dark:text-gray-400">
                 <FileText className="w-12 h-12 mx-auto mb-4 opacity-30" />
                 <p>Nenhum template de envio</p>
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-4">
                 {sendTemplates.map(template => (
-                  <div key={template.id} className="p-4 border border-gray-100 rounded-xl hover:border-blue-200 transition-colors">
+                  <div key={template.id} className="p-4 border border-gray-100 dark:border-gray-700 rounded-xl hover:border-blue-200 dark:hover:border-blue-800 transition-colors">
                     <div className="flex items-start justify-between mb-2">
                       <span className={`px-2 py-1 text-xs font-medium rounded ${
-                        template.category === 'business' ? 'bg-blue-100 text-blue-700' :
-                        template.category === 'casual' ? 'bg-green-100 text-green-700' :
-                        'bg-purple-100 text-purple-700'
+                        template.category === 'business' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' :
+                        template.category === 'casual' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' :
+                        'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400'
                       }`}>
                         {template.category}
                       </span>
                       <button
                         onClick={() => deleteTemplate(template.id)}
-                        className="p-1 hover:bg-red-50 rounded"
+                        className="p-1 hover:bg-red-50 dark:hover:bg-red-900/30 rounded"
                       >
                         <Trash2 className="w-4 h-4 text-red-400" />
                       </button>
                     </div>
-                    <h4 className="font-medium text-gray-900 mb-2">{template.subject}</h4>
-                    <p className="text-sm text-gray-500 line-clamp-3">{template.body}</p>
+                    <h4 className="font-medium text-gray-900 dark:text-white mb-2">{template.subject}</h4>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 line-clamp-3">{template.body}</p>
                   </div>
                 ))}
               </div>
@@ -2618,43 +2619,43 @@ function Warmup() {
           </div>
 
           {/* Reply Templates */}
-          <div className="bg-white rounded-2xl p-6 border border-gray-100">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-purple-100 rounded-lg">
+                <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
                   <Reply className="w-5 h-5 text-purple-600" />
                 </div>
                 <div>
-                  <h3 className="font-semibold text-gray-900">Templates de Resposta</h3>
-                  <p className="text-sm text-gray-500">Usados para responder emails recebidos</p>
+                  <h3 className="font-semibold text-gray-900 dark:text-white">Templates de Resposta</h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Usados para responder emails recebidos</p>
                 </div>
               </div>
-              <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-sm font-medium">
+              <span className="px-3 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 rounded-full text-sm font-medium">
                 {replyTemplates.length} templates
               </span>
             </div>
             {replyTemplates.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
+              <div className="text-center py-8 text-gray-500 dark:text-gray-400">
                 <Reply className="w-12 h-12 mx-auto mb-4 opacity-30" />
                 <p>Nenhum template de resposta</p>
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-4">
                 {replyTemplates.map(template => (
-                  <div key={template.id} className="p-4 border border-gray-100 rounded-xl hover:border-purple-200 transition-colors">
+                  <div key={template.id} className="p-4 border border-gray-100 dark:border-gray-700 rounded-xl hover:border-purple-200 dark:hover:border-purple-800 transition-colors">
                     <div className="flex items-start justify-between mb-2">
-                      <span className="px-2 py-1 text-xs font-medium rounded bg-purple-100 text-purple-700">
+                      <span className="px-2 py-1 text-xs font-medium rounded bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400">
                         resposta
                       </span>
                       <button
                         onClick={() => deleteTemplate(template.id)}
-                        className="p-1 hover:bg-red-50 rounded"
+                        className="p-1 hover:bg-red-50 dark:hover:bg-red-900/30 rounded"
                       >
                         <Trash2 className="w-4 h-4 text-red-400" />
                       </button>
                     </div>
-                    <h4 className="font-medium text-gray-900 mb-2">{template.subject}</h4>
-                    <p className="text-sm text-gray-500 line-clamp-3">{template.body}</p>
+                    <h4 className="font-medium text-gray-900 dark:text-white mb-2">{template.subject}</h4>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 line-clamp-3">{template.body}</p>
                   </div>
                 ))}
               </div>
@@ -2666,32 +2667,32 @@ function Warmup() {
       {/* Add Template Modal */}
       {showAddTemplate && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-lg">
-            <div className="flex items-center justify-between p-6 border-b border-gray-100">
-              <h2 className="text-lg font-bold text-gray-900">Novo Template</h2>
-              <button onClick={() => setShowAddTemplate(false)} className="p-2 hover:bg-gray-100 rounded-lg">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-lg">
+            <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700">
+              <h2 className="text-lg font-bold text-gray-900 dark:text-white">Novo Template</h2>
+              <button onClick={() => setShowAddTemplate(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
                 <X className="w-5 h-5 text-gray-400" />
               </button>
             </div>
             <div className="p-6 space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Tipo</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Tipo</label>
                   <select
                     value={newTemplate.template_type}
                     onChange={(e) => setNewTemplate({ ...newTemplate, template_type: e.target.value })}
-                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+                    className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none bg-white dark:bg-gray-700 dark:text-white"
                   >
                     <option value="send">Envio</option>
                     <option value="reply">Resposta</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Categoria</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Categoria</label>
                   <select
                     value={newTemplate.category}
                     onChange={(e) => setNewTemplate({ ...newTemplate, category: e.target.value })}
-                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+                    className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none bg-white dark:bg-gray-700 dark:text-white"
                   >
                     <option value="business">Business</option>
                     <option value="casual">Casual</option>
@@ -2700,29 +2701,29 @@ function Warmup() {
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Assunto</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Assunto</label>
                 <input
                   type="text"
                   value={newTemplate.subject}
                   onChange={(e) => setNewTemplate({ ...newTemplate, subject: e.target.value })}
-                  className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+                  className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none bg-white dark:bg-gray-700 dark:text-white"
                   placeholder="Ex: Duvida sobre seus servicos"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Corpo do Email</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Corpo do Email</label>
                 <textarea
                   value={newTemplate.body}
                   onChange={(e) => setNewTemplate({ ...newTemplate, body: e.target.value })}
                   rows={6}
-                  className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none resize-none"
+                  className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none resize-none bg-white dark:bg-gray-700 dark:text-white"
                   placeholder="Ola,&#10;&#10;Escreva o conteudo do email aqui...&#10;&#10;Atenciosamente"
                 />
               </div>
-              <div className="flex justify-end gap-3 pt-4 border-t">
+              <div className="flex justify-end gap-3 pt-4 border-t dark:border-gray-700">
                 <button
                   onClick={() => setShowAddTemplate(false)}
-                  className="px-6 py-3 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50"
+                  className="px-6 py-3 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-xl font-medium hover:bg-gray-50 dark:hover:bg-gray-700"
                 >
                   Cancelar
                 </button>
@@ -2774,10 +2775,10 @@ function Warmup() {
       {/* Diagnostic Modal */}
       {showDiagnostic && diagnostic && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between p-6 border-b border-gray-100">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700">
               <div className="flex items-center gap-3">
-                <div className={`p-3 rounded-xl ${diagnostic.ok ? 'bg-green-100' : 'bg-red-100'}`}>
+                <div className={`p-3 rounded-xl ${diagnostic.ok ? 'bg-green-100 dark:bg-green-900/30' : 'bg-red-100 dark:bg-red-900/30'}`}>
                   {diagnostic.ok ? (
                     <CheckCircle className="w-6 h-6 text-green-600" />
                   ) : (
@@ -2785,11 +2786,11 @@ function Warmup() {
                   )}
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-gray-900">Diagnóstico do Warmup</h2>
-                  <p className="text-sm text-gray-500">{diagnostic.timestamp} (Hora: {diagnostic.current_hour})</p>
+                  <h2 className="text-lg font-bold text-gray-900 dark:text-white">Diagnostico do Warmup</h2>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">{diagnostic.timestamp} (Hora: {diagnostic.current_hour})</p>
                 </div>
               </div>
-              <button onClick={() => setShowDiagnostic(false)} className="p-2 hover:bg-gray-100 rounded-lg">
+              <button onClick={() => setShowDiagnostic(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
                 <X className="w-5 h-5 text-gray-400" />
               </button>
             </div>
@@ -2797,15 +2798,15 @@ function Warmup() {
             <div className="p-6 space-y-6">
               {/* Issues */}
               {diagnostic.issues && diagnostic.issues.length > 0 && (
-                <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-                  <h3 className="font-semibold text-red-800 mb-2 flex items-center gap-2">
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4">
+                  <h3 className="font-semibold text-red-800 dark:text-red-400 mb-2 flex items-center gap-2">
                     <XCircle className="w-5 h-5" />
                     Problemas Encontrados ({diagnostic.issues.length})
                   </h3>
                   <ul className="space-y-1">
                     {diagnostic.issues.map((issue, i) => (
-                      <li key={i} className="text-sm text-red-700 flex items-start gap-2">
-                        <span className="text-red-400">•</span>
+                      <li key={i} className="text-sm text-red-700 dark:text-red-300 flex items-start gap-2">
+                        <span className="text-red-400">*</span>
                         {issue}
                       </li>
                     ))}
@@ -2814,60 +2815,60 @@ function Warmup() {
               )}
 
               {diagnostic.ok && (
-                <div className="bg-green-50 border border-green-200 rounded-xl p-4">
-                  <h3 className="font-semibold text-green-800 flex items-center gap-2">
+                <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl p-4">
+                  <h3 className="font-semibold text-green-800 dark:text-green-400 flex items-center gap-2">
                     <CheckCircle className="w-5 h-5" />
-                    Tudo OK! O sistema de warmup está configurado corretamente.
+                    Tudo OK! O sistema de warmup esta configurado corretamente.
                   </h3>
                 </div>
               )}
 
               {/* External Warmup */}
-              <div className="bg-blue-50 rounded-xl p-4">
-                <h3 className="font-semibold text-blue-900 mb-3">SMTP → Seeds (Externo)</h3>
+              <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-4">
+                <h3 className="font-semibold text-blue-900 dark:text-blue-300 mb-3">SMTP - Seeds (Externo)</h3>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                   <div>
-                    <p className="text-gray-500">Seeds Ativas</p>
-                    <p className="font-bold text-blue-700">{diagnostic.external_warmup?.active_seeds || 0}</p>
+                    <p className="text-gray-500 dark:text-gray-400">Seeds Ativas</p>
+                    <p className="font-bold text-blue-700 dark:text-blue-400">{diagnostic.external_warmup?.active_seeds || 0}</p>
                   </div>
                   <div>
-                    <p className="text-gray-500">Templates Ativos</p>
-                    <p className="font-bold text-blue-700">{diagnostic.external_warmup?.active_templates || 0}</p>
+                    <p className="text-gray-500 dark:text-gray-400">Templates Ativos</p>
+                    <p className="font-bold text-blue-700 dark:text-blue-400">{diagnostic.external_warmup?.active_templates || 0}</p>
                   </div>
                   <div>
-                    <p className="text-gray-500">SMTPs Ativos</p>
-                    <p className="font-bold text-blue-700">{diagnostic.external_warmup?.active_smtps || 0}</p>
+                    <p className="text-gray-500 dark:text-gray-400">SMTPs Ativos</p>
+                    <p className="font-bold text-blue-700 dark:text-blue-400">{diagnostic.external_warmup?.active_smtps || 0}</p>
                   </div>
                   <div>
-                    <p className="text-gray-500">No Horário</p>
-                    <p className="font-bold text-blue-700">{diagnostic.external_warmup?.smtps_in_hours || 0}</p>
+                    <p className="text-gray-500 dark:text-gray-400">No Horario</p>
+                    <p className="font-bold text-blue-700 dark:text-blue-400">{diagnostic.external_warmup?.smtps_in_hours || 0}</p>
                   </div>
                   <div>
-                    <p className="text-gray-500">Enviados Hoje</p>
-                    <p className="font-bold text-green-700">{diagnostic.external_warmup?.sent_today || 0}</p>
+                    <p className="text-gray-500 dark:text-gray-400">Enviados Hoje</p>
+                    <p className="font-bold text-green-700 dark:text-green-400">{diagnostic.external_warmup?.sent_today || 0}</p>
                   </div>
                 </div>
               </div>
 
               {/* Internal Warmup */}
-              <div className="bg-purple-50 rounded-xl p-4">
-                <h3 className="font-semibold text-purple-900 mb-3">SMTP → SMTP (Interno)</h3>
+              <div className="bg-purple-50 dark:bg-purple-900/20 rounded-xl p-4">
+                <h3 className="font-semibold text-purple-900 dark:text-purple-300 mb-3">SMTP - SMTP (Interno)</h3>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                   <div>
-                    <p className="text-gray-500">SMTPs c/ Interno</p>
-                    <p className="font-bold text-purple-700">{diagnostic.internal_warmup?.smtps_with_internal || 0}</p>
+                    <p className="text-gray-500 dark:text-gray-400">SMTPs c/ Interno</p>
+                    <p className="font-bold text-purple-700 dark:text-purple-400">{diagnostic.internal_warmup?.smtps_with_internal || 0}</p>
                   </div>
                   <div>
-                    <p className="text-gray-500">No Horário</p>
-                    <p className="font-bold text-purple-700">{diagnostic.internal_warmup?.smtps_in_hours || 0}</p>
+                    <p className="text-gray-500 dark:text-gray-400">No Horario</p>
+                    <p className="font-bold text-purple-700 dark:text-purple-400">{diagnostic.internal_warmup?.smtps_in_hours || 0}</p>
                   </div>
                   <div>
-                    <p className="text-gray-500">Senders c/ IMAP</p>
-                    <p className="font-bold text-purple-700">{diagnostic.internal_warmup?.senders_with_imap || 0}</p>
+                    <p className="text-gray-500 dark:text-gray-400">Senders c/ IMAP</p>
+                    <p className="font-bold text-purple-700 dark:text-purple-400">{diagnostic.internal_warmup?.senders_with_imap || 0}</p>
                   </div>
                   <div>
-                    <p className="text-gray-500">Enviados Hoje</p>
-                    <p className="font-bold text-green-700">{diagnostic.internal_warmup?.sent_today || 0}</p>
+                    <p className="text-gray-500 dark:text-gray-400">Enviados Hoje</p>
+                    <p className="font-bold text-green-700 dark:text-green-400">{diagnostic.internal_warmup?.sent_today || 0}</p>
                   </div>
                 </div>
               </div>
@@ -2875,16 +2876,16 @@ function Warmup() {
               {/* SMTP Details */}
               {diagnostic.smtp_details && diagnostic.smtp_details.length > 0 && (
                 <div>
-                  <h3 className="font-semibold text-gray-900 mb-3">Detalhes por SMTP</h3>
+                  <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Detalhes por SMTP</h3>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
-                      <thead className="bg-gray-50">
-                        <tr>
+                      <thead className="bg-gray-50 dark:bg-gray-700">
+                        <tr className="text-gray-700 dark:text-gray-300">
                           <th className="px-3 py-2 text-left">Host</th>
                           <th className="px-3 py-2 text-center">Status</th>
                           <th className="px-3 py-2 text-center">Interno</th>
-                          <th className="px-3 py-2 text-center">Horário</th>
-                          <th className="px-3 py-2 text-center">No Horário</th>
+                          <th className="px-3 py-2 text-center">Horario</th>
+                          <th className="px-3 py-2 text-center">No Horario</th>
                           <th className="px-3 py-2 text-center">Limite</th>
                           <th className="px-3 py-2 text-center">Enviados</th>
                           <th className="px-3 py-2 text-center">Senders</th>
@@ -2893,22 +2894,22 @@ function Warmup() {
                       </thead>
                       <tbody>
                         {diagnostic.smtp_details.map((smtp, i) => (
-                          <tr key={i} className="border-t">
+                          <tr key={i} className="border-t dark:border-gray-700 dark:text-gray-300">
                             <td className="px-3 py-2 font-medium">{smtp.host}</td>
                             <td className="px-3 py-2 text-center">
-                              <span className={`px-2 py-0.5 rounded text-xs ${smtp.status === 'active' && smtp.server_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                              <span className={`px-2 py-0.5 rounded text-xs ${smtp.status === 'active' && smtp.server_active ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'}`}>
                                 {smtp.status === 'active' && smtp.server_active ? 'Ativo' : 'Inativo'}
                               </span>
                             </td>
                             <td className="px-3 py-2 text-center">
-                              {smtp.internal ? '✓' : '-'}
+                              {smtp.internal ? 'V' : '-'}
                             </td>
                             <td className="px-3 py-2 text-center">{smtp.start_hour}-{smtp.end_hour}h</td>
                             <td className="px-3 py-2 text-center">
                               {smtp.in_hours ? (
-                                <span className="text-green-600">✓</span>
+                                <span className="text-green-600 dark:text-green-400">V</span>
                               ) : (
-                                <span className="text-red-500">✗</span>
+                                <span className="text-red-500 dark:text-red-400">X</span>
                               )}
                             </td>
                             <td className="px-3 py-2 text-center">{smtp.today_limit}</td>
@@ -2924,7 +2925,7 @@ function Warmup() {
               )}
 
               {/* Actions */}
-              <div className="flex justify-between items-center pt-4 border-t">
+              <div className="flex justify-between items-center pt-4 border-t dark:border-gray-700">
                 <div className="flex gap-2">
                   <button
                     onClick={() => triggerWarmupNow('external')}
@@ -2953,7 +2954,7 @@ function Warmup() {
                 </div>
                 <button
                   onClick={fetchDiagnostic}
-                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm flex items-center gap-2"
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-sm flex items-center gap-2"
                 >
                   <RefreshCw className="w-4 h-4" />
                   Atualizar

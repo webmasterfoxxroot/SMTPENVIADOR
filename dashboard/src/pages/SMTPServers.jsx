@@ -195,8 +195,8 @@ function SMTPModal({ smtp, onClose, onSave }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <h2 className="text-xl font-bold mb-4">
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <h2 className="text-xl font-bold mb-4 text-gray-900 dark:text-white">
           {smtp?.id ? 'Editar SMTP' : 'Novo SMTP'}
         </h2>
 
@@ -350,8 +350,8 @@ function SMTPModal({ smtp, onClose, onSave }) {
           </div>
 
           {/* Separador IMAP */}
-          <div className="border-t border-gray-200 pt-4 mt-2">
-            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-3">
+          <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-2">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-2 mb-3">
               <Inbox className="w-4 h-4" />
               Configuração IMAP (para aquecimento interno)
             </h3>
@@ -440,8 +440,8 @@ function SMTPModal({ smtp, onClose, onSave }) {
           </div>
 
           {/* Separador Remetentes */}
-          <div className="border-t border-gray-200 pt-4 mt-2">
-            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-3">
+          <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-2">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-2 mb-3">
               <Send className="w-4 h-4" />
               Remetentes
             </h3>
@@ -506,21 +506,21 @@ function SendTestModal({ smtp, onClose }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-md shadow-xl">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-100">
+        <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700">
           <div className="flex items-center gap-3">
-            <div className="p-3 bg-green-100 rounded-xl">
-              <Send className="w-6 h-6 text-green-600" />
+            <div className="p-3 bg-green-100 dark:bg-green-900/30 rounded-xl">
+              <Send className="w-6 h-6 text-green-600 dark:text-green-400" />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-gray-900">Enviar Email de Teste</h2>
-              <p className="text-sm text-gray-500">{smtp.name}</p>
+              <h2 className="text-lg font-bold text-gray-900 dark:text-white">Enviar Email de Teste</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">{smtp.name}</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
           >
             <X className="w-5 h-5 text-gray-400" />
           </button>
@@ -529,33 +529,33 @@ function SendTestModal({ smtp, onClose }) {
         <form onSubmit={handleSendTest} className="p-6">
           {/* Email de Destino */}
           <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Email de Destino
             </label>
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition-all text-lg"
+              className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition-all text-lg"
               placeholder="seu@email.com"
               autoFocus
               required
             />
-            <p className="text-xs text-gray-400 mt-2">
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
               Um email de teste sera enviado usando este servidor SMTP.
             </p>
           </div>
 
           {/* Info Box */}
-          <div className="bg-gray-50 rounded-xl p-4 mb-6">
+          <div className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-4 mb-6">
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
-                <span className="text-gray-500">Servidor:</span>
-                <span className="font-medium text-gray-700">{smtp.host}:{smtp.port}</span>
+                <span className="text-gray-500 dark:text-gray-400">Servidor:</span>
+                <span className="font-medium text-gray-700 dark:text-gray-300">{smtp.host}:{smtp.port}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-500">TLS:</span>
-                <span className="font-medium text-gray-700">{smtp.tls_mode === 'tls' ? 'TLS' : smtp.tls_mode === 'starttls' ? 'STARTTLS' : 'Nenhum'}</span>
+                <span className="text-gray-500 dark:text-gray-400">TLS:</span>
+                <span className="font-medium text-gray-700 dark:text-gray-300">{smtp.tls_mode === 'tls' ? 'TLS' : smtp.tls_mode === 'starttls' ? 'STARTTLS' : 'Nenhum'}</span>
               </div>
             </div>
           </div>
@@ -565,7 +565,7 @@ function SendTestModal({ smtp, onClose }) {
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 px-4 py-3 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors"
+              className="flex-1 px-4 py-3 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-xl font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
             >
               Cancelar
             </button>
@@ -666,8 +666,8 @@ function SMTPServers() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Servidores SMTP</h1>
-          <p className="text-sm text-gray-500 mt-1">Gerencie seus servidores de envio de email</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Servidores SMTP</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Gerencie seus servidores de envio de email</p>
         </div>
         <div className="flex gap-3">
           <button onClick={refreshSMTPs} className="btn btn-secondary flex items-center gap-2">
@@ -684,48 +684,48 @@ function SMTPServers() {
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
         {loading ? (
           <div className="flex justify-center py-12">
             <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
           </div>
         ) : smtps.length === 0 ? (
-          <div className="text-center py-12 text-gray-500">
+          <div className="text-center py-12 text-gray-500 dark:text-gray-400">
             <Server className="w-12 h-12 mx-auto mb-4 opacity-50" />
             <p>Nenhum servidor SMTP cadastrado</p>
           </div>
         ) : (
           <table className="w-full">
             <thead>
-              <tr className="border-b border-gray-100">
-                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Nome</th>
-                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Host</th>
-                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">TLS</th>
-                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
-                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Limite</th>
-                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Enviados</th>
-                <th className="text-center py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Ativo</th>
-                <th className="text-right py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Acoes</th>
+              <tr className="border-b border-gray-100 dark:border-gray-700">
+                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Nome</th>
+                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Host</th>
+                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">TLS</th>
+                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
+                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Limite</th>
+                <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Enviados</th>
+                <th className="text-center py-4 px-6 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Ativo</th>
+                <th className="text-right py-4 px-6 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Acoes</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-50">
+            <tbody className="divide-y divide-gray-50 dark:divide-gray-700">
               {smtps.map((smtp) => (
-                <tr key={smtp.id} className="hover:bg-gray-50 transition-colors">
+                <tr key={smtp.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                   <td className="py-4 px-6">
-                    <span className="font-medium text-gray-900">{smtp.name}</span>
+                    <span className="font-medium text-gray-900 dark:text-white">{smtp.name}</span>
                   </td>
-                  <td className="py-4 px-6 text-gray-600">
+                  <td className="py-4 px-6 text-gray-600 dark:text-gray-400">
                     {smtp.host}:{smtp.port}
                   </td>
-                  <td className="py-4 px-6 text-gray-600 text-sm">
+                  <td className="py-4 px-6 text-gray-600 dark:text-gray-400 text-sm">
                     {smtp.tls_mode === 'tls' ? 'TLS' : smtp.tls_mode === 'starttls' ? 'STARTTLS' : 'Nenhum'}
                   </td>
                   <td className="py-4 px-6">{getStatusBadge(smtp.status)}</td>
-                  <td className="py-4 px-6 text-gray-600">
+                  <td className="py-4 px-6 text-gray-600 dark:text-gray-400">
                     {smtp.max_per_minute}/min
                   </td>
                   <td className="py-4 px-6">
-                    <span className="font-semibold text-gray-700">{smtp.total_sent?.toLocaleString()}</span>
+                    <span className="font-semibold text-gray-700 dark:text-gray-300">{smtp.total_sent?.toLocaleString()}</span>
                   </td>
                   <td className="py-4 px-6 text-center">
                     {smtp.active ? (

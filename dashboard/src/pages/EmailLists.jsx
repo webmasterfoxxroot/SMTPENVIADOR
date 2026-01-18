@@ -94,20 +94,20 @@ function EmailsModal({ list, onClose, onRefresh }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl w-full max-w-5xl max-h-[90vh] flex flex-col">
+      <div className="bg-white dark:bg-gray-800 rounded-xl w-full max-w-5xl max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b">
+        <div className="flex items-center justify-between p-4 border-b dark:border-gray-700">
           <div>
-            <h2 className="text-xl font-bold">Emails da Lista</h2>
-            <p className="text-sm text-gray-500">{list.name} - {total.toLocaleString()} emails</p>
+            <h2 className="text-xl font-bold text-gray-900 dark:text-white">Emails da Lista</h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400">{list.name} - {total.toLocaleString()} emails</p>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg">
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-500 dark:text-gray-400">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Search & Add */}
-        <div className="flex items-center gap-3 p-4 border-b">
+        <div className="flex items-center gap-3 p-4 border-b dark:border-gray-700">
           <div className="flex-1 relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
@@ -126,7 +126,7 @@ function EmailsModal({ list, onClose, onRefresh }) {
 
         {/* Form for Add/Edit */}
         {(addingEmail || editingEmail) && (
-          <div className="p-4 bg-blue-50 border-b">
+          <div className="p-4 bg-blue-50 dark:bg-blue-900/30 border-b dark:border-gray-700">
             <form onSubmit={handleSave} className="space-y-3">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
@@ -208,29 +208,29 @@ function EmailsModal({ list, onClose, onRefresh }) {
               <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
             </div>
           ) : emails.length === 0 ? (
-            <div className="text-center py-12 text-gray-500">
+            <div className="text-center py-12 text-gray-500 dark:text-gray-400">
               <Mail className="w-12 h-12 mx-auto mb-4 opacity-50" />
               <p>Nenhum email encontrado</p>
             </div>
           ) : (
             <table className="w-full">
-              <thead className="bg-gray-50 sticky top-0">
+              <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0">
                 <tr>
-                  <th className="text-left p-3 text-xs font-semibold text-gray-600">EMAIL</th>
-                  <th className="text-left p-3 text-xs font-semibold text-gray-600">NOME</th>
-                  <th className="text-left p-3 text-xs font-semibold text-gray-600 hidden md:table-cell">CUSTOM1</th>
-                  <th className="text-left p-3 text-xs font-semibold text-gray-600 hidden lg:table-cell">CUSTOM2</th>
-                  <th className="text-center p-3 text-xs font-semibold text-gray-600">STATUS</th>
-                  <th className="text-center p-3 text-xs font-semibold text-gray-600">AÇÕES</th>
+                  <th className="text-left p-3 text-xs font-semibold text-gray-600 dark:text-gray-300">EMAIL</th>
+                  <th className="text-left p-3 text-xs font-semibold text-gray-600 dark:text-gray-300">NOME</th>
+                  <th className="text-left p-3 text-xs font-semibold text-gray-600 dark:text-gray-300 hidden md:table-cell">CUSTOM1</th>
+                  <th className="text-left p-3 text-xs font-semibold text-gray-600 dark:text-gray-300 hidden lg:table-cell">CUSTOM2</th>
+                  <th className="text-center p-3 text-xs font-semibold text-gray-600 dark:text-gray-300">STATUS</th>
+                  <th className="text-center p-3 text-xs font-semibold text-gray-600 dark:text-gray-300">AÇÕES</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                 {emails.map(email => (
-                  <tr key={email.id} className="hover:bg-gray-50">
-                    <td className="p-3 text-sm">{email.email}</td>
-                    <td className="p-3 text-sm text-gray-600">{email.name || '-'}</td>
-                    <td className="p-3 text-sm text-gray-500 hidden md:table-cell">{email.custom1 || '-'}</td>
-                    <td className="p-3 text-sm text-gray-500 hidden lg:table-cell">{email.custom2 || '-'}</td>
+                  <tr key={email.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <td className="p-3 text-sm text-gray-900 dark:text-white">{email.email}</td>
+                    <td className="p-3 text-sm text-gray-600 dark:text-gray-400">{email.name || '-'}</td>
+                    <td className="p-3 text-sm text-gray-500 dark:text-gray-400 hidden md:table-cell">{email.custom1 || '-'}</td>
+                    <td className="p-3 text-sm text-gray-500 dark:text-gray-400 hidden lg:table-cell">{email.custom2 || '-'}</td>
                     <td className="p-3 text-center">
                       {email.valid ? (
                         <span className="inline-flex items-center gap-1 text-green-600 text-xs">
@@ -246,14 +246,14 @@ function EmailsModal({ list, onClose, onRefresh }) {
                       <div className="flex items-center justify-center gap-1">
                         <button
                           onClick={() => handleEdit(email)}
-                          className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded"
+                          className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded"
                           title="Editar"
                         >
                           <Edit className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => handleDelete(email.id)}
-                          className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded"
+                          className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded"
                           title="Excluir"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -269,8 +269,8 @@ function EmailsModal({ list, onClose, onRefresh }) {
 
         {/* Pagination */}
         {totalPages > 1 && (
-          <div className="flex items-center justify-between p-4 border-t">
-            <span className="text-sm text-gray-500">
+          <div className="flex items-center justify-between p-4 border-t dark:border-gray-700">
+            <span className="text-sm text-gray-500 dark:text-gray-400">
               Página {page} de {totalPages}
             </span>
             <div className="flex gap-2">
@@ -328,8 +328,8 @@ function GroupModal({ group, onClose, onSave }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl p-6 w-full max-w-md">
-        <h2 className="text-xl font-bold mb-4">
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-md">
+        <h2 className="text-xl font-bold mb-4 text-gray-900 dark:text-white">
           {group?.id ? 'Editar Grupo' : 'Novo Grupo'}
         </h2>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -362,7 +362,7 @@ function GroupModal({ group, onClose, onSave }) {
                   key={c}
                   type="button"
                   onClick={() => setForm({ ...form, color: c })}
-                  className={`w-8 h-8 rounded-full border-2 ${form.color === c ? 'border-gray-800 scale-110' : 'border-transparent'}`}
+                  className={`w-8 h-8 rounded-full border-2 ${form.color === c ? 'border-gray-800 dark:border-white scale-110' : 'border-transparent'}`}
                   style={{ backgroundColor: c }}
                 />
               ))}
@@ -401,8 +401,8 @@ function MoveToGroupModal({ list, groups, onClose, onSave }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl p-6 w-full max-w-md">
-        <h2 className="text-xl font-bold mb-4">Mover "{list.name}"</h2>
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-md">
+        <h2 className="text-xl font-bold mb-4 text-gray-900 dark:text-white">Mover "{list.name}"</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="label">Selecione o grupo</label>
@@ -475,13 +475,13 @@ function SplitUploadModal({ groups, onClose, onUploadStarted, onCreateGroup }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold flex items-center gap-2">
+          <h2 className="text-xl font-bold flex items-center gap-2 text-gray-900 dark:text-white">
             <Split className="w-5 h-5 text-blue-500" />
             Upload com Divisão
           </h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -497,7 +497,7 @@ function SplitUploadModal({ groups, onClose, onUploadStarted, onCreateGroup }) {
               required
             />
             {file && (
-              <p className="text-xs text-gray-500 mt-1">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                 {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
               </p>
             )}
@@ -513,7 +513,7 @@ function SplitUploadModal({ groups, onClose, onUploadStarted, onCreateGroup }) {
               placeholder="Ex: MINHA LISTA"
               required
             />
-            <p className="text-xs text-gray-500 mt-1">
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               Será criado: {baseName || 'LISTA'} 01, {baseName || 'LISTA'} 02, ...
             </p>
           </div>
@@ -540,7 +540,7 @@ function SplitUploadModal({ groups, onClose, onUploadStarted, onCreateGroup }) {
                 <FolderPlus className="w-4 h-4" />
               </button>
             </div>
-            <p className="text-xs text-gray-500 mt-1">
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               Todas as listas criadas serão adicionadas a este grupo
             </p>
           </div>
@@ -556,7 +556,7 @@ function SplitUploadModal({ groups, onClose, onUploadStarted, onCreateGroup }) {
                 min="2"
                 max="50"
               />
-              <p className="text-xs text-gray-500 mt-1">partes (2-50)</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">partes (2-50)</p>
             </div>
             <div>
               <label className="label">Delimitador</label>
@@ -581,15 +581,15 @@ function SplitUploadModal({ groups, onClose, onUploadStarted, onCreateGroup }) {
               onChange={(e) => setHasHeader(e.target.checked)}
               className="w-4 h-4"
             />
-            <label htmlFor="hasHeader" className="text-sm cursor-pointer">
+            <label htmlFor="hasHeader" className="text-sm cursor-pointer text-gray-700 dark:text-gray-300">
               Arquivo tem cabeçalho
             </label>
           </div>
 
           {file && (
-            <div className="p-3 bg-blue-50 rounded-lg text-sm">
-              <p className="font-medium text-blue-800 mb-2">Estimativa:</p>
-              <ul className="text-blue-700 space-y-1">
+            <div className="p-3 bg-blue-50 dark:bg-blue-900/30 rounded-lg text-sm">
+              <p className="font-medium text-blue-800 dark:text-blue-300 mb-2">Estimativa:</p>
+              <ul className="text-blue-700 dark:text-blue-400 space-y-1">
                 <li>~{estimatedPerPart.toLocaleString()} emails por lista</li>
                 <li>{numParts} listas serão criadas</li>
                 {groupId && <li>Grupo: {groups.find(g => g.id === groupId)?.name}</li>}
@@ -653,10 +653,10 @@ function UploadModal({ listId, onClose, onUploadStarted }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl p-6 w-full max-w-md">
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-md">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold">Upload de Emails</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+          <h2 className="text-xl font-bold text-gray-900 dark:text-white">Upload de Emails</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -672,7 +672,7 @@ function UploadModal({ listId, onClose, onUploadStarted }) {
               required
             />
             {file && (
-              <p className="text-xs text-gray-500 mt-1">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                 {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
               </p>
             )}
@@ -693,7 +693,7 @@ function UploadModal({ listId, onClose, onUploadStarted }) {
               </select>
             </div>
             <div className="flex items-end">
-              <label className="flex items-center gap-2 cursor-pointer pb-2">
+              <label className="flex items-center gap-2 cursor-pointer pb-2 text-gray-700 dark:text-gray-300">
                 <input
                   type="checkbox"
                   checked={hasHeader}
@@ -705,9 +705,9 @@ function UploadModal({ listId, onClose, onUploadStarted }) {
             </div>
           </div>
 
-          <div className="p-3 bg-blue-50 rounded-lg text-sm text-blue-800">
+          <div className="p-3 bg-blue-50 dark:bg-blue-900/30 rounded-lg text-sm text-blue-800 dark:text-blue-300">
             <p className="font-medium mb-1">Upload em background:</p>
-            <ul className="list-disc list-inside space-y-1 text-blue-700">
+            <ul className="list-disc list-inside space-y-1 text-blue-700 dark:text-blue-400">
               <li>Suporta arquivos grandes (milhoes de emails)</li>
               <li>Progresso mostrado na lista</li>
               <li>Valida e remove duplicados automaticamente</li>
@@ -777,8 +777,8 @@ function ListModal({ list, groups, onClose, onSave, onCreateGroup }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl p-6 w-full max-w-md">
-        <h2 className="text-xl font-bold mb-4">
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-md">
+        <h2 className="text-xl font-bold mb-4 text-gray-900 dark:text-white">
           {list?.id ? 'Editar Lista' : 'Nova Lista'}
         </h2>
 
@@ -857,15 +857,15 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, 
   const validPercent = totalEmails > 0 ? ((validEmails / totalEmails) * 100).toFixed(1) : 0
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 hover:shadow-md transition-shadow">
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-4 py-3 hover:shadow-md transition-shadow">
       {/* Main Row */}
       <div className="flex items-center gap-4">
         {/* Name & Description */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <h3 className="font-semibold text-gray-900 truncate">{list.name}</h3>
+            <h3 className="font-semibold text-gray-900 dark:text-white truncate">{list.name}</h3>
             {list.description && (
-              <span className="text-xs text-gray-400 truncate hidden sm:inline">({list.description})</span>
+              <span className="text-xs text-gray-400 dark:text-gray-500 truncate hidden sm:inline">({list.description})</span>
             )}
           </div>
         </div>
@@ -873,16 +873,16 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, 
         {/* Stats - hide when importing */}
         {!isImporting && (
           <div className="hidden md:flex items-center gap-4 text-sm">
-            <div className="flex items-center gap-1 text-gray-600">
+            <div className="flex items-center gap-1 text-gray-600 dark:text-gray-400">
               <Users className="w-4 h-4" />
               <span className="font-medium">{totalEmails.toLocaleString()}</span>
             </div>
             {totalEmails > 0 && (
               <>
-                <div className="flex items-center gap-1 text-green-600" title="Válidos">
+                <div className="flex items-center gap-1 text-green-600 dark:text-green-500" title="Válidos">
                   <CheckCircle className="w-4 h-4" />
                   <span>{validEmails.toLocaleString()}</span>
-                  <span className="text-xs text-gray-400">({validPercent}%)</span>
+                  <span className="text-xs text-gray-400 dark:text-gray-500">({validPercent}%)</span>
                 </div>
                 {invalidEmails > 0 && (
                   <div className="flex items-center gap-1 text-red-500" title="Inválidos">
@@ -891,7 +891,7 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, 
                   </div>
                 )}
                 {duplicates > 0 && (
-                  <div className="flex items-center gap-1 text-yellow-600" title="Duplicados">
+                  <div className="flex items-center gap-1 text-yellow-600 dark:text-yellow-500" title="Duplicados">
                     <AlertTriangle className="w-4 h-4" />
                     <span>{duplicates.toLocaleString()}</span>
                   </div>
@@ -906,15 +906,15 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, 
           <div className="flex-1 max-w-md">
             <div className="flex items-center gap-3">
               <div className="flex-1">
-                <div className="w-full h-2 bg-blue-100 rounded-full overflow-hidden">
+                <div className="w-full h-2 bg-blue-100 dark:bg-blue-900/50 rounded-full overflow-hidden">
                   <div
                     className="h-full bg-blue-500 rounded-full transition-all duration-300"
                     style={{ width: `${importJob.progress || 0}%` }}
                   />
                 </div>
               </div>
-              <span className="text-sm font-medium text-blue-600 w-12">{importJob.progress || 0}%</span>
-              <div className="text-xs text-gray-500">
+              <span className="text-sm font-medium text-blue-600 dark:text-blue-400 w-12">{importJob.progress || 0}%</span>
+              <div className="text-xs text-gray-500 dark:text-gray-400">
                 {(importJob.processed || 0).toLocaleString()}/{(importJob.total_lines || 0).toLocaleString()}
               </div>
             </div>
@@ -923,11 +923,11 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, 
 
         {/* Status Badge */}
         <span className={`px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap ${
-          isImporting ? 'bg-blue-100 text-blue-700' :
-          isDeleting ? 'bg-red-100 text-red-700' :
-          list.status === 'ready' ? 'bg-green-100 text-green-700' :
-          list.status === 'pending' ? 'bg-gray-100 text-gray-600' :
-          'bg-yellow-100 text-yellow-700'
+          isImporting ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-400' :
+          isDeleting ? 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-400' :
+          list.status === 'ready' ? 'bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-400' :
+          list.status === 'pending' ? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' :
+          'bg-yellow-100 dark:bg-yellow-900/50 text-yellow-700 dark:text-yellow-400'
         }`}>
           {isImporting ? 'Importando' :
            isDeleting ? 'Excluindo' :
@@ -940,7 +940,7 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, 
         <div className="flex items-center gap-1">
           <button
             onClick={onViewEmails}
-            className="p-2 text-gray-500 hover:text-cyan-600 hover:bg-cyan-50 rounded-lg transition-colors"
+            className="p-2 text-gray-500 dark:text-gray-400 hover:text-cyan-600 hover:bg-cyan-50 dark:hover:bg-cyan-900/30 rounded-lg transition-colors"
             disabled={isImporting || isDeleting}
             title="Ver/Editar Emails"
           >
@@ -948,7 +948,7 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, 
           </button>
           <button
             onClick={onEdit}
-            className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+            className="p-2 text-gray-500 dark:text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
             disabled={isImporting || isDeleting}
             title="Editar Lista"
           >
@@ -956,7 +956,7 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, 
           </button>
           <button
             onClick={onDelete}
-            className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+            className="p-2 text-gray-500 dark:text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
             disabled={isImporting || isDeleting}
             title="Excluir"
           >
@@ -965,7 +965,7 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, 
           {isImporting ? (
             <button
               onClick={() => onCancelImport(importJob.id)}
-              className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors"
+              className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
               title="Cancelar importação"
             >
               <X className="w-4 h-4" />
@@ -974,7 +974,7 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, 
             <>
               <button
                 onClick={onUpload}
-                className="p-2 text-gray-500 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                className="p-2 text-gray-500 dark:text-gray-400 hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-900/30 rounded-lg transition-colors"
                 disabled={isDeleting}
                 title="Upload de emails"
               >
@@ -985,14 +985,14 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, 
                   const token = localStorage.getItem('smtpenviador_token')
                   window.open(`/api/v1/lists/${list.id}/download?format=csv&token=${token}`, '_blank')
                 }}
-                className="p-2 text-gray-500 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                className="p-2 text-gray-500 dark:text-gray-400 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/30 rounded-lg transition-colors"
                 title="Download da lista"
               >
                 <Download className="w-4 h-4" />
               </button>
               <button
                 onClick={onMoveToGroup}
-                className="p-2 text-gray-500 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-colors"
+                className="p-2 text-gray-500 dark:text-gray-400 hover:text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-900/30 rounded-lg transition-colors"
                 disabled={isDeleting}
                 title="Mover para grupo"
               >
@@ -1005,20 +1005,20 @@ function ListRow({ list, importJob, onEdit, onDelete, onUpload, onCancelImport, 
 
       {/* Mobile Stats - show below on small screens */}
       {!isImporting && totalEmails > 0 && (
-        <div className="flex md:hidden items-center gap-3 mt-2 pt-2 border-t border-gray-100 text-xs">
-          <span className="text-gray-600">{totalEmails.toLocaleString()} emails</span>
-          <span className="text-green-600">{validEmails.toLocaleString()} válidos</span>
+        <div className="flex md:hidden items-center gap-3 mt-2 pt-2 border-t border-gray-100 dark:border-gray-700 text-xs">
+          <span className="text-gray-600 dark:text-gray-400">{totalEmails.toLocaleString()} emails</span>
+          <span className="text-green-600 dark:text-green-500">{validEmails.toLocaleString()} válidos</span>
           {invalidEmails > 0 && <span className="text-red-500">{invalidEmails.toLocaleString()} inválidos</span>}
-          {duplicates > 0 && <span className="text-yellow-600">{duplicates.toLocaleString()} duplicados</span>}
+          {duplicates > 0 && <span className="text-yellow-600 dark:text-yellow-500">{duplicates.toLocaleString()} duplicados</span>}
         </div>
       )}
 
       {/* Import details on small screens */}
       {isImporting && (
-        <div className="flex md:hidden items-center gap-2 mt-2 pt-2 border-t border-gray-100 text-xs text-gray-500">
-          <span className="text-green-600">+{(importJob.valid || 0).toLocaleString()} válidos</span>
+        <div className="flex md:hidden items-center gap-2 mt-2 pt-2 border-t border-gray-100 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400">
+          <span className="text-green-600 dark:text-green-500">+{(importJob.valid || 0).toLocaleString()} válidos</span>
           {importJob.invalid > 0 && <span className="text-red-500">{importJob.invalid} inválidos</span>}
-          {importJob.duplicates > 0 && <span className="text-yellow-600">{importJob.duplicates} duplicados</span>}
+          {importJob.duplicates > 0 && <span className="text-yellow-600 dark:text-yellow-500">{importJob.duplicates} duplicados</span>}
         </div>
       )}
     </div>
@@ -1300,7 +1300,7 @@ function EmailLists() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Listas de Emails</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Listas de Emails</h1>
         <div className="flex gap-2">
           <button
             onClick={() => setGroupModal({ open: true, group: null })}
@@ -1331,7 +1331,7 @@ function EmailLists() {
           <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
         </div>
       ) : lists.length === 0 ? (
-        <div className="text-center py-12 text-gray-500">
+        <div className="text-center py-12 text-gray-500 dark:text-gray-400">
           <Mail className="w-12 h-12 mx-auto mb-4 opacity-50" />
           <p>Nenhuma lista criada</p>
         </div>
@@ -1343,29 +1343,29 @@ function EmailLists() {
             const isExpanded = expandedGroups[group.id]
 
             return (
-              <div key={group.id} className="border border-gray-200 rounded-lg overflow-hidden">
+              <div key={group.id} className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
                 {/* Group Header */}
                 <div
-                  className="flex items-center justify-between px-4 py-3 bg-gray-50 cursor-pointer hover:bg-gray-100"
+                  className="flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-gray-700/50 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
                   onClick={() => toggleGroup(group.id)}
                 >
                   <div className="flex items-center gap-3">
-                    {isExpanded ? <ChevronDown className="w-5 h-5 text-gray-500" /> : <ChevronRight className="w-5 h-5 text-gray-500" />}
+                    {isExpanded ? <ChevronDown className="w-5 h-5 text-gray-500 dark:text-gray-400" /> : <ChevronRight className="w-5 h-5 text-gray-500 dark:text-gray-400" />}
                     <div className="w-3 h-3 rounded-full" style={{ backgroundColor: group.color }} />
-                    <span className="font-semibold">{group.name}</span>
-                    <span className="text-sm text-gray-500">({groupLists.length} listas)</span>
+                    <span className="font-semibold text-gray-900 dark:text-white">{group.name}</span>
+                    <span className="text-sm text-gray-500 dark:text-gray-400">({groupLists.length} listas)</span>
                   </div>
                   <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
                     <button
                       onClick={() => setGroupModal({ open: true, group })}
-                      className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg"
+                      className="p-2 text-gray-500 dark:text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg"
                       title="Editar grupo"
                     >
                       <Edit className="w-4 h-4" />
                     </button>
                     <button
                       onClick={() => deleteGroup(group.id)}
-                      className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                      className="p-2 text-gray-500 dark:text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg"
                       title="Excluir grupo"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -1375,12 +1375,12 @@ function EmailLists() {
 
                 {/* Group Lists */}
                 {isExpanded && groupLists.length > 0 && (
-                  <div className="p-2 space-y-2 bg-white">
+                  <div className="p-2 space-y-2 bg-white dark:bg-gray-800">
                     {groupLists.map(renderListRow)}
                   </div>
                 )}
                 {isExpanded && groupLists.length === 0 && (
-                  <div className="p-4 text-center text-gray-400 text-sm">
+                  <div className="p-4 text-center text-gray-400 dark:text-gray-500 text-sm bg-white dark:bg-gray-800">
                     Nenhuma lista neste grupo
                   </div>
                 )}
@@ -1390,20 +1390,20 @@ function EmailLists() {
 
           {/* Ungrouped Lists */}
           {ungrouped.length > 0 && (
-            <div className="border border-gray-200 rounded-lg overflow-hidden">
+            <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
               <div
-                className="flex items-center justify-between px-4 py-3 bg-gray-50 cursor-pointer hover:bg-gray-100"
+                className="flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-gray-700/50 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
                 onClick={() => toggleGroup('ungrouped')}
               >
                 <div className="flex items-center gap-3">
-                  {expandedGroups['ungrouped'] ? <ChevronDown className="w-5 h-5 text-gray-500" /> : <ChevronRight className="w-5 h-5 text-gray-500" />}
-                  <Folder className="w-5 h-5 text-gray-400" />
-                  <span className="font-semibold text-gray-600">Sem Grupo</span>
-                  <span className="text-sm text-gray-500">({ungrouped.length} listas)</span>
+                  {expandedGroups['ungrouped'] ? <ChevronDown className="w-5 h-5 text-gray-500 dark:text-gray-400" /> : <ChevronRight className="w-5 h-5 text-gray-500 dark:text-gray-400" />}
+                  <Folder className="w-5 h-5 text-gray-400 dark:text-gray-500" />
+                  <span className="font-semibold text-gray-600 dark:text-gray-300">Sem Grupo</span>
+                  <span className="text-sm text-gray-500 dark:text-gray-400">({ungrouped.length} listas)</span>
                 </div>
               </div>
               {expandedGroups['ungrouped'] && (
-                <div className="p-2 space-y-2 bg-white">
+                <div className="p-2 space-y-2 bg-white dark:bg-gray-800">
                   {ungrouped.map(renderListRow)}
                 </div>
               )}
