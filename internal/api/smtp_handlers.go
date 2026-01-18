@@ -28,16 +28,18 @@ type SMTPRequest struct {
 	Active         bool   `json:"active"`
 }
 
-// listSMTPs returns all SMTP servers
+// listSMTPs returns all SMTP servers for the current user
 func (s *Server) listSMTPs(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	rows, err := s.db.Query(`
 		SELECT id, name, host, port, username, tls_mode,
 		       max_per_minute, max_per_hour, max_connections,
 		       active, status, last_check, total_sent, total_failed,
 		       created_at, updated_at
 		FROM smtp_servers
+		WHERE user_id = $1
 		ORDER BY created_at DESC
-	`)
+	`, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch SMTP servers"})
 	}
@@ -118,12 +120,13 @@ func (s *Server) createSMTP(c *fiber.Ctx) error {
 	}
 
 	id := uuid.New().String()
+	userID := getUserID(c)
 
 	_, err := s.db.Exec(`
-		INSERT INTO smtp_servers (id, name, host, port, username, password, tls_mode,
+		INSERT INTO smtp_servers (id, user_id, name, host, port, username, password, tls_mode,
 		                          max_per_minute, max_per_hour, max_connections, active)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-	`, id, req.Name, req.Host, req.Port, req.Username, req.Password, req.TLSMode,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	`, id, userID, req.Name, req.Host, req.Port, req.Username, req.Password, req.TLSMode,
 		req.MaxPerMinute, req.MaxPerHour, req.MaxConnections, req.Active)
 
 	if err != nil {
@@ -142,6 +145,7 @@ func (s *Server) createSMTP(c *fiber.Ctx) error {
 // getSMTP returns a single SMTP server
 func (s *Server) getSMTP(c *fiber.Ctx) error {
 	id := c.Params("id")
+	userID := getUserID(c)
 
 	var name, host, username, status, tlsMode string
 	var port, maxPerMinute, maxPerHour, maxConnections int
@@ -154,8 +158,8 @@ func (s *Server) getSMTP(c *fiber.Ctx) error {
 		       max_per_minute, max_per_hour, max_connections,
 		       active, status, last_check, total_sent, total_failed,
 		       created_at, updated_at
-		FROM smtp_servers WHERE id = $1
-	`, id).Scan(&name, &host, &port, &username, &tlsMode,
+		FROM smtp_servers WHERE id = $1 AND user_id = $2
+	`, id, userID).Scan(&name, &host, &port, &username, &tlsMode,
 		&maxPerMinute, &maxPerHour, &maxConnections,
 		&active, &status, &lastCheck, &totalSent, &totalFailed,
 		&createdAt, &updatedAt)
@@ -187,6 +191,7 @@ func (s *Server) getSMTP(c *fiber.Ctx) error {
 // updateSMTP updates an SMTP server
 func (s *Server) updateSMTP(c *fiber.Ctx) error {
 	id := c.Params("id")
+	userID := getUserID(c)
 
 	var req SMTPRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -203,10 +208,10 @@ func (s *Server) updateSMTP(c *fiber.Ctx) error {
 			name = $1, host = $2, port = $3, username = $4,
 			tls_mode = $5, max_per_minute = $6, max_per_hour = $7,
 			max_connections = $8, active = $9
-		WHERE id = $10
+		WHERE id = $10 AND user_id = $11
 	`
 	args := []interface{}{req.Name, req.Host, req.Port, req.Username,
-		req.TLSMode, req.MaxPerMinute, req.MaxPerHour, req.MaxConnections, req.Active, id}
+		req.TLSMode, req.MaxPerMinute, req.MaxPerHour, req.MaxConnections, req.Active, id, userID}
 
 	// If password provided, update it too
 	if req.Password != "" {
@@ -215,10 +220,10 @@ func (s *Server) updateSMTP(c *fiber.Ctx) error {
 				name = $1, host = $2, port = $3, username = $4, password = $5,
 				tls_mode = $6, max_per_minute = $7, max_per_hour = $8,
 				max_connections = $9, active = $10
-			WHERE id = $11
+			WHERE id = $11 AND user_id = $12
 		`
 		args = []interface{}{req.Name, req.Host, req.Port, req.Username, req.Password,
-			req.TLSMode, req.MaxPerMinute, req.MaxPerHour, req.MaxConnections, req.Active, id}
+			req.TLSMode, req.MaxPerMinute, req.MaxPerHour, req.MaxConnections, req.Active, id, userID}
 	}
 
 	result, err := s.db.Exec(query, args...)
@@ -240,8 +245,9 @@ func (s *Server) updateSMTP(c *fiber.Ctx) error {
 // deleteSMTP deletes an SMTP server
 func (s *Server) deleteSMTP(c *fiber.Ctx) error {
 	id := c.Params("id")
+	userID := getUserID(c)
 
-	result, err := s.db.Exec(`DELETE FROM smtp_servers WHERE id = $1`, id)
+	result, err := s.db.Exec(`DELETE FROM smtp_servers WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete SMTP server"})
 	}
@@ -260,13 +266,14 @@ func (s *Server) deleteSMTP(c *fiber.Ctx) error {
 // testSMTP tests an SMTP connection
 func (s *Server) testSMTP(c *fiber.Ctx) error {
 	id := c.Params("id")
+	userID := getUserID(c)
 
 	var host, username, password, tlsMode string
 	var port int
 
 	err := s.db.QueryRow(`
-		SELECT host, port, username, password, tls_mode FROM smtp_servers WHERE id = $1
-	`, id).Scan(&host, &port, &username, &password, &tlsMode)
+		SELECT host, port, username, password, tls_mode FROM smtp_servers WHERE id = $1 AND user_id = $2
+	`, id, userID).Scan(&host, &port, &username, &password, &tlsMode)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "SMTP server not found"})
@@ -461,6 +468,7 @@ func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
 // Uses the same method as campaigns to avoid SMTPUTF8 issues
 func (s *Server) sendTestEmail(c *fiber.Ctx) error {
 	id := c.Params("id")
+	userID := getUserID(c)
 
 	var req struct {
 		To string `json:"to"`
@@ -478,8 +486,8 @@ func (s *Server) sendTestEmail(c *fiber.Ctx) error {
 	var port int
 
 	err := s.db.QueryRow(`
-		SELECT name, host, port, username, password, tls_mode FROM smtp_servers WHERE id = $1
-	`, id).Scan(&smtpName, &host, &port, &username, &password, &tlsMode)
+		SELECT name, host, port, username, password, tls_mode FROM smtp_servers WHERE id = $1 AND user_id = $2
+	`, id, userID).Scan(&smtpName, &host, &port, &username, &password, &tlsMode)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "SMTP server not found"})
@@ -896,6 +904,14 @@ type SenderRequest struct {
 // listSMTPSenders returns all senders for an SMTP
 func (s *Server) listSMTPSenders(c *fiber.Ctx) error {
 	smtpID := c.Params("id")
+	userID := getUserID(c)
+
+	// Verify SMTP belongs to user
+	var exists bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM smtp_servers WHERE id = $1 AND user_id = $2)`, smtpID, userID).Scan(&exists)
+	if !exists {
+		return c.Status(404).JSON(fiber.Map{"error": "SMTP server not found"})
+	}
 
 	rows, err := s.db.Query(`
 		SELECT id, email, name, reply_to, active, total_sent, created_at,
@@ -947,6 +963,14 @@ func (s *Server) listSMTPSenders(c *fiber.Ctx) error {
 // addSMTPSender adds a sender to an SMTP
 func (s *Server) addSMTPSender(c *fiber.Ctx) error {
 	smtpID := c.Params("id")
+	userID := getUserID(c)
+
+	// Verify SMTP belongs to user
+	var exists bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM smtp_servers WHERE id = $1 AND user_id = $2)`, smtpID, userID).Scan(&exists)
+	if !exists {
+		return c.Status(404).JSON(fiber.Map{"error": "SMTP server not found"})
+	}
 
 	var req SenderRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -977,6 +1001,14 @@ func (s *Server) addSMTPSender(c *fiber.Ctx) error {
 // addSMTPSendersBulk adds multiple senders to an SMTP
 func (s *Server) addSMTPSendersBulk(c *fiber.Ctx) error {
 	smtpID := c.Params("id")
+	userID := getUserID(c)
+
+	// Verify SMTP belongs to user
+	var exists bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM smtp_servers WHERE id = $1 AND user_id = $2)`, smtpID, userID).Scan(&exists)
+	if !exists {
+		return c.Status(404).JSON(fiber.Map{"error": "SMTP server not found"})
+	}
 
 	var req struct {
 		Senders      []SenderRequest `json:"senders"`
@@ -1036,9 +1068,18 @@ func (s *Server) addSMTPSendersBulk(c *fiber.Ctx) error {
 
 // deleteSMTPSender removes a sender from an SMTP
 func (s *Server) deleteSMTPSender(c *fiber.Ctx) error {
+	smtpID := c.Params("id")
 	senderID := c.Params("senderId")
+	userID := getUserID(c)
 
-	result, err := s.db.Exec(`DELETE FROM smtp_senders WHERE id = $1`, senderID)
+	// Verify SMTP belongs to user
+	var exists bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM smtp_servers WHERE id = $1 AND user_id = $2)`, smtpID, userID).Scan(&exists)
+	if !exists {
+		return c.Status(404).JSON(fiber.Map{"error": "SMTP server not found"})
+	}
+
+	result, err := s.db.Exec(`DELETE FROM smtp_senders WHERE id = $1 AND smtp_id = $2`, senderID, smtpID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete sender"})
 	}
@@ -1053,11 +1094,20 @@ func (s *Server) deleteSMTPSender(c *fiber.Ctx) error {
 
 // toggleSMTPSender toggles sender active status
 func (s *Server) toggleSMTPSender(c *fiber.Ctx) error {
+	smtpID := c.Params("id")
 	senderID := c.Params("senderId")
+	userID := getUserID(c)
+
+	// Verify SMTP belongs to user
+	var exists bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM smtp_servers WHERE id = $1 AND user_id = $2)`, smtpID, userID).Scan(&exists)
+	if !exists {
+		return c.Status(404).JSON(fiber.Map{"error": "SMTP server not found"})
+	}
 
 	result, err := s.db.Exec(`
-		UPDATE smtp_senders SET active = NOT active WHERE id = $1
-	`, senderID)
+		UPDATE smtp_senders SET active = NOT active WHERE id = $1 AND smtp_id = $2
+	`, senderID, smtpID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to toggle sender"})
 	}

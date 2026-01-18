@@ -30,11 +30,14 @@ func (s *Server) listTemplates(c *fiber.Ctx) error {
 	// Ensure table has all columns
 	s.ensureTemplatesTableUpdated()
 
+	userID := getUserID(c)
+
 	rows, err := s.db.Query(`
 		SELECT id, name, COALESCE(from_name, ''), subject, created_at, updated_at
 		FROM templates
+		WHERE user_id = $1
 		ORDER BY created_at DESC
-	`)
+	`, userID)
 	if err != nil {
 		log.Printf("[Templates] Error querying templates: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch templates"})
@@ -79,12 +82,13 @@ func (s *Server) createTemplate(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Missing required fields"})
 	}
 
+	userID := getUserID(c)
 	id := uuid.New().String()
 
 	_, err := s.db.Exec(`
-		INSERT INTO templates (id, name, from_name, subject, html_content, text_content)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, id, req.Name, req.FromName, req.Subject, req.HTMLContent, req.TextContent)
+		INSERT INTO templates (id, user_id, name, from_name, subject, html_content, text_content)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, id, userID, req.Name, req.FromName, req.Subject, req.HTMLContent, req.TextContent)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to create template"})
@@ -99,14 +103,15 @@ func (s *Server) createTemplate(c *fiber.Ctx) error {
 // getTemplate returns a single template
 func (s *Server) getTemplate(c *fiber.Ctx) error {
 	id := c.Params("id")
+	userID := getUserID(c)
 
 	var name, fromName, subject, htmlContent, textContent string
 	var createdAt, updatedAt time.Time
 
 	err := s.db.QueryRow(`
 		SELECT name, COALESCE(from_name, ''), subject, html_content, text_content, created_at, updated_at
-		FROM templates WHERE id = $1
-	`, id).Scan(&name, &fromName, &subject, &htmlContent, &textContent, &createdAt, &updatedAt)
+		FROM templates WHERE id = $1 AND user_id = $2
+	`, id, userID).Scan(&name, &fromName, &subject, &htmlContent, &textContent, &createdAt, &updatedAt)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Template not found"})
@@ -127,6 +132,7 @@ func (s *Server) getTemplate(c *fiber.Ctx) error {
 // updateTemplate updates a template
 func (s *Server) updateTemplate(c *fiber.Ctx) error {
 	id := c.Params("id")
+	userID := getUserID(c)
 
 	var req TemplateRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -135,8 +141,8 @@ func (s *Server) updateTemplate(c *fiber.Ctx) error {
 
 	result, err := s.db.Exec(`
 		UPDATE templates SET name = $1, from_name = $2, subject = $3, html_content = $4, text_content = $5
-		WHERE id = $6
-	`, req.Name, req.FromName, req.Subject, req.HTMLContent, req.TextContent, id)
+		WHERE id = $6 AND user_id = $7
+	`, req.Name, req.FromName, req.Subject, req.HTMLContent, req.TextContent, id, userID)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update template"})
@@ -153,8 +159,9 @@ func (s *Server) updateTemplate(c *fiber.Ctx) error {
 // deleteTemplate deletes a template
 func (s *Server) deleteTemplate(c *fiber.Ctx) error {
 	id := c.Params("id")
+	userID := getUserID(c)
 
-	result, err := s.db.Exec(`DELETE FROM templates WHERE id = $1`, id)
+	result, err := s.db.Exec(`DELETE FROM templates WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete template"})
 	}

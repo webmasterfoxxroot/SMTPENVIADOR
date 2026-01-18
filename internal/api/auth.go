@@ -133,6 +133,26 @@ func HashPassword(password string) (string, error) {
 	return string(bytes), err
 }
 
+// getUserID gets the user ID from context as a string
+func getUserID(c *fiber.Ctx) string {
+	if id := c.Locals("userId"); id != nil {
+		if strID, ok := id.(string); ok {
+			return strID
+		}
+	}
+	return ""
+}
+
+// isAdmin checks if the current user is an admin
+func isAdmin(c *fiber.Ctx) bool {
+	if role := c.Locals("userRole"); role != nil {
+		if strRole, ok := role.(string); ok {
+			return strRole == "admin"
+		}
+	}
+	return false
+}
+
 // resetAdmin resets admin password (temporary endpoint)
 func (s *Server) resetAdmin(c *fiber.Ctx) error {
 	// Generate hash for admin123

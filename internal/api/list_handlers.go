@@ -146,12 +146,14 @@ func (s *Server) resumeOrphanedDeletions() {
 
 // listEmailLists returns all email lists
 func (s *Server) listEmailLists(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	rows, err := s.db.Query(`
 		SELECT id, name, description, total_emails, valid_emails,
 		       invalid_emails, status, group_id, created_at, updated_at
 		FROM email_lists
+		WHERE user_id = $1
 		ORDER BY created_at DESC
-	`)
+	`, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch email lists"})
 	}
@@ -223,6 +225,7 @@ func (s *Server) listEmailLists(c *fiber.Ctx) error {
 
 // createEmailList creates a new email list
 func (s *Server) createEmailList(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	var req EmailListRequest
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
@@ -235,9 +238,9 @@ func (s *Server) createEmailList(c *fiber.Ctx) error {
 	id := uuid.New().String()
 
 	_, err := s.db.Exec(`
-		INSERT INTO email_lists (id, name, description, status)
-		VALUES ($1, $2, $3, 'ready')
-	`, id, req.Name, req.Description)
+		INSERT INTO email_lists (id, name, description, status, user_id)
+		VALUES ($1, $2, $3, 'ready', $4)
+	`, id, req.Name, req.Description, userID)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to create email list"})
@@ -251,6 +254,7 @@ func (s *Server) createEmailList(c *fiber.Ctx) error {
 
 // getEmailList returns a single email list
 func (s *Server) getEmailList(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	var name, status string
@@ -261,8 +265,8 @@ func (s *Server) getEmailList(c *fiber.Ctx) error {
 	err := s.db.QueryRow(`
 		SELECT name, description, total_emails, valid_emails,
 		       invalid_emails, status, created_at, updated_at
-		FROM email_lists WHERE id = $1
-	`, id).Scan(&name, &description, &totalEmails, &validEmails,
+		FROM email_lists WHERE id = $1 AND user_id = $2
+	`, id, userID).Scan(&name, &description, &totalEmails, &validEmails,
 		&invalidEmails, &status, &createdAt, &updatedAt)
 
 	if err != nil {
@@ -284,6 +288,7 @@ func (s *Server) getEmailList(c *fiber.Ctx) error {
 
 // updateEmailList updates an email list
 func (s *Server) updateEmailList(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	var req EmailListRequest
@@ -292,8 +297,8 @@ func (s *Server) updateEmailList(c *fiber.Ctx) error {
 	}
 
 	result, err := s.db.Exec(`
-		UPDATE email_lists SET name = $1, description = $2 WHERE id = $3
-	`, req.Name, req.Description, id)
+		UPDATE email_lists SET name = $1, description = $2 WHERE id = $3 AND user_id = $4
+	`, req.Name, req.Description, id, userID)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update email list"})
@@ -359,11 +364,12 @@ func (s *Server) refreshListCounts(c *fiber.Ctx) error {
 
 // deleteEmailList deletes an email list and all its emails (in batches for large lists)
 func (s *Server) deleteEmailList(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
-	// Check if list exists
+	// Check if list exists and belongs to user
 	var exists bool
-	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_lists WHERE id = $1)`, id).Scan(&exists)
+	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_lists WHERE id = $1 AND user_id = $2)`, id, userID).Scan(&exists)
 	if err != nil || !exists {
 		return c.Status(404).JSON(fiber.Map{"error": "Email list not found"})
 	}
@@ -409,7 +415,7 @@ func (s *Server) deleteEmailList(c *fiber.Ctx) error {
 	}
 
 	// Delete the list
-	result, err := s.db.Exec(`DELETE FROM email_lists WHERE id = $1`, id)
+	result, err := s.db.Exec(`DELETE FROM email_lists WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {
 		log.Printf("Failed to delete list %s: %v", id, err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete email list"})
@@ -501,18 +507,19 @@ func (s *Server) deleteListInBatches(listID string) {
 
 // forceDeleteEmailList forces immediate deletion of a list regardless of size
 func (s *Server) forceDeleteEmailList(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
-	// Check if list exists
+	// Check if list exists and belongs to user
 	var exists bool
 	var status string
-	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_lists WHERE id = $1)`, id).Scan(&exists)
+	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_lists WHERE id = $1 AND user_id = $2)`, id, userID).Scan(&exists)
 	if err != nil || !exists {
 		return c.Status(404).JSON(fiber.Map{"error": "Email list not found"})
 	}
 
 	// Get list status
-	s.db.QueryRow(`SELECT status FROM email_lists WHERE id = $1`, id).Scan(&status)
+	s.db.QueryRow(`SELECT status FROM email_lists WHERE id = $1 AND user_id = $2`, id, userID).Scan(&status)
 
 	log.Printf("Force deleting list %s (status: %s)", id, status)
 
@@ -550,7 +557,7 @@ func (s *Server) forceDeleteEmailList(c *fiber.Ctx) error {
 	s.db.Exec(`DELETE FROM import_jobs WHERE list_id = $1`, id)
 
 	// Delete the list
-	_, err = s.db.Exec(`DELETE FROM email_lists WHERE id = $1`, id)
+	_, err = s.db.Exec(`DELETE FROM email_lists WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {
 		log.Printf("Force delete - failed to delete list %s: %v", id, err)
 		return c.Status(500).JSON(fiber.Map{"error": "Falha ao deletar lista"})
@@ -565,13 +572,14 @@ func (s *Server) forceDeleteEmailList(c *fiber.Ctx) error {
 
 // uploadEmails handles CSV/TXT file upload
 func (s *Server) uploadEmails(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
-	// Check if list exists
+	// Verify list belongs to user
 	var exists bool
-	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_lists WHERE id = $1)`, id).Scan(&exists)
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_lists WHERE id = $1 AND user_id = $2)`, id, userID).Scan(&exists)
 	if !exists {
-		return c.Status(404).JSON(fiber.Map{"error": "Email list not found"})
+		return c.Status(404).JSON(fiber.Map{"error": "List not found"})
 	}
 
 	// Get file
@@ -784,13 +792,14 @@ func (s *Server) uploadEmails(c *fiber.Ctx) error {
 // uploadEmailsAsync handles large file uploads asynchronously
 // Jobs are stored in database for persistence across page changes and restarts
 func (s *Server) uploadEmailsAsync(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	listID := c.Params("id")
 
-	// Check if list exists
+	// Verify list belongs to user
 	var exists bool
-	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_lists WHERE id = $1)`, listID).Scan(&exists)
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_lists WHERE id = $1 AND user_id = $2)`, listID, userID).Scan(&exists)
 	if !exists {
-		return c.Status(404).JSON(fiber.Map{"error": "Lista nao encontrada"})
+		return c.Status(404).JSON(fiber.Map{"error": "List not found"})
 	}
 
 	// Get file
@@ -1420,6 +1429,8 @@ func (s *Server) cancelImportJob(c *fiber.Ctx) error {
 
 // uploadEmailsSplit handles large file uploads with automatic splitting into multiple lists
 func (s *Server) uploadEmailsSplit(c *fiber.Ctx) error {
+	userID := getUserID(c)
+
 	// Get file
 	file, err := c.FormFile("file")
 	if err != nil {
@@ -1578,14 +1589,14 @@ func (s *Server) uploadEmailsSplit(c *fiber.Ctx) error {
 			currentListID = uuid.New().String()
 			if groupID != "" {
 				_, err = s.db.Exec(`
-					INSERT INTO email_lists (id, name, description, total_emails, valid_emails, invalid_emails, status, group_id)
-					VALUES ($1, $2, $3, 0, 0, 0, 'pending', $4)
-				`, currentListID, listName, fmt.Sprintf("Parte %d de %d", currentPart, numParts), groupID)
+					INSERT INTO email_lists (id, name, description, total_emails, valid_emails, invalid_emails, status, group_id, user_id)
+					VALUES ($1, $2, $3, 0, 0, 0, 'pending', $4, $5)
+				`, currentListID, listName, fmt.Sprintf("Parte %d de %d", currentPart, numParts), groupID, userID)
 			} else {
 				_, err = s.db.Exec(`
-					INSERT INTO email_lists (id, name, description, total_emails, valid_emails, invalid_emails, status)
-					VALUES ($1, $2, $3, 0, 0, 0, 'pending')
-				`, currentListID, listName, fmt.Sprintf("Parte %d de %d", currentPart, numParts))
+					INSERT INTO email_lists (id, name, description, total_emails, valid_emails, invalid_emails, status, user_id)
+					VALUES ($1, $2, $3, 0, 0, 0, 'pending', $4)
+				`, currentListID, listName, fmt.Sprintf("Parte %d de %d", currentPart, numParts), userID)
 			}
 			if err != nil {
 				log.Printf("Failed to create list %s: %v", listName, err)
@@ -1668,10 +1679,18 @@ func (s *Server) uploadEmailsSplit(c *fiber.Ctx) error {
 
 // getListEmails returns emails from a list
 func (s *Server) getListEmails(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 	page := c.QueryInt("page", 1)
 	limit := c.QueryInt("limit", 50)
 	offset := (page - 1) * limit
+
+	// Verify list belongs to user
+	var exists bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_lists WHERE id = $1 AND user_id = $2)`, id, userID).Scan(&exists)
+	if !exists {
+		return c.Status(404).JSON(fiber.Map{"error": "List not found"})
+	}
 
 	// Use ClickHouse if available
 	if s.ch != nil {
@@ -1756,8 +1775,16 @@ func (s *Server) getListEmails(c *fiber.Ctx) error {
 
 // deleteEmail removes an email from a list
 func (s *Server) deleteEmail(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	listID := c.Params("id")
 	emailID := c.Params("emailId")
+
+	// Verify list belongs to user
+	var exists bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_lists WHERE id = $1 AND user_id = $2)`, listID, userID).Scan(&exists)
+	if !exists {
+		return c.Status(404).JSON(fiber.Map{"error": "List not found"})
+	}
 
 	// Try to delete from ClickHouse first
 	if s.ch != nil {
@@ -1794,6 +1821,7 @@ func (s *Server) deleteEmail(c *fiber.Ctx) error {
 
 // addEmailManually adds a single email to a list
 func (s *Server) addEmailManually(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	listID := c.Params("id")
 
 	var req struct {
@@ -1816,11 +1844,11 @@ func (s *Server) addEmailManually(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Email inválido"})
 	}
 
-	// Check if list exists
+	// Verify list belongs to user
 	var exists bool
-	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_lists WHERE id = $1)`, listID).Scan(&exists)
+	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_lists WHERE id = $1 AND user_id = $2)`, listID, userID).Scan(&exists)
 	if err != nil || !exists {
-		return c.Status(404).JSON(fiber.Map{"error": "Lista não encontrada"})
+		return c.Status(404).JSON(fiber.Map{"error": "List not found"})
 	}
 
 	emailID := uuid.New().String()
@@ -1877,6 +1905,7 @@ func (s *Server) addEmailManually(c *fiber.Ctx) error {
 
 // updateEmail updates an existing email in a list
 func (s *Server) updateEmail(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	listID := c.Params("id")
 	emailID := c.Params("emailId")
 
@@ -1898,6 +1927,13 @@ func (s *Server) updateEmail(c *fiber.Ctx) error {
 	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 	if !emailRegex.MatchString(req.Email) {
 		return c.Status(400).JSON(fiber.Map{"error": "Email inválido"})
+	}
+
+	// Verify list belongs to user
+	var exists bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_lists WHERE id = $1 AND user_id = $2)`, listID, userID).Scan(&exists)
+	if !exists {
+		return c.Status(404).JSON(fiber.Map{"error": "List not found"})
 	}
 
 	// Update in ClickHouse if available

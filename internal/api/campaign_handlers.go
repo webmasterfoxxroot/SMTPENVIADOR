@@ -66,6 +66,7 @@ type CampaignRequest struct {
 
 // listCampaigns returns all campaigns
 func (s *Server) listCampaigns(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	status := c.Query("status", "")
 
 	// Use EXTRACT(EPOCH FROM ...) to get Unix timestamp directly from PostgreSQL
@@ -78,11 +79,12 @@ func (s *Server) listCampaigns(c *fiber.Ctx) error {
 		       c.started_at, c.completed_at, c.created_at, l.name as list_name
 		FROM campaigns c
 		LEFT JOIN email_lists l ON c.list_id = l.id
+		WHERE c.user_id = $1
 	`
-	args := []interface{}{}
+	args := []interface{}{userID}
 
 	if status != "" {
-		query += " WHERE c.status = $1"
+		query += " AND c.status = $2"
 		args = append(args, status)
 	}
 
@@ -142,6 +144,8 @@ func (s *Server) listCampaigns(c *fiber.Ctx) error {
 
 // createCampaign creates a new campaign (frontend will handle countdown and start)
 func (s *Server) createCampaign(c *fiber.Ctx) error {
+	userID := getUserID(c)
+
 	var req CampaignRequest
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
@@ -202,11 +206,11 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 	_, err := s.db.Exec(`
 		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to,
 		                       html_content, text_content, list_id, list_ids, send_rate,
-		                       scheduled_at, track_opens, track_clicks, total_emails, status, auto_start_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'draft', $16)
+		                       scheduled_at, track_opens, track_clicks, total_emails, status, auto_start_at, user_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'draft', $16, $17)
 	`, id, req.Name, req.Subject, req.FromName, req.FromEmail, req.ReplyTo,
 		req.HTMLContent, req.TextContent, listIDs[0], listIDsStr, req.SendRate,
-		req.ScheduledAt, req.TrackOpens, req.TrackClicks, totalEmails, autoStartAt)
+		req.ScheduledAt, req.TrackOpens, req.TrackClicks, totalEmails, autoStartAt, userID)
 
 	if err != nil {
 		log.Printf("Failed to create campaign: %v", err)
@@ -224,6 +228,7 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 
 // getCampaign returns a single campaign
 func (s *Server) getCampaign(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	var name, subject, fromName, fromEmail, replyTo, htmlContent, textContent, status, listID string
@@ -237,8 +242,8 @@ func (s *Server) getCampaign(c *fiber.Ctx) error {
 		       list_id, COALESCE(list_ids, ''), status, total_emails, sent_count, failed_count, open_count,
 		       click_count, bounce_count, send_rate, scheduled_at, started_at,
 		       completed_at, created_at, updated_at
-		FROM campaigns WHERE id = $1
-	`, id).Scan(&name, &subject, &fromName, &fromEmail, &replyTo, &htmlContent, &textContent,
+		FROM campaigns WHERE id = $1 AND user_id = $2
+	`, id, userID).Scan(&name, &subject, &fromName, &fromEmail, &replyTo, &htmlContent, &textContent,
 		&listID, &listIDsStr, &status, &totalEmails, &sentCount, &failedCount, &openCount,
 		&clickCount, &bounceCount, &sendRate, &scheduledAt, &startedAt,
 		&completedAt, &createdAt, &updatedAt)
@@ -284,6 +289,7 @@ func (s *Server) getCampaign(c *fiber.Ctx) error {
 
 // updateCampaign updates a campaign
 func (s *Server) updateCampaign(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	var req CampaignRequest
@@ -293,7 +299,7 @@ func (s *Server) updateCampaign(c *fiber.Ctx) error {
 
 	// Check if campaign is editable
 	var status string
-	s.db.QueryRow(`SELECT status FROM campaigns WHERE id = $1`, id).Scan(&status)
+	s.db.QueryRow(`SELECT status FROM campaigns WHERE id = $1 AND user_id = $2`, id, userID).Scan(&status)
 	if status != "draft" && status != "paused" {
 		return c.Status(400).JSON(fiber.Map{"error": "Campaign cannot be edited in current status"})
 	}
@@ -303,10 +309,10 @@ func (s *Server) updateCampaign(c *fiber.Ctx) error {
 			name = $1, subject = $2, from_name = $3, from_email = $4,
 			reply_to = $5, html_content = $6, text_content = $7,
 			list_id = $8, send_rate = $9, scheduled_at = $10
-		WHERE id = $11
+		WHERE id = $11 AND user_id = $12
 	`, req.Name, req.Subject, req.FromName, req.FromEmail, req.ReplyTo,
 		req.HTMLContent, req.TextContent, req.ListID, req.SendRate,
-		req.ScheduledAt, id)
+		req.ScheduledAt, id, userID)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update campaign"})
@@ -322,9 +328,10 @@ func (s *Server) updateCampaign(c *fiber.Ctx) error {
 
 // deleteCampaign deletes a campaign
 func (s *Server) deleteCampaign(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
-	result, err := s.db.Exec(`DELETE FROM campaigns WHERE id = $1`, id)
+	result, err := s.db.Exec(`DELETE FROM campaigns WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete campaign"})
 	}
@@ -339,6 +346,7 @@ func (s *Server) deleteCampaign(c *fiber.Ctx) error {
 
 // startCampaign starts sending a campaign
 func (s *Server) startCampaign(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	// Get campaign details
@@ -348,8 +356,8 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 	var trackOpens, trackClicks bool
 	err := s.db.QueryRow(`
 		SELECT list_id, COALESCE(list_ids, ''), from_email, from_name, reply_to, subject, html_content, text_content, status, COALESCE(track_opens, true), COALESCE(track_clicks, true)
-		FROM campaigns WHERE id = $1
-	`, id).Scan(&listID, &listIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &status, &trackOpens, &trackClicks)
+		FROM campaigns WHERE id = $1 AND user_id = $2
+	`, id, userID).Scan(&listID, &listIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &status, &trackOpens, &trackClicks)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
@@ -426,11 +434,12 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 
 // pauseCampaign pauses a running campaign
 func (s *Server) pauseCampaign(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	result, err := s.db.Exec(`
-		UPDATE campaigns SET status = 'paused' WHERE id = $1 AND status = 'running'
-	`, id)
+		UPDATE campaigns SET status = 'paused' WHERE id = $1 AND user_id = $2 AND status = 'running'
+	`, id, userID)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to pause campaign"})
@@ -446,11 +455,12 @@ func (s *Server) pauseCampaign(c *fiber.Ctx) error {
 
 // resumeCampaign resumes a paused campaign
 func (s *Server) resumeCampaign(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	result, err := s.db.Exec(`
-		UPDATE campaigns SET status = 'running' WHERE id = $1 AND status = 'paused'
-	`, id)
+		UPDATE campaigns SET status = 'running' WHERE id = $1 AND user_id = $2 AND status = 'paused'
+	`, id, userID)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to resume campaign"})
@@ -466,11 +476,12 @@ func (s *Server) resumeCampaign(c *fiber.Ctx) error {
 
 // cancelCampaign cancels a campaign
 func (s *Server) cancelCampaign(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	result, err := s.db.Exec(`
-		UPDATE campaigns SET status = 'cancelled' WHERE id = $1 AND status IN ('running', 'paused', 'scheduled')
-	`, id)
+		UPDATE campaigns SET status = 'cancelled' WHERE id = $1 AND user_id = $2 AND status IN ('running', 'paused', 'scheduled')
+	`, id, userID)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to cancel campaign"})
@@ -489,11 +500,12 @@ func (s *Server) cancelCampaign(c *fiber.Ctx) error {
 
 // cancelAutoStart cancels the auto-start countdown for a campaign
 func (s *Server) cancelAutoStart(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	result, err := s.db.Exec(`
-		UPDATE campaigns SET auto_start_at = NULL WHERE id = $1 AND status = 'draft'
-	`, id)
+		UPDATE campaigns SET auto_start_at = NULL WHERE id = $1 AND user_id = $2 AND status = 'draft'
+	`, id, userID)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to cancel auto-start"})
@@ -530,11 +542,12 @@ func (s *Server) scheduleCampaign(c *fiber.Ctx) error {
 	}
 
 	// Update campaign with scheduled time and status
+	userID := getUserID(c)
 	result, err := s.db.Exec(`
 		UPDATE campaigns
 		SET scheduled_at = $1, status = 'scheduled', auto_start_at = NULL
-		WHERE id = $2 AND status = 'draft'
-	`, scheduledAt, id)
+		WHERE id = $2 AND user_id = $3 AND status = 'draft'
+	`, scheduledAt, id, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to schedule campaign"})
 	}
@@ -552,13 +565,14 @@ func (s *Server) scheduleCampaign(c *fiber.Ctx) error {
 
 // cancelSchedule cancels a scheduled campaign
 func (s *Server) cancelSchedule(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	result, err := s.db.Exec(`
 		UPDATE campaigns
 		SET scheduled_at = NULL, status = 'draft'
-		WHERE id = $1 AND status = 'scheduled'
-	`, id)
+		WHERE id = $1 AND user_id = $2 AND status = 'scheduled'
+	`, id, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to cancel schedule"})
 	}
@@ -639,7 +653,15 @@ func (s *Server) autoStartCampaignByID(id string) {
 
 // getCampaignStats returns campaign statistics
 func (s *Server) getCampaignStats(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
+
+	// Verify campaign belongs to user
+	var exists bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM campaigns WHERE id = $1 AND user_id = $2)`, id, userID).Scan(&exists)
+	if !exists {
+		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
+	}
 
 	// Get counts by status
 	rows, err := s.db.Query(`
@@ -669,6 +691,7 @@ func (s *Server) getCampaignStats(c *fiber.Ctx) error {
 
 // cloneCampaign creates a copy of an existing campaign (frontend will handle countdown and start)
 func (s *Server) cloneCampaign(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	// Check if there are active SMTPs available
@@ -685,8 +708,8 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 	var trackOpens, trackClicks bool
 	err := s.db.QueryRow(`
 		SELECT name, subject, from_name, from_email, reply_to, html_content, text_content, list_id, send_rate, COALESCE(track_opens, true), COALESCE(track_clicks, true)
-		FROM campaigns WHERE id = $1
-	`, id).Scan(&name, &subject, &fromName, &fromEmail, &replyTo, &htmlContent, &textContent, &listID, &sendRate, &trackOpens, &trackClicks)
+		FROM campaigns WHERE id = $1 AND user_id = $2
+	`, id, userID).Scan(&name, &subject, &fromName, &fromEmail, &replyTo, &htmlContent, &textContent, &listID, &sendRate, &trackOpens, &trackClicks)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
@@ -712,9 +735,9 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 	autoStartAt := time.Now().UTC().Add(60 * time.Second)
 
 	_, err = s.db.Exec(`
-		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to, html_content, text_content, list_id, send_rate, track_opens, track_clicks, total_emails, status, auto_start_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'draft', $14)
-	`, newID, newName, subject, fromName, fromEmail, replyTo, htmlContent, textContent, listID, sendRate, trackOpens, trackClicks, totalEmails, autoStartAt)
+		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to, html_content, text_content, list_id, send_rate, track_opens, track_clicks, total_emails, status, auto_start_at, user_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'draft', $14, $15)
+	`, newID, newName, subject, fromName, fromEmail, replyTo, htmlContent, textContent, listID, sendRate, trackOpens, trackClicks, totalEmails, autoStartAt, userID)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to clone campaign"})
@@ -731,6 +754,7 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 
 // resendCampaign resends the campaign to all emails in the list
 func (s *Server) resendCampaign(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	// Get campaign details
@@ -738,8 +762,8 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 	var trackOpens, trackClicks bool
 	err := s.db.QueryRow(`
 		SELECT list_id, from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
-		FROM campaigns WHERE id = $1
-	`, id).Scan(&listID, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
+		FROM campaigns WHERE id = $1 AND user_id = $2
+	`, id, userID).Scan(&listID, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
@@ -794,6 +818,7 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 
 // resendToFailed resends only to emails that failed
 func (s *Server) resendToFailed(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	// Get campaign details
@@ -801,8 +826,8 @@ func (s *Server) resendToFailed(c *fiber.Ctx) error {
 	var trackOpens, trackClicks bool
 	err := s.db.QueryRow(`
 		SELECT from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
-		FROM campaigns WHERE id = $1
-	`, id).Scan(&fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
+		FROM campaigns WHERE id = $1 AND user_id = $2
+	`, id, userID).Scan(&fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
@@ -841,6 +866,7 @@ func (s *Server) resendToFailed(c *fiber.Ctx) error {
 
 // resendToNonOpeners resends only to emails that didn't open
 func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	// Get campaign details
@@ -848,8 +874,8 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 	var trackOpens, trackClicks bool
 	err := s.db.QueryRow(`
 		SELECT from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
-		FROM campaigns WHERE id = $1
-	`, id).Scan(&fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
+		FROM campaigns WHERE id = $1 AND user_id = $2
+	`, id, userID).Scan(&fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
@@ -1065,11 +1091,15 @@ func (s *Server) queueClickHouseEmails(emails []clickhouse.CampaignEmail, campai
 
 // exportCampaignCSV exports campaign results to CSV
 func (s *Server) exportCampaignCSV(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 
 	// Get campaign name
 	var campaignName string
-	s.db.QueryRow(`SELECT name FROM campaigns WHERE id = $1`, id).Scan(&campaignName)
+	err := s.db.QueryRow(`SELECT name FROM campaigns WHERE id = $1 AND user_id = $2`, id, userID).Scan(&campaignName)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
+	}
 
 	// Get all campaign emails with details - use stored email directly
 	rows, err := s.db.Query(`
@@ -1126,11 +1156,19 @@ func (s *Server) exportCampaignCSV(c *fiber.Ctx) error {
 
 // getCampaignDetails returns detailed list of emails with status
 func (s *Server) getCampaignDetails(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 	status := c.Query("status", "")
 	page := c.QueryInt("page", 1)
 	limit := c.QueryInt("limit", 50)
 	offset := (page - 1) * limit
+
+	// Verify campaign belongs to user
+	var exists bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM campaigns WHERE id = $1 AND user_id = $2)`, id, userID).Scan(&exists)
+	if !exists {
+		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
+	}
 
 	// Build query - use stored email directly instead of JOIN
 	// This supports both ClickHouse and PostgreSQL emails
@@ -1209,12 +1247,13 @@ func (s *Server) getCampaignDetails(c *fiber.Ctx) error {
 
 // exportCampaignEmails exports emails that opened or clicked (only email addresses, one per line)
 func (s *Server) exportCampaignEmails(c *fiber.Ctx) error {
+	userID := getUserID(c)
 	id := c.Params("id")
 	exportType := c.Query("type", "opened") // opened, clicked
 
-	// Verify campaign exists
+	// Verify campaign exists and belongs to user
 	var campaignName string
-	err := s.db.QueryRow(`SELECT name FROM campaigns WHERE id = $1`, id).Scan(&campaignName)
+	err := s.db.QueryRow(`SELECT name FROM campaigns WHERE id = $1 AND user_id = $2`, id, userID).Scan(&campaignName)
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
 	}
