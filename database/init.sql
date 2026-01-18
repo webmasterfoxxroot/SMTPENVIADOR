@@ -18,6 +18,7 @@ CREATE TABLE users (
 -- SMTP Servers table
 CREATE TABLE smtp_servers (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     host VARCHAR(255) NOT NULL,
     port INTEGER NOT NULL DEFAULT 587,
@@ -35,6 +36,8 @@ CREATE TABLE smtp_servers (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX idx_smtp_servers_user_id ON smtp_servers(user_id);
 
 -- SMTP Senders table (multiple senders per SMTP)
 CREATE TABLE smtp_senders (
@@ -54,6 +57,7 @@ CREATE INDEX idx_smtp_senders_smtp_id ON smtp_senders(smtp_id);
 -- Email List Groups table
 CREATE TABLE email_list_groups (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     description TEXT,
     color VARCHAR(20) DEFAULT '#3B82F6',
@@ -61,9 +65,12 @@ CREATE TABLE email_list_groups (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX idx_email_list_groups_user_id ON email_list_groups(user_id);
+
 -- Email Lists table
 CREATE TABLE email_lists (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     description TEXT,
     total_emails INTEGER DEFAULT 0,
@@ -74,6 +81,8 @@ CREATE TABLE email_lists (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX idx_email_lists_user_id ON email_lists(user_id);
 
 -- Emails table (subscribers)
 CREATE TABLE emails (
@@ -106,6 +115,7 @@ CREATE INDEX idx_emails_valid ON emails(valid);
 -- Templates table
 CREATE TABLE templates (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     from_name VARCHAR(255),
     subject VARCHAR(500) NOT NULL,
@@ -115,9 +125,12 @@ CREATE TABLE templates (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX idx_templates_user_id ON templates(user_id);
+
 -- Campaigns table
 CREATE TABLE campaigns (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     subject VARCHAR(500) NOT NULL,
     from_name VARCHAR(255) NOT NULL,
@@ -145,6 +158,8 @@ CREATE TABLE campaigns (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX idx_campaigns_user_id ON campaigns(user_id);
 
 -- Campaign Emails (queue)
 -- Note: email_id references ClickHouse emails, not PostgreSQL
@@ -185,12 +200,14 @@ CREATE INDEX idx_tracking_events_event_type ON tracking_events(event_type);
 -- Blacklist table
 CREATE TABLE blacklist (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    email VARCHAR(255) UNIQUE NOT NULL,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
     reason VARCHAR(255), -- bounce, unsubscribe, complaint, manual
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, email)
 );
 
-CREATE INDEX idx_blacklist_email ON blacklist(email);
+CREATE INDEX idx_blacklist_user_email ON blacklist(user_id, email);
 
 -- Stats table (for real-time dashboard)
 CREATE TABLE stats (
