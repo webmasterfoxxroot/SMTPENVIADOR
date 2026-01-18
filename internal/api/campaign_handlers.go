@@ -166,9 +166,9 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "At least one list is required"})
 	}
 
-	// Check if there are active SMTPs available
+	// Check if there are active SMTPs available for this user
 	var smtpCount int
-	s.db.QueryRow(`SELECT COUNT(*) FROM smtp_servers WHERE active = true`).Scan(&smtpCount)
+	s.db.QueryRow(`SELECT COUNT(*) FROM smtp_servers WHERE active = true AND user_id = $1`, userID).Scan(&smtpCount)
 
 	if smtpCount == 0 {
 		return c.Status(400).JSON(fiber.Map{"error": "Nenhum SMTP ativo disponível. Adicione um SMTP antes de criar campanhas."})
@@ -694,9 +694,9 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 	userID := getUserID(c)
 	id := c.Params("id")
 
-	// Check if there are active SMTPs available
+	// Check if there are active SMTPs available for this user
 	var smtpCount int
-	s.db.QueryRow(`SELECT COUNT(*) FROM smtp_servers WHERE active = true`).Scan(&smtpCount)
+	s.db.QueryRow(`SELECT COUNT(*) FROM smtp_servers WHERE active = true AND user_id = $1`, userID).Scan(&smtpCount)
 
 	if smtpCount == 0 {
 		return c.Status(400).JSON(fiber.Map{"error": "Nenhum SMTP ativo disponível. Adicione um SMTP antes de clonar campanhas."})
