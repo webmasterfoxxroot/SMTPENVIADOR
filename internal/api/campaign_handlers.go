@@ -486,11 +486,12 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 			args[i] = lid
 		}
 
+		// Use LEFT JOIN for better performance with large blacklist
 		query := fmt.Sprintf(`
-			SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
-			FROM emails
-			WHERE list_id IN (%s) AND valid = true AND bounced = false AND unsubscribed = false
-			AND LOWER(email) NOT IN (SELECT LOWER(email) FROM blacklist)
+			SELECT e.id, e.email, e.name, e.custom1, e.custom2, e.custom3, e.custom4, e.custom5
+			FROM emails e
+			LEFT JOIN blacklist b ON LOWER(e.email) = LOWER(b.email)
+			WHERE e.list_id IN (%s) AND e.valid = true AND e.bounced = false AND e.unsubscribed = false AND b.email IS NULL
 		`, strings.Join(placeholders, ","))
 		rows, err := s.db.Query(query, args...)
 		if err != nil {
@@ -670,26 +671,44 @@ func (s *Server) cancelSchedule(c *fiber.Ctx) error {
 func (s *Server) autoStartCampaignByID(id string) {
 	fmt.Printf("[AutoStart] autoStartCampaignByID called for campaign %s\n", id)
 
-	// Get campaign details
+	// Get campaign details - include list_ids for multiple list support
 	var listID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	var listIDsStr sql.NullString
 	var trackOpens, trackClicks bool
 	err := s.db.QueryRow(`
-		SELECT list_id, from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
+		SELECT list_id, COALESCE(list_ids, ''), from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
 		FROM campaigns WHERE id = $1 AND status = 'draft'
-	`, id).Scan(&listID, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
+	`, id).Scan(&listID, &listIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
 
 	if err != nil {
 		fmt.Printf("[AutoStart] Error getting campaign %s: %v\n", id, err)
 		return
 	}
 
-	fmt.Printf("[AutoStart] Campaign %s - List: %s, From: %s\n", id, listID, fromEmail)
+	// Parse list IDs - use list_ids if available, otherwise use list_id
+	var listIDs []string
+	if listIDsStr.Valid && listIDsStr.String != "" {
+		listIDs = strings.Split(listIDsStr.String, ",")
+	} else if listID != "" {
+		listIDs = []string{listID}
+	}
+
+	// Trim whitespace from list IDs
+	for i := range listIDs {
+		listIDs[i] = strings.TrimSpace(listIDs[i])
+	}
+
+	fmt.Printf("[AutoStart] Campaign %s - Lists: %v, From: %s\n", id, listIDs, fromEmail)
+
+	if len(listIDs) == 0 {
+		fmt.Printf("[AutoStart] Campaign %s has no lists, skipping\n", id)
+		return
+	}
 
 	// Get tracking domain for campaign owner
 	trackingDomain := s.getTrackingDomainForCampaign(id)
 
 	// Queue emails - try ClickHouse first, then PostgreSQL
-	listIDs := []string{listID}
 	count := 0
 
 	if s.ch != nil {
@@ -705,12 +724,22 @@ func (s *Server) autoStartCampaignByID(id string) {
 
 	// Fallback to PostgreSQL
 	if count == 0 {
-		rows, err := s.db.Query(`
-			SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
-			FROM emails
-			WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
-			AND LOWER(email) NOT IN (SELECT LOWER(email) FROM blacklist)
-		`, listID)
+		placeholders := make([]string, len(listIDs))
+		args := make([]interface{}, len(listIDs))
+		for i, lid := range listIDs {
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+			args[i] = lid
+		}
+
+		// Use LEFT JOIN for better performance with large blacklist
+		query := fmt.Sprintf(`
+			SELECT e.id, e.email, e.name, e.custom1, e.custom2, e.custom3, e.custom4, e.custom5
+			FROM emails e
+			LEFT JOIN blacklist b ON LOWER(e.email) = LOWER(b.email)
+			WHERE e.list_id IN (%s) AND e.valid = true AND e.bounced = false AND e.unsubscribed = false AND b.email IS NULL
+		`, strings.Join(placeholders, ","))
+
+		rows, err := s.db.Query(query, args...)
 		if err != nil {
 			fmt.Printf("[AutoStart] Error getting emails for campaign %s: %v\n", id, err)
 			return
@@ -809,7 +838,12 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 		}
 	}
 	if totalEmails == 0 {
-		s.db.QueryRow(`SELECT COUNT(*) FROM emails WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false AND LOWER(email) NOT IN (SELECT LOWER(email) FROM blacklist)`, listID).Scan(&totalEmails)
+		// Use LEFT JOIN for better performance
+		s.db.QueryRow(`
+			SELECT COUNT(*) FROM emails e
+			LEFT JOIN blacklist b ON LOWER(e.email) = LOWER(b.email)
+			WHERE e.list_id = $1 AND e.valid = true AND e.bounced = false AND e.unsubscribed = false AND b.email IS NULL
+		`, listID).Scan(&totalEmails)
 	}
 
 	// Create new campaign with "Copy of" prefix as draft with auto_start_at = NOW() + 60 seconds (UTC)
@@ -878,11 +912,12 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 
 	// Fallback to PostgreSQL
 	if count == 0 {
+		// Use LEFT JOIN for better performance with large blacklist
 		rows, err := s.db.Query(`
-			SELECT id, email, name, custom1, custom2, custom3, custom4, custom5
-			FROM emails
-			WHERE list_id = $1 AND valid = true AND bounced = false AND unsubscribed = false
-			AND LOWER(email) NOT IN (SELECT LOWER(email) FROM blacklist)
+			SELECT e.id, e.email, e.name, e.custom1, e.custom2, e.custom3, e.custom4, e.custom5
+			FROM emails e
+			LEFT JOIN blacklist b ON LOWER(e.email) = LOWER(b.email)
+			WHERE e.list_id = $1 AND e.valid = true AND e.bounced = false AND e.unsubscribed = false AND b.email IS NULL
 		`, listID)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch emails"})
