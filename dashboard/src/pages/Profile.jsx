@@ -6,7 +6,10 @@ import {
   Save,
   Loader2,
   Shield,
-  Globe
+  Globe,
+  Copy,
+  Server,
+  AlertCircle
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
@@ -17,6 +20,7 @@ export default function Profile() {
   const [loading, setLoading] = useState(true)
   const [savingProfile, setSavingProfile] = useState(false)
   const [savingPassword, setSavingPassword] = useState(false)
+  const [serverIP, setServerIP] = useState('')
 
   const [profileForm, setProfileForm] = useState({
     name: '',
@@ -32,6 +36,7 @@ export default function Profile() {
 
   useEffect(() => {
     loadUser()
+    loadServerIP()
   }, [])
 
   const loadUser = async () => {
@@ -48,6 +53,20 @@ export default function Profile() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const loadServerIP = async () => {
+    try {
+      const response = await api.get('/settings/server-info')
+      setServerIP(response.data.ip || '')
+    } catch (error) {
+      console.error('Erro ao carregar IP do servidor:', error)
+    }
+  }
+
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text)
+    toast.success('Copiado!')
   }
 
   const handleSaveProfile = async (e) => {
@@ -186,12 +205,56 @@ export default function Profile() {
                 value={profileForm.tracking_domain}
                 onChange={(e) => setProfileForm({ ...profileForm, tracking_domain: e.target.value })}
                 className="w-full pl-10 pr-4 py-2 border dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
-                placeholder="https://seudominio.com"
+                placeholder="https://tracking.seudominio.com"
               />
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               URL do seu servidor para rastrear aberturas e cliques nos emails. Ex: https://tracking.seudominio.com
             </p>
+
+            {/* DNS Setup Instructions */}
+            {serverIP && (
+              <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1">
+                    <h4 className="font-medium text-blue-900 dark:text-blue-200 mb-2">
+                      Configuracao DNS
+                    </h4>
+                    <p className="text-sm text-blue-800 dark:text-blue-300 mb-3">
+                      Para usar seu proprio dominio de rastreamento, configure um registro DNS tipo A apontando para o IP do servidor:
+                    </p>
+                    <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border border-blue-200 dark:border-blue-700">
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="flex items-center gap-2">
+                          <Server className="w-4 h-4 text-gray-500" />
+                          <span className="text-sm text-gray-600 dark:text-gray-400">IP do Servidor:</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <code className="px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded text-sm font-mono text-gray-900 dark:text-white">
+                            {serverIP}
+                          </code>
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(serverIP)}
+                            className="p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors"
+                            title="Copiar IP"
+                          >
+                            <Copy className="w-4 h-4 text-gray-500" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="text-xs text-gray-500 dark:text-gray-400 space-y-1">
+                        <p><strong>Exemplo de configuracao:</strong></p>
+                        <p className="font-mono bg-gray-50 dark:bg-gray-900 p-2 rounded">
+                          tracking.seudominio.com  A  {serverIP}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex justify-end pt-2">
