@@ -244,6 +244,17 @@ func (m *Manager) GetSMTPSentCount(smtpID string) int64 {
 	return count
 }
 
+// GetSMTPRemainingCapacity returns remaining capacity for an SMTP in current minute for a queue type
+func (m *Manager) GetSMTPRemainingCapacity(smtpID string, maxPerMinute int, queueType string) int64 {
+	key := fmt.Sprintf("%s:%s:%s:%d", RateLimitKey, queueType, smtpID, time.Now().Unix()/60)
+	count, _ := m.client.Get(m.ctx, key).Int64()
+	remaining := int64(maxPerMinute) - count
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
 // ==================== CAMPAIGN QUEUE (DEDICATED) ====================
 
 // PushCampaign adds an email job to the campaign queue

@@ -68,11 +68,11 @@ type persistentConn struct {
 }
 
 const (
-	// Pool configuration
-	defaultPoolSize    = 5              // Number of connections per SMTP
-	maxConnAge         = 5 * time.Minute // Max age before forcing reconnect
-	maxSendsPerConn    = 100            // Max sends before forcing reconnect
-	connGetTimeout     = 100 * time.Millisecond // How long to wait for a pooled conn
+	// Pool configuration - optimized for high volume sending
+	defaultPoolSize    = 10                      // Default connections per SMTP (can be overridden by MaxConnections)
+	maxConnAge         = 30 * time.Minute        // Max age before forcing reconnect (30 min)
+	maxSendsPerConn    = 10000                   // Max sends per connection (10k emails before reconnect)
+	connGetTimeout     = 50 * time.Millisecond   // How long to wait for a pooled conn
 )
 
 // SendParams holds email parameters
@@ -198,6 +198,20 @@ func (p *SMTPPool) GetNextSMTP() *SMTPConnection {
 	}
 
 	return nil
+}
+
+// GetAllActiveSMTPs returns all active SMTPs for smart selection
+func (p *SMTPPool) GetAllActiveSMTPs() []*SMTPConnection {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	result := make([]*SMTPConnection, 0, len(p.servers))
+	for _, server := range p.servers {
+		if server.Active && server.Status == "online" && len(server.Senders) > 0 {
+			result = append(result, server)
+		}
+	}
+	return result
 }
 
 // GetNextSender returns the next sender for this SMTP (round-robin)
