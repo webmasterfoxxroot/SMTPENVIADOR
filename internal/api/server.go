@@ -335,6 +335,16 @@ func (s *Server) setupRoutes() {
 	settings.Put("/:key", s.updateSetting)
 	settings.Put("/", s.updateSettings)
 
+	// User Management
+	users := protected.Group("/users")
+	users.Get("/", s.listUsers)
+	users.Get("/me", s.getCurrentUser)
+	users.Post("/", s.createUser)
+	users.Get("/:id", s.getUser)
+	users.Put("/:id", s.updateUser)
+	users.Delete("/:id", s.deleteUser)
+	users.Put("/:id/password", s.changePassword)
+
 	// Warmup System
 	warmup := protected.Group("/warmup")
 	warmup.Get("/stats", s.getWarmupStats)
