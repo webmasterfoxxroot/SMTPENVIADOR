@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Send,
   CheckCircle,
@@ -7,8 +7,6 @@ import {
   Server,
   Mail,
   TrendingUp,
-  ArrowUpRight,
-  ArrowDownRight,
   Activity,
   Flame,
   AlertTriangle,
@@ -16,7 +14,15 @@ import {
   Zap,
   RefreshCw,
   Inbox,
-  MessageSquare
+  MessageSquare,
+  Globe,
+  Monitor,
+  Smartphone,
+  Tablet,
+  Chrome,
+  Bot,
+  MapPin,
+  Shield
 } from 'lucide-react'
 import {
   AreaChart,
@@ -34,6 +40,10 @@ import {
 } from 'recharts'
 import { useNavigate } from 'react-router-dom'
 import api from '../services/api'
+
+// Cache duration in milliseconds
+const CACHE_DURATION = 30000 // 30 seconds
+const ACTIVITY_CACHE_DURATION = 10000 // 10 seconds
 
 // Colorful Stat Card
 function ColorStatCard({ icon: Icon, label, value, subtitle, color, onClick }) {
@@ -166,8 +176,62 @@ function CustomTooltip({ active, payload, label }) {
   return null
 }
 
+// Stat Bar Component for lists
+function StatBar({ label, value, total, color = 'blue' }) {
+  const percentage = total > 0 ? (value / total) * 100 : 0
+  const colorClasses = {
+    blue: 'bg-blue-500',
+    green: 'bg-emerald-500',
+    purple: 'bg-purple-500',
+    orange: 'bg-orange-500',
+    red: 'bg-red-500',
+    cyan: 'bg-cyan-500',
+  }
+
+  return (
+    <div className="flex items-center gap-3">
+      <div className="w-24 text-sm text-gray-600 dark:text-gray-400 truncate" title={label}>
+        {label}
+      </div>
+      <div className="flex-1 h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+        <div
+          className={`h-full ${colorClasses[color]} rounded-full transition-all duration-500`}
+          style={{ width: `${Math.min(percentage, 100)}%` }}
+        />
+      </div>
+      <div className="w-16 text-sm text-gray-900 dark:text-white text-right font-medium">
+        {value.toLocaleString()}
+      </div>
+    </div>
+  )
+}
+
+// Device Icon component
+function DeviceIcon({ type }) {
+  switch (type?.toLowerCase()) {
+    case 'mobile':
+      return <Smartphone className="h-4 w-4" />
+    case 'tablet':
+      return <Tablet className="h-4 w-4" />
+    default:
+      return <Monitor className="h-4 w-4" />
+  }
+}
+
+// Country flag emoji
+function CountryFlag({ code }) {
+  if (!code || code.length !== 2) return <Globe className="h-4 w-4" />
+  const codePoints = code
+    .toUpperCase()
+    .split('')
+    .map(char => 127397 + char.charCodeAt(0))
+  return <span className="text-lg">{String.fromCodePoint(...codePoints)}</span>
+}
+
 function Dashboard() {
   const navigate = useNavigate()
+
+  // Main stats state
   const [stats, setStats] = useState({
     today_sent: 0,
     today_failed: 0,
@@ -183,6 +247,20 @@ function Dashboard() {
     hourly: [],
     by_domain: []
   })
+
+  // Tracking stats state (geolocation, browsers, devices)
+  const [trackingStats, setTrackingStats] = useState({
+    countries: [],
+    regions: [],
+    cities: [],
+    browsers: [],
+    devices: [],
+    os: [],
+    email_clients: [],
+    bot_stats: {},
+    bot_types: []
+  })
+
   const [warmupStats, setWarmupStats] = useState({
     total_sent: 0,
     total_replies: 0,
@@ -191,68 +269,21 @@ function Dashboard() {
     active_smtps: 0,
     active_seeds: 0
   })
+
   const [smtpHealth, setSmtpHealth] = useState([])
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState('today')
   const [activities, setActivities] = useState([])
   const [activeTab, setActiveTab] = useState('campaigns')
 
-  useEffect(() => {
-    fetchStats()
-    fetchActivities()
-    fetchWarmupStats()
-    fetchSmtpHealth()
-    const statsInterval = setInterval(fetchStats, 5000)
-    const activityInterval = setInterval(fetchActivities, 3000)
-    const warmupInterval = setInterval(fetchWarmupStats, 10000)
-    return () => {
-      clearInterval(statsInterval)
-      clearInterval(activityInterval)
-      clearInterval(warmupInterval)
-    }
-  }, [period])
-
-  const fetchStats = async () => {
-    try {
-      const response = await api.get(`/stats?period=${period}`)
-      setStats(response.data)
-    } catch (error) {
-      console.error('Failed to fetch stats:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const fetchActivities = async () => {
-    try {
-      const response = await api.get('/stats/activity?limit=10')
-      setActivities(response.data.activities || [])
-    } catch (error) {
-      console.error('Failed to fetch activities:', error)
-    }
-  }
-
-  const fetchWarmupStats = async () => {
-    try {
-      const response = await api.get('/warmup/stats')
-      setWarmupStats(response.data || {})
-    } catch (error) {
-      // Warmup might not be set up yet
-    }
-  }
-
-  const fetchSmtpHealth = async () => {
-    try {
-      const response = await api.get('/smtp')
-      const smtps = response.data?.data || []
-      const healthIssues = smtps.filter(s =>
-        s.status === 'error' || s.status === 'disabled' || s.fail_count > 10
-      )
-      setSmtpHealth(healthIssues)
-    } catch (error) {
-      // Silent fail
-    }
-  }
+  // Cache refs to persist data between re-renders
+  const cacheRef = useRef({
+    stats: { data: null, timestamp: 0, period: null },
+    tracking: { data: null, timestamp: 0, period: null },
+    activities: { data: null, timestamp: 0 },
+    warmup: { data: null, timestamp: 0 },
+    smtp: { data: null, timestamp: 0 }
+  })
 
   const formatTimeAgo = (timestamp) => {
     const now = new Date()
@@ -271,6 +302,155 @@ function Dashboard() {
     return num?.toLocaleString() || '0'
   }
 
+  // Fetch stats with cache
+  const fetchStats = useCallback(async (forceRefresh = false) => {
+    const cache = cacheRef.current.stats
+    const now = Date.now()
+
+    // Use cache if valid and same period
+    if (!forceRefresh && cache.data && cache.period === period && (now - cache.timestamp) < CACHE_DURATION) {
+      setStats(prev => ({ ...prev, ...cache.data }))
+      return
+    }
+
+    try {
+      const response = await api.get(`/stats?period=${period}`)
+      const data = response.data
+
+      // Update cache
+      cacheRef.current.stats = { data, timestamp: now, period }
+      setStats(data)
+    } catch (error) {
+      console.error('Failed to fetch stats:', error)
+    } finally {
+      setLoading(false)
+    }
+  }, [period])
+
+  // Fetch tracking stats with cache
+  const fetchTrackingStats = useCallback(async (forceRefresh = false) => {
+    const cache = cacheRef.current.tracking
+    const now = Date.now()
+
+    // Use cache if valid and same period
+    if (!forceRefresh && cache.data && cache.period === period && (now - cache.timestamp) < CACHE_DURATION) {
+      setTrackingStats(cache.data)
+      return
+    }
+
+    try {
+      const response = await api.get(`/stats/tracking?period=${period}`)
+      const data = response.data
+
+      // Update cache
+      cacheRef.current.tracking = { data, timestamp: now, period }
+      setTrackingStats(data)
+    } catch (error) {
+      console.error('Failed to fetch tracking stats:', error)
+    }
+  }, [period])
+
+  // Fetch activities with cache
+  const fetchActivities = useCallback(async (forceRefresh = false) => {
+    const cache = cacheRef.current.activities
+    const now = Date.now()
+
+    // Use cache if valid
+    if (!forceRefresh && cache.data && (now - cache.timestamp) < ACTIVITY_CACHE_DURATION) {
+      setActivities(cache.data)
+      return
+    }
+
+    try {
+      const response = await api.get('/stats/activity?limit=10')
+      const data = response.data.activities || []
+
+      // Update cache
+      cacheRef.current.activities = { data, timestamp: now }
+      setActivities(data)
+    } catch (error) {
+      console.error('Failed to fetch activities:', error)
+    }
+  }, [])
+
+  // Fetch warmup stats with cache
+  const fetchWarmupStats = useCallback(async (forceRefresh = false) => {
+    const cache = cacheRef.current.warmup
+    const now = Date.now()
+
+    // Use cache if valid
+    if (!forceRefresh && cache.data && (now - cache.timestamp) < CACHE_DURATION) {
+      setWarmupStats(cache.data)
+      return
+    }
+
+    try {
+      const response = await api.get('/warmup/stats')
+      const data = response.data || {}
+
+      // Update cache
+      cacheRef.current.warmup = { data, timestamp: now }
+      setWarmupStats(data)
+    } catch (error) {
+      // Warmup might not be set up yet
+    }
+  }, [])
+
+  // Fetch SMTP health with cache
+  const fetchSmtpHealth = useCallback(async (forceRefresh = false) => {
+    const cache = cacheRef.current.smtp
+    const now = Date.now()
+
+    // Use cache if valid
+    if (!forceRefresh && cache.data && (now - cache.timestamp) < CACHE_DURATION) {
+      setSmtpHealth(cache.data)
+      return
+    }
+
+    try {
+      const response = await api.get('/smtp')
+      const smtps = response.data?.data || []
+      const healthIssues = smtps.filter(s =>
+        s.status === 'error' || s.status === 'disabled' || s.fail_count > 10
+      )
+
+      // Update cache
+      cacheRef.current.smtp = { data: healthIssues, timestamp: now }
+      setSmtpHealth(healthIssues)
+    } catch (error) {
+      // Silent fail
+    }
+  }, [])
+
+  // Initial fetch and setup intervals
+  useEffect(() => {
+    // Initial fetch
+    fetchStats()
+    fetchTrackingStats()
+    fetchActivities()
+    fetchWarmupStats()
+    fetchSmtpHealth()
+
+    // Set up intervals with longer durations to reduce load
+    const statsInterval = setInterval(() => fetchStats(true), 15000) // 15 seconds
+    const trackingInterval = setInterval(() => fetchTrackingStats(true), 30000) // 30 seconds
+    const activityInterval = setInterval(() => fetchActivities(true), 10000) // 10 seconds
+    const warmupInterval = setInterval(() => fetchWarmupStats(true), 30000) // 30 seconds
+
+    return () => {
+      clearInterval(statsInterval)
+      clearInterval(trackingInterval)
+      clearInterval(activityInterval)
+      clearInterval(warmupInterval)
+    }
+  }, [fetchStats, fetchTrackingStats, fetchActivities, fetchWarmupStats, fetchSmtpHealth])
+
+  // Refetch when period changes
+  useEffect(() => {
+    fetchStats(true)
+    fetchTrackingStats(true)
+  }, [period, fetchStats, fetchTrackingStats])
+
   const openRate = stats.today_sent > 0
     ? Math.round((stats.today_opened / stats.today_sent) * 100)
     : 0
@@ -283,11 +463,16 @@ function Dashboard() {
     ? Math.round(((stats.today_sent - stats.today_failed) / stats.today_sent) * 100)
     : 100
 
-  // Donut chart data
-  const donutData = [
-    { name: 'Abertos', value: stats.today_opened || 0, color: '#10b981' },
-    { name: 'Não Abertos', value: Math.max(0, (stats.today_sent || 0) - (stats.today_opened || 0)), color: '#e5e7eb' },
-  ]
+  // Calculate bot percentage
+  const botStats = trackingStats.bot_stats || {}
+  const totalOpens = (botStats.human_opens || 0) + (botStats.bot_opens || 0) + (botStats.suspicious_opens || 0)
+  const realOpenRate = totalOpens > 0 ? Math.round((botStats.human_opens / totalOpens) * 100) : 100
+
+  // Get max value for stat bars
+  const getMaxTotal = (items) => {
+    if (!items || items.length === 0) return 1
+    return Math.max(...items.map(i => i.total || 0), 1)
+  }
 
   return (
     <div className="space-y-6 pb-8">
@@ -574,6 +759,262 @@ function Dashboard() {
               )}
             </div>
           </div>
+
+          {/* Tracking Stats Section */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-6">
+            {/* Countries */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-xl">
+                  <Globe className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                </div>
+                <h3 className="font-semibold text-gray-900 dark:text-white">Paises</h3>
+              </div>
+              {trackingStats.countries?.length > 0 ? (
+                <div className="space-y-3">
+                  {trackingStats.countries.slice(0, 5).map((item, index) => (
+                    <div key={index} className="flex items-center gap-3">
+                      <CountryFlag code={item.country_code} />
+                      <StatBar
+                        label={item.country || 'Unknown'}
+                        value={item.total}
+                        total={getMaxTotal(trackingStats.countries)}
+                        color="blue"
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-8">Sem dados</p>
+              )}
+            </div>
+
+            {/* Regions/States */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-xl">
+                  <MapPin className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+                </div>
+                <h3 className="font-semibold text-gray-900 dark:text-white">Estados</h3>
+              </div>
+              {trackingStats.regions?.length > 0 ? (
+                <div className="space-y-3">
+                  {trackingStats.regions.slice(0, 5).map((item, index) => (
+                    <StatBar
+                      key={index}
+                      label={item.region || 'Unknown'}
+                      value={item.total}
+                      total={getMaxTotal(trackingStats.regions)}
+                      color="purple"
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-8">Sem dados</p>
+              )}
+            </div>
+
+            {/* Cities */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-cyan-100 dark:bg-cyan-900/30 rounded-xl">
+                  <MapPin className="h-5 w-5 text-cyan-600 dark:text-cyan-400" />
+                </div>
+                <h3 className="font-semibold text-gray-900 dark:text-white">Cidades</h3>
+              </div>
+              {trackingStats.cities?.length > 0 ? (
+                <div className="space-y-3">
+                  {trackingStats.cities.slice(0, 5).map((item, index) => (
+                    <StatBar
+                      key={index}
+                      label={item.city || 'Unknown'}
+                      value={item.total}
+                      total={getMaxTotal(trackingStats.cities)}
+                      color="cyan"
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-8">Sem dados</p>
+              )}
+            </div>
+
+            {/* Browsers */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-orange-100 dark:bg-orange-900/30 rounded-xl">
+                  <Chrome className="h-5 w-5 text-orange-600 dark:text-orange-400" />
+                </div>
+                <h3 className="font-semibold text-gray-900 dark:text-white">Navegadores</h3>
+              </div>
+              {trackingStats.browsers?.length > 0 ? (
+                <div className="space-y-3">
+                  {trackingStats.browsers.slice(0, 5).map((item, index) => (
+                    <StatBar
+                      key={index}
+                      label={item.browser || 'Unknown'}
+                      value={item.total}
+                      total={getMaxTotal(trackingStats.browsers)}
+                      color="orange"
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-8">Sem dados</p>
+              )}
+            </div>
+          </div>
+
+          {/* Second Row: Devices, OS, Email Clients, Bot Stats */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-6">
+            {/* Devices */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-emerald-100 dark:bg-emerald-900/30 rounded-xl">
+                  <Monitor className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                </div>
+                <h3 className="font-semibold text-gray-900 dark:text-white">Dispositivos</h3>
+              </div>
+              {trackingStats.devices?.length > 0 ? (
+                <div className="space-y-3">
+                  {trackingStats.devices.map((item, index) => (
+                    <div key={index} className="flex items-center gap-3">
+                      <DeviceIcon type={item.device_type} />
+                      <StatBar
+                        label={item.device_type === 'desktop' ? 'Desktop' : item.device_type === 'mobile' ? 'Mobile' : item.device_type === 'tablet' ? 'Tablet' : item.device_type || 'Unknown'}
+                        value={item.total}
+                        total={getMaxTotal(trackingStats.devices)}
+                        color="green"
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-8">Sem dados</p>
+              )}
+            </div>
+
+            {/* OS */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-pink-100 dark:bg-pink-900/30 rounded-xl">
+                  <Monitor className="h-5 w-5 text-pink-600 dark:text-pink-400" />
+                </div>
+                <h3 className="font-semibold text-gray-900 dark:text-white">Sist. Operacional</h3>
+              </div>
+              {trackingStats.os?.length > 0 ? (
+                <div className="space-y-3">
+                  {trackingStats.os.slice(0, 5).map((item, index) => (
+                    <StatBar
+                      key={index}
+                      label={item.os || 'Unknown'}
+                      value={item.total}
+                      total={getMaxTotal(trackingStats.os)}
+                      color="pink"
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-8">Sem dados</p>
+              )}
+            </div>
+
+            {/* Email Clients */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-indigo-100 dark:bg-indigo-900/30 rounded-xl">
+                  <Mail className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
+                </div>
+                <h3 className="font-semibold text-gray-900 dark:text-white">Clientes de Email</h3>
+              </div>
+              {trackingStats.email_clients?.length > 0 ? (
+                <div className="space-y-3">
+                  {trackingStats.email_clients.slice(0, 5).map((item, index) => (
+                    <StatBar
+                      key={index}
+                      label={item.email_client || 'Unknown'}
+                      value={item.total}
+                      total={getMaxTotal(trackingStats.email_clients)}
+                      color="purple"
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-8">Sem dados</p>
+              )}
+            </div>
+
+            {/* Bot Stats */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-red-100 dark:bg-red-900/30 rounded-xl">
+                  <Shield className="h-5 w-5 text-red-600 dark:text-red-400" />
+                </div>
+                <h3 className="font-semibold text-gray-900 dark:text-white">Engajamento Real</h3>
+              </div>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-emerald-500" />
+                    <span className="text-sm text-gray-600 dark:text-gray-400">Humanos</span>
+                  </div>
+                  <span className="font-semibold text-gray-900 dark:text-white">
+                    {formatNumber(botStats.human_opens || 0)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-red-500" />
+                    <span className="text-sm text-gray-600 dark:text-gray-400">Bots</span>
+                  </div>
+                  <span className="font-semibold text-gray-900 dark:text-white">
+                    {formatNumber(botStats.bot_opens || 0)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-yellow-500" />
+                    <span className="text-sm text-gray-600 dark:text-gray-400">Suspeitos</span>
+                  </div>
+                  <span className="font-semibold text-gray-900 dark:text-white">
+                    {formatNumber(botStats.suspicious_opens || 0)}
+                  </span>
+                </div>
+                <div className="pt-3 border-t border-gray-100 dark:border-gray-700">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Taxa Real</span>
+                    <span className={`font-bold ${realOpenRate >= 70 ? 'text-emerald-600' : realOpenRate >= 40 ? 'text-yellow-600' : 'text-red-600'}`}>
+                      {realOpenRate}%
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Domain Stats */}
+          {stats.by_domain && stats.by_domain.length > 0 && (
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-violet-100 dark:bg-violet-900/30 rounded-xl">
+                  <Mail className="h-5 w-5 text-violet-600 dark:text-violet-400" />
+                </div>
+                <h3 className="font-semibold text-gray-900 dark:text-white">Desempenho por Dominio</h3>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {stats.by_domain.slice(0, 9).map((item, index) => (
+                  <div key={index} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl">
+                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{item.domain}</span>
+                    <div className="flex items-center gap-3 text-xs">
+                      <span className="text-blue-600 dark:text-blue-400">{formatNumber(item.sent)} env</span>
+                      <span className="text-emerald-600 dark:text-emerald-400">{formatNumber(item.opened)} abr</span>
+                      <span className="text-purple-600 dark:text-purple-400">{formatNumber(item.clicked)} cli</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       ) : (
         <>
