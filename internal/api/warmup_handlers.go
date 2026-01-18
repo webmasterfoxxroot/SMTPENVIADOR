@@ -2795,12 +2795,19 @@ func (s *Server) startWarmupEngine() {
 }
 
 func (s *Server) processWarmupEmails() {
+	// FIRST: Check if any SMTPs are active - if all paused, skip entire cycle
+	var activeSMTPs int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeSMTPs)
+	if activeSMTPs == 0 {
+		// Silent skip when all paused - no log spam
+		return
+	}
+
 	now := time.Now()
 	currentHour := now.Hour()
 
 	// Log active counts
-	var activeSMTPs, activeSeeds, activeTemplates int
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeSMTPs)
+	var activeSeeds, activeTemplates int
 	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'active'`).Scan(&activeSeeds)
 	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_templates WHERE active = true`).Scan(&activeTemplates)
 
@@ -3563,6 +3570,14 @@ func isQuotaOrSpamBlockError(err error) bool {
 }
 
 func (s *Server) processSeedToSMTPEmails() {
+	// FIRST: Check if any SMTPs are active - if all paused, skip entire cycle
+	var activeSMTPs int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeSMTPs)
+	if activeSMTPs == 0 {
+		// Silent skip when all paused - no log spam
+		return
+	}
+
 	now := time.Now()
 	currentHour := now.Hour()
 
@@ -3704,7 +3719,7 @@ func (s *Server) processSeedToSMTPEmails() {
 		s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeCount)
 		if activeCount == 0 {
 			log.Printf("[Warmup Seed→SMTP] All warmup SMTPs paused - stopping immediately")
-			break
+			return // Exit entire function, not just break
 		}
 
 		// Check how many this seed already sent today (from warmup_seed_emails, NOT warmup_emails)
@@ -3743,6 +3758,14 @@ func (s *Server) processSeedToSMTPEmails() {
 
 		// Send emails
 		for i := 0; i < emailsThisCycle; i++ {
+			// Check if warmup was paused before each send
+			var activeCount int
+			s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeCount)
+			if activeCount == 0 {
+				log.Printf("[Warmup Seed→SMTP] Warmup paused - stopping seed %s", seed.Email)
+				return // Exit entire function
+			}
+
 			// Pick random target
 			target := targets[rand.Intn(len(targets))]
 
@@ -4212,6 +4235,14 @@ func getRandomReplyBody() string {
 
 // processInternalWarmup sends emails between SMTPs for internal warmup
 func (s *Server) processInternalWarmup() {
+	// FIRST: Check if any SMTPs are active - if all paused, skip entire cycle
+	var activeSMTPs int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeSMTPs)
+	if activeSMTPs == 0 {
+		// Silent skip when all paused - no log spam
+		return
+	}
+
 	log.Printf("[Internal Warmup] === Cycle starting ===")
 
 	// Check if warmup is enabled
@@ -4358,6 +4389,14 @@ func (s *Server) processInternalWarmup() {
 
 		// Send emails for this cycle
 		for i := 0; i < emailsThisCycle; i++ {
+			// Check if warmup was paused before each send
+			var currentStatus string
+			s.db.QueryRow(`SELECT status FROM warmup_smtps WHERE id = $1`, fromSMTP.WarmupID).Scan(&currentStatus)
+			if currentStatus != "active" {
+				log.Printf("[Internal Warmup] SMTP %s paused - stopping", fromSMTP.Host)
+				return // Exit entire function
+			}
+
 			// Pick a DIFFERENT SMTP as destination
 			var toSMTP smtpInfo
 			found := false
@@ -4448,6 +4487,14 @@ func (s *Server) processInternalWarmup() {
 
 // processInternalWarmupIMAP checks IMAP for smtp_senders to receive and reply to internal warmup emails
 func (s *Server) processInternalWarmupIMAP() {
+	// FIRST: Check if any SMTPs are active - if all paused, skip entire cycle
+	var activeSMTPs int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeSMTPs)
+	if activeSMTPs == 0 {
+		// Silent skip when all paused - no log spam
+		return
+	}
+
 	// Get smtp_senders with IMAP configured
 	rows, err := s.db.Query(`
 		SELECT ss.id, ss.email, ss.imap_host, ss.imap_port, ss.imap_password, COALESCE(ss.imap_tls_mode, 'tls'),
