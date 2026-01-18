@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   Send,
   CheckCircle,
@@ -44,6 +44,15 @@ import api from '../services/api'
 // Cache duration in milliseconds
 const CACHE_DURATION = 30000 // 30 seconds
 const ACTIVITY_CACHE_DURATION = 10000 // 10 seconds
+
+// Global cache that persists between page navigations
+const globalCache = {
+  stats: { data: null, timestamp: 0, period: null },
+  tracking: { data: null, timestamp: 0, period: null },
+  activities: { data: null, timestamp: 0 },
+  warmup: { data: null, timestamp: 0 },
+  smtp: { data: null, timestamp: 0 }
+}
 
 // Colorful Stat Card
 function ColorStatCard({ icon: Icon, label, value, subtitle, color, onClick }) {
@@ -228,62 +237,58 @@ function CountryFlag({ code }) {
   return <span className="text-lg">{String.fromCodePoint(...codePoints)}</span>
 }
 
+// Default values for stats
+const defaultStats = {
+  today_sent: 0,
+  today_failed: 0,
+  today_opened: 0,
+  today_clicked: 0,
+  queue_size: 0,
+  sending_rate: 0,
+  active_smtps: 0,
+  active_campaigns: 0,
+  total_smtps: 0,
+  total_lists: 0,
+  total_emails: 0,
+  hourly: [],
+  by_domain: []
+}
+
+const defaultTrackingStats = {
+  countries: [],
+  regions: [],
+  cities: [],
+  browsers: [],
+  devices: [],
+  os: [],
+  email_clients: [],
+  bot_stats: {},
+  bot_types: []
+}
+
+const defaultWarmupStats = {
+  total_sent: 0,
+  total_replies: 0,
+  total_interactions: 0,
+  inbox_rate: 0,
+  active_smtps: 0,
+  active_seeds: 0
+}
+
 function Dashboard() {
   const navigate = useNavigate()
 
-  // Main stats state
-  const [stats, setStats] = useState({
-    today_sent: 0,
-    today_failed: 0,
-    today_opened: 0,
-    today_clicked: 0,
-    queue_size: 0,
-    sending_rate: 0,
-    active_smtps: 0,
-    active_campaigns: 0,
-    total_smtps: 0,
-    total_lists: 0,
-    total_emails: 0,
-    hourly: [],
-    by_domain: []
-  })
+  // Initialize states from global cache if available (instant load on return)
+  const [stats, setStats] = useState(() => globalCache.stats.data || defaultStats)
+  const [trackingStats, setTrackingStats] = useState(() => globalCache.tracking.data || defaultTrackingStats)
+  const [warmupStats, setWarmupStats] = useState(() => globalCache.warmup.data || defaultWarmupStats)
+  const [smtpHealth, setSmtpHealth] = useState(() => globalCache.smtp.data || [])
+  const [activities, setActivities] = useState(() => globalCache.activities.data || [])
 
-  // Tracking stats state (geolocation, browsers, devices)
-  const [trackingStats, setTrackingStats] = useState({
-    countries: [],
-    regions: [],
-    cities: [],
-    browsers: [],
-    devices: [],
-    os: [],
-    email_clients: [],
-    bot_stats: {},
-    bot_types: []
-  })
-
-  const [warmupStats, setWarmupStats] = useState({
-    total_sent: 0,
-    total_replies: 0,
-    total_interactions: 0,
-    inbox_rate: 0,
-    active_smtps: 0,
-    active_seeds: 0
-  })
-
-  const [smtpHealth, setSmtpHealth] = useState([])
-  const [loading, setLoading] = useState(true)
+  // Loading is false if we have cached data
+  const [loading, setLoading] = useState(() => !globalCache.stats.data)
   const [period, setPeriod] = useState('today')
-  const [activities, setActivities] = useState([])
   const [activeTab, setActiveTab] = useState('campaigns')
-
-  // Cache refs to persist data between re-renders
-  const cacheRef = useRef({
-    stats: { data: null, timestamp: 0, period: null },
-    tracking: { data: null, timestamp: 0, period: null },
-    activities: { data: null, timestamp: 0 },
-    warmup: { data: null, timestamp: 0 },
-    smtp: { data: null, timestamp: 0 }
-  })
 
   const formatTimeAgo = (timestamp) => {
     const now = new Date()
@@ -304,7 +309,7 @@ function Dashboard() {
 
   // Fetch stats with cache
   const fetchStats = useCallback(async (forceRefresh = false) => {
-    const cache = cacheRef.current.stats
+    const cache = globalCache.stats
     const now = Date.now()
 
     // Use cache if valid and same period
@@ -318,7 +323,7 @@ function Dashboard() {
       const data = response.data
 
       // Update cache
-      cacheRef.current.stats = { data, timestamp: now, period }
+      globalCache.stats = { data, timestamp: now, period }
       setStats(data)
     } catch (error) {
       console.error('Failed to fetch stats:', error)
@@ -329,7 +334,7 @@ function Dashboard() {
 
   // Fetch tracking stats with cache
   const fetchTrackingStats = useCallback(async (forceRefresh = false) => {
-    const cache = cacheRef.current.tracking
+    const cache = globalCache.tracking
     const now = Date.now()
 
     // Use cache if valid and same period
@@ -343,7 +348,7 @@ function Dashboard() {
       const data = response.data
 
       // Update cache
-      cacheRef.current.tracking = { data, timestamp: now, period }
+      globalCache.tracking = { data, timestamp: now, period }
       setTrackingStats(data)
     } catch (error) {
       console.error('Failed to fetch tracking stats:', error)
@@ -352,7 +357,7 @@ function Dashboard() {
 
   // Fetch activities with cache
   const fetchActivities = useCallback(async (forceRefresh = false) => {
-    const cache = cacheRef.current.activities
+    const cache = globalCache.activities
     const now = Date.now()
 
     // Use cache if valid
@@ -366,7 +371,7 @@ function Dashboard() {
       const data = response.data.activities || []
 
       // Update cache
-      cacheRef.current.activities = { data, timestamp: now }
+      globalCache.activities = { data, timestamp: now }
       setActivities(data)
     } catch (error) {
       console.error('Failed to fetch activities:', error)
@@ -375,7 +380,7 @@ function Dashboard() {
 
   // Fetch warmup stats with cache
   const fetchWarmupStats = useCallback(async (forceRefresh = false) => {
-    const cache = cacheRef.current.warmup
+    const cache = globalCache.warmup
     const now = Date.now()
 
     // Use cache if valid
@@ -389,7 +394,7 @@ function Dashboard() {
       const data = response.data || {}
 
       // Update cache
-      cacheRef.current.warmup = { data, timestamp: now }
+      globalCache.warmup = { data, timestamp: now }
       setWarmupStats(data)
     } catch (error) {
       // Warmup might not be set up yet
@@ -398,7 +403,7 @@ function Dashboard() {
 
   // Fetch SMTP health with cache
   const fetchSmtpHealth = useCallback(async (forceRefresh = false) => {
-    const cache = cacheRef.current.smtp
+    const cache = globalCache.smtp
     const now = Date.now()
 
     // Use cache if valid
@@ -415,7 +420,7 @@ function Dashboard() {
       )
 
       // Update cache
-      cacheRef.current.smtp = { data: healthIssues, timestamp: now }
+      globalCache.smtp = { data: healthIssues, timestamp: now }
       setSmtpHealth(healthIssues)
     } catch (error) {
       // Silent fail
