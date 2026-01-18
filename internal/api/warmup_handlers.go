@@ -206,7 +206,7 @@ func (s *Server) initWarmupTables() {
 	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS total_sent INT DEFAULT 0`)
 
 	// Add TLS mode columns to warmup_seeds (migration)
-	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS imap_tls_mode VARCHAR(20) DEFAULT 'tls'`) // tls, starttls, none
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS imap_tls_mode VARCHAR(20) DEFAULT 'tls'`)      // tls, starttls, none
 	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS smtp_tls_mode VARCHAR(20) DEFAULT 'starttls'`) // tls, starttls, none
 
 	// Add IMAP fields to smtp_senders for internal warmup (migration)
@@ -1822,17 +1822,17 @@ func (s *Server) getWarmupDiagnostic(c *fiber.Ctx) error {
 
 	// Get SMTP details
 	type smtpDetail struct {
-		Host          string `json:"host"`
-		Status        string `json:"status"`
-		Internal      bool   `json:"internal"`
-		StartHour     int    `json:"start_hour"`
-		EndHour       int    `json:"end_hour"`
-		InHours       bool   `json:"in_hours"`
-		TodayLimit    int    `json:"today_limit"`
-		SentToday     int    `json:"sent_today"`
-		ServerActive  bool   `json:"server_active"`
-		SendersCount  int    `json:"senders_count"`
-		SendersWithIMAP int  `json:"senders_with_imap"`
+		Host            string `json:"host"`
+		Status          string `json:"status"`
+		Internal        bool   `json:"internal"`
+		StartHour       int    `json:"start_hour"`
+		EndHour         int    `json:"end_hour"`
+		InHours         bool   `json:"in_hours"`
+		TodayLimit      int    `json:"today_limit"`
+		SentToday       int    `json:"sent_today"`
+		ServerActive    bool   `json:"server_active"`
+		SendersCount    int    `json:"senders_count"`
+		SendersWithIMAP int    `json:"senders_with_imap"`
 	}
 
 	smtpRows, _ := s.db.Query(`
@@ -1871,16 +1871,16 @@ func (s *Server) getWarmupDiagnostic(c *fiber.Ctx) error {
 		inHours := currentHour >= startHour && currentHour < endHour
 
 		smtpDetails = append(smtpDetails, smtpDetail{
-			Host:          host,
-			Status:        status,
-			Internal:      internal,
-			StartHour:     startHour,
-			EndHour:       endHour,
-			InHours:       inHours,
-			TodayLimit:    todayLimit,
-			SentToday:     sentToday,
-			ServerActive:  serverActive,
-			SendersCount:  sendersCount,
+			Host:            host,
+			Status:          status,
+			Internal:        internal,
+			StartHour:       startHour,
+			EndHour:         endHour,
+			InHours:         inHours,
+			TodayLimit:      todayLimit,
+			SentToday:       sentToday,
+			ServerActive:    serverActive,
+			SendersCount:    sendersCount,
 			SendersWithIMAP: sendersWithIMAPCount,
 		})
 	}
@@ -1890,17 +1890,17 @@ func (s *Server) getWarmupDiagnostic(c *fiber.Ctx) error {
 		"current_hour":   currentHour,
 		"warmup_enabled": warmupEnabled == "true",
 		"external_warmup": fiber.Map{
-			"active_seeds":      activeSeeds,
-			"active_templates":  activeTemplates,
-			"active_smtps":      smtpsWithActiveServer,
-			"smtps_in_hours":    smtpsInValidHours,
-			"sent_today":        sentTodayExternal,
+			"active_seeds":     activeSeeds,
+			"active_templates": activeTemplates,
+			"active_smtps":     smtpsWithActiveServer,
+			"smtps_in_hours":   smtpsInValidHours,
+			"sent_today":       sentTodayExternal,
 		},
 		"internal_warmup": fiber.Map{
-			"smtps_with_internal":  smtpsWithInternal,
-			"smtps_in_hours":       internalInValidHours,
-			"senders_with_imap":    sendersWithIMAP,
-			"sent_today":           sentTodayInternal,
+			"smtps_with_internal": smtpsWithInternal,
+			"smtps_in_hours":      internalInValidHours,
+			"senders_with_imap":   sendersWithIMAP,
+			"sent_today":          sentTodayInternal,
 		},
 		"smtp_details": smtpDetails,
 		"issues":       issues,
@@ -2491,7 +2491,7 @@ func (s *Server) testSeedConnectionPreview(c *fiber.Ctx) error {
 		Password      string `json:"password"`
 		IMAPHost      string `json:"imap_host"`
 		IMAPPort      int    `json:"imap_port"`
-		IMAPTLSMode   string `json:"imap_tls_mode"`   // tls, starttls, none
+		IMAPTLSMode   string `json:"imap_tls_mode"` // tls, starttls, none
 		SMTPHost      string `json:"smtp_host"`
 		SMTPPort      int    `json:"smtp_port"`
 		SMTPTLSMode   string `json:"smtp_tls_mode"`   // tls, starttls, none
@@ -2795,12 +2795,19 @@ func (s *Server) startWarmupEngine() {
 }
 
 func (s *Server) processWarmupEmails() {
+	// FIRST: Check if any SMTPs are active - if all paused, skip entire cycle
+	var activeSMTPs int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeSMTPs)
+	if activeSMTPs == 0 {
+		// Silent skip when all paused - no log spam
+		return
+	}
+
 	now := time.Now()
 	currentHour := now.Hour()
 
 	// Log active counts
-	var activeSMTPs, activeSeeds, activeTemplates int
-	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeSMTPs)
+	var activeSeeds, activeTemplates int
 	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'active'`).Scan(&activeSeeds)
 	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_templates WHERE active = true`).Scan(&activeTemplates)
 
@@ -2890,7 +2897,7 @@ func (s *Server) processWarmupEmails() {
 		}
 
 		// Calculate remaining minutes in the sending window
-		currentMinuteInWindow := (currentHour - startHour) * 60 + time.Now().Minute()
+		currentMinuteInWindow := (currentHour-startHour)*60 + time.Now().Minute()
 		totalSendingMinutes := sendingHours * 60
 		remainingMinutes := totalSendingMinutes - currentMinuteInWindow
 		if remainingMinutes <= 0 {
@@ -2911,9 +2918,16 @@ func (s *Server) processWarmupEmails() {
 			emailsPerMinute = remaining
 		}
 
-		// Send warmup emails
+		// Send warmup emails (check status before each send to allow immediate pause)
 		log.Printf("[Warmup Engine] SMTP %s: Sending %d emails this minute (remaining: %d)", warmupID, emailsPerMinute, remaining)
 		for i := 0; i < emailsPerMinute; i++ {
+			// Re-check status before each email (allows immediate stop when paused)
+			var currentStatus string
+			s.db.QueryRow(`SELECT status FROM warmup_smtps WHERE id = $1`, warmupID).Scan(&currentStatus)
+			if currentStatus != "active" {
+				log.Printf("[Warmup Engine] SMTP %s paused mid-cycle - stopping", warmupID[:8])
+				break
+			}
 			s.sendWarmupEmail(warmupID, smtpID, host, port, username, password, tlsMode, replyRate)
 		}
 	}
@@ -2952,6 +2966,14 @@ func (s *Server) calculateDailyLimit(recipeType string, currentDay, minEmails, m
 }
 
 func (s *Server) sendWarmupEmail(warmupID, smtpID, host string, port int, username, password, tlsMode string, replyRate int) {
+	// Check if this specific warmup SMTP is still active (allows immediate stop)
+	var status string
+	s.db.QueryRow(`SELECT status FROM warmup_smtps WHERE id = $1`, warmupID).Scan(&status)
+	if status != "active" {
+		log.Printf("[Warmup] SMTP %s is %s - skipping", warmupID[:8], status)
+		return
+	}
+
 	// Get a random active seed
 	var seedID, seedEmail string
 	err := s.db.QueryRow(`
@@ -3548,6 +3570,14 @@ func isQuotaOrSpamBlockError(err error) bool {
 }
 
 func (s *Server) processSeedToSMTPEmails() {
+	// FIRST: Check if any SMTPs are active - if all paused, skip entire cycle
+	var activeSMTPs int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeSMTPs)
+	if activeSMTPs == 0 {
+		// Silent skip when all paused - no log spam
+		return
+	}
+
 	now := time.Now()
 	currentHour := now.Hour()
 
@@ -3684,6 +3714,14 @@ func (s *Server) processSeedToSMTPEmails() {
 	// Process each seed
 	totalSent := 0
 	for _, seed := range seeds {
+		// Check if warmup was paused (allows immediate stop when user clicks pause)
+		var activeCount int
+		s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeCount)
+		if activeCount == 0 {
+			log.Printf("[Warmup Seed→SMTP] All warmup SMTPs paused - stopping immediately")
+			return // Exit entire function, not just break
+		}
+
 		// Check how many this seed already sent today (from warmup_seed_emails, NOT warmup_emails)
 		// Use CURRENT_DATE from PostgreSQL to avoid timezone issues
 		var sentToday int
@@ -3720,6 +3758,14 @@ func (s *Server) processSeedToSMTPEmails() {
 
 		// Send emails
 		for i := 0; i < emailsThisCycle; i++ {
+			// Check if warmup was paused before each send
+			var activeCount int
+			s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeCount)
+			if activeCount == 0 {
+				log.Printf("[Warmup Seed→SMTP] Warmup paused - stopping seed %s", seed.Email)
+				return // Exit entire function
+			}
+
 			// Pick random target
 			target := targets[rand.Intn(len(targets))]
 
@@ -4189,6 +4235,14 @@ func getRandomReplyBody() string {
 
 // processInternalWarmup sends emails between SMTPs for internal warmup
 func (s *Server) processInternalWarmup() {
+	// FIRST: Check if any SMTPs are active - if all paused, skip entire cycle
+	var activeSMTPs int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeSMTPs)
+	if activeSMTPs == 0 {
+		// Silent skip when all paused - no log spam
+		return
+	}
+
 	log.Printf("[Internal Warmup] === Cycle starting ===")
 
 	// Check if warmup is enabled
@@ -4335,6 +4389,14 @@ func (s *Server) processInternalWarmup() {
 
 		// Send emails for this cycle
 		for i := 0; i < emailsThisCycle; i++ {
+			// Check if warmup was paused before each send
+			var currentStatus string
+			s.db.QueryRow(`SELECT status FROM warmup_smtps WHERE id = $1`, fromSMTP.WarmupID).Scan(&currentStatus)
+			if currentStatus != "active" {
+				log.Printf("[Internal Warmup] SMTP %s paused - stopping", fromSMTP.Host)
+				return // Exit entire function
+			}
+
 			// Pick a DIFFERENT SMTP as destination
 			var toSMTP smtpInfo
 			found := false
@@ -4425,6 +4487,14 @@ func (s *Server) processInternalWarmup() {
 
 // processInternalWarmupIMAP checks IMAP for smtp_senders to receive and reply to internal warmup emails
 func (s *Server) processInternalWarmupIMAP() {
+	// FIRST: Check if any SMTPs are active - if all paused, skip entire cycle
+	var activeSMTPs int
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeSMTPs)
+	if activeSMTPs == 0 {
+		// Silent skip when all paused - no log spam
+		return
+	}
+
 	// Get smtp_senders with IMAP configured
 	rows, err := s.db.Query(`
 		SELECT ss.id, ss.email, ss.imap_host, ss.imap_port, ss.imap_password, COALESCE(ss.imap_tls_mode, 'tls'),
@@ -4444,11 +4514,11 @@ func (s *Server) processInternalWarmupIMAP() {
 
 	// Collect all senders first
 	type senderInfo struct {
-		senderID, senderEmail, imapHost    string
-		imapPort                           int
-		imapPassword, imapTLSMode          string
-		smtpID, smtpHost                   string
-		smtpPort                           int
+		senderID, senderEmail, imapHost         string
+		imapPort                                int
+		imapPassword, imapTLSMode               string
+		smtpID, smtpHost                        string
+		smtpPort                                int
 		smtpUsername, smtpPassword, smtpTLSMode string
 	}
 	var senders []senderInfo
@@ -4742,10 +4812,10 @@ func (s *Server) updateSenderIMAP(c *fiber.Ctx) error {
 	senderID := c.Params("id")
 
 	var req struct {
-		IMAPHost    string `json:"imap_host"`
-		IMAPPort    int    `json:"imap_port"`
+		IMAPHost     string `json:"imap_host"`
+		IMAPPort     int    `json:"imap_port"`
 		IMAPPassword string `json:"imap_password"`
-		IMAPTLSMode string `json:"imap_tls_mode"` // tls, starttls, none
+		IMAPTLSMode  string `json:"imap_tls_mode"` // tls, starttls, none
 	}
 
 	if err := c.BodyParser(&req); err != nil {
