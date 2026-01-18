@@ -11,6 +11,7 @@ CREATE TABLE users (
     name VARCHAR(255) NOT NULL,
     role VARCHAR(50) DEFAULT 'user', -- admin, user
     active BOOLEAN DEFAULT true,
+    tracking_domain VARCHAR(500), -- User's tracking domain for email tracking
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

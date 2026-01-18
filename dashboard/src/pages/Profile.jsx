@@ -5,7 +5,8 @@ import {
   Mail,
   Save,
   Loader2,
-  Shield
+  Shield,
+  Globe
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
@@ -19,7 +20,8 @@ export default function Profile() {
 
   const [profileForm, setProfileForm] = useState({
     name: '',
-    email: ''
+    email: '',
+    tracking_domain: ''
   })
 
   const [passwordForm, setPasswordForm] = useState({
@@ -38,7 +40,8 @@ export default function Profile() {
       setUser(response.data)
       setProfileForm({
         name: response.data.name,
-        email: response.data.email
+        email: response.data.email,
+        tracking_domain: response.data.tracking_domain || ''
       })
     } catch (error) {
       toast.error('Erro ao carregar perfil')
@@ -170,6 +173,25 @@ export default function Profile() {
                 required
               />
             </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Domínio de Rastreamento
+            </label>
+            <div className="relative">
+              <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <input
+                type="url"
+                value={profileForm.tracking_domain}
+                onChange={(e) => setProfileForm({ ...profileForm, tracking_domain: e.target.value })}
+                className="w-full pl-10 pr-4 py-2 border dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
+                placeholder="https://seudominio.com"
+              />
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              URL do seu servidor para rastrear aberturas e cliques nos emails. Ex: https://tracking.seudominio.com
+            </p>
           </div>
 
           <div className="flex justify-end pt-2">
