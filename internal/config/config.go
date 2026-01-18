@@ -29,8 +29,10 @@ type Config struct {
 	APIPort   string
 	APISecret string
 
-	// Engine
-	WorkersCount      int
+	// Engine - Dedicated Workers
+	WorkersCount       int // Legacy - total workers (deprecated)
+	CampaignWorkers    int // Workers dedicated to campaigns
+	WarmupWorkers      int // Workers dedicated to warmup
 	ConnectionsPerSMTP int
 
 	// Tracking
@@ -62,8 +64,10 @@ func Load() *Config {
 		APIPort:   getEnv("API_PORT", "80"),
 		APISecret: getEnv("API_SECRET", "your_super_secret_jwt_key"),
 
-		// Engine
-		WorkersCount:      getEnvInt("WORKERS_COUNT", 10),
+		// Engine - Dedicated Workers
+		WorkersCount:       getEnvInt("WORKERS_COUNT", 30),      // Legacy (deprecated)
+		CampaignWorkers:    getEnvInt("CAMPAIGN_WORKERS", 30),   // Dedicated for campaigns
+		WarmupWorkers:      getEnvInt("WARMUP_WORKERS", 5),      // Dedicated for warmup
 		ConnectionsPerSMTP: getEnvInt("CONNECTIONS_PER_SMTP", 5),
 
 		// Tracking

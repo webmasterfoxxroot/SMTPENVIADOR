@@ -13,15 +13,17 @@ import (
 
 // Engine is the main email sending engine
 type Engine struct {
-	cfg          *config.Config
-	db           *sql.DB
-	queue        *queue.Manager
-	smtpPool     *SMTPPool
-	workers      []*Worker
-	running      atomic.Bool
-	wg           sync.WaitGroup
-	stats        *EngineStats
-	stopChan     chan struct{}
+	cfg             *config.Config
+	db              *sql.DB
+	queue           *queue.Manager
+	smtpPool        *SMTPPool
+	workers         []*Worker       // Legacy workers (deprecated)
+	campaignWorkers []*Worker       // Dedicated campaign workers
+	warmupWorkers   []*Worker       // Dedicated warmup workers
+	running         atomic.Bool
+	wg              sync.WaitGroup
+	stats           *EngineStats
+	stopChan        chan struct{}
 }
 
 // EngineStats holds real-time statistics
@@ -54,7 +56,7 @@ func (e *Engine) Start() {
 	}
 	e.running.Store(true)
 
-	log.Printf("⚡ Engine starting with %d workers", e.cfg.WorkersCount)
+	log.Printf("⚡ Engine starting with %d campaign workers + %d warmup workers", e.cfg.CampaignWorkers, e.cfg.WarmupWorkers)
 
 	// Load SMTP servers
 	if err := e.smtpPool.LoadServers(); err != nil {
@@ -64,21 +66,34 @@ func (e *Engine) Start() {
 	// Start SMTP health checker
 	go e.smtpPool.StartHealthChecker()
 
-	// Start workers
-	e.workers = make([]*Worker, e.cfg.WorkersCount)
-	for i := 0; i < e.cfg.WorkersCount; i++ {
-		e.workers[i] = NewWorker(i, e.cfg, e.db, e.queue, e.smtpPool, e.stats)
+	// Start CAMPAIGN workers (dedicated to campaigns only)
+	e.campaignWorkers = make([]*Worker, e.cfg.CampaignWorkers)
+	for i := 0; i < e.cfg.CampaignWorkers; i++ {
+		e.campaignWorkers[i] = NewWorker(i, e.cfg, e.db, e.queue, e.smtpPool, e.stats)
 		e.wg.Add(1)
 		go func(w *Worker) {
 			defer e.wg.Done()
-			w.Start(e.stopChan)
-		}(e.workers[i])
+			w.StartCampaign(e.stopChan) // Uses campaign queue only
+		}(e.campaignWorkers[i])
 	}
+	log.Printf("👷 Started %d CAMPAIGN workers (dedicated)", e.cfg.CampaignWorkers)
+
+	// Start WARMUP workers (dedicated to warmup only)
+	e.warmupWorkers = make([]*Worker, e.cfg.WarmupWorkers)
+	for i := 0; i < e.cfg.WarmupWorkers; i++ {
+		e.warmupWorkers[i] = NewWorker(1000+i, e.cfg, e.db, e.queue, e.smtpPool, e.stats)
+		e.wg.Add(1)
+		go func(w *Worker) {
+			defer e.wg.Done()
+			w.StartWarmup(e.stopChan) // Uses warmup queue only
+		}(e.warmupWorkers[i])
+	}
+	log.Printf("🔥 Started %d WARMUP workers (dedicated)", e.cfg.WarmupWorkers)
 
 	// Start stats calculator
 	go e.calculateStats()
 
-	log.Println("⚡ Engine running")
+	log.Println("⚡ Engine running - Campaign and Warmup workers are ISOLATED")
 }
 
 // Stop stops the email engine
@@ -107,13 +122,20 @@ func (e *Engine) IsRunning() bool {
 
 // GetStats returns current engine statistics
 func (e *Engine) GetStats() map[string]interface{} {
+	campaignQueue, _ := e.queue.GetCampaignQueueLength()
+	warmupQueue, _ := e.queue.GetWarmupQueueLength()
+
 	return map[string]interface{}{
-		"total_sent":     e.stats.TotalSent.Load(),
-		"total_failed":   e.stats.TotalFailed.Load(),
-		"sending_rate":   e.stats.SendingRate.Load(),
-		"active_workers": e.stats.ActiveWorkers.Load(),
-		"uptime_seconds": time.Since(e.stats.StartTime).Seconds(),
-		"active_smtps":   e.smtpPool.GetActiveCount(),
+		"total_sent":       e.stats.TotalSent.Load(),
+		"total_failed":     e.stats.TotalFailed.Load(),
+		"sending_rate":     e.stats.SendingRate.Load(),
+		"active_workers":   e.stats.ActiveWorkers.Load(),
+		"campaign_workers": e.cfg.CampaignWorkers,
+		"warmup_workers":   e.cfg.WarmupWorkers,
+		"campaign_queue":   campaignQueue,
+		"warmup_queue":     warmupQueue,
+		"uptime_seconds":   time.Since(e.stats.StartTime).Seconds(),
+		"active_smtps":     e.smtpPool.GetActiveCount(),
 	}
 }
 

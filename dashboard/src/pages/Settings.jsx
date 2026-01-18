@@ -134,32 +134,72 @@ function Settings() {
         </div>
       </div>
 
-      {/* Workers Settings */}
+      {/* Workers Settings - Separated Queues */}
       <div className="card">
         <div className="flex items-center gap-2 mb-4">
           <RotateCcw className="w-5 h-5 text-blue-500" />
-          <h2 className="text-lg font-semibold">Workers e Retentativas</h2>
+          <h2 className="text-lg font-semibold">Workers Dedicados</h2>
         </div>
         <p className="text-gray-400 text-sm mb-4">
-          Configure a quantidade de workers e como o sistema deve lidar com falhas.
+          Configure workers separados para campanhas e warmup. Isso garante que campanhas
+          nunca sejam afetadas pelo warmup e vice-versa.
         </p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+        {/* Visual explanation */}
+        <div className="bg-gray-700 rounded-lg p-4 mb-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="text-center">
+              <div className="text-2xl mb-1">📧</div>
+              <div className="text-green-400 font-bold">{settings.campaign_workers || '30'} Workers</div>
+              <div className="text-gray-400 text-xs">Campanhas (Prioridade Alta)</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl mb-1">🔥</div>
+              <div className="text-orange-400 font-bold">{settings.warmup_workers || '5'} Workers</div>
+              <div className="text-gray-400 text-xs">Warmup (Isolado)</div>
+            </div>
+          </div>
+          <div className="mt-3 text-center text-gray-500 text-xs">
+            Total: {(parseInt(settings.campaign_workers) || 30) + (parseInt(settings.warmup_workers) || 5)} workers ativos
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           <div>
             <label className="block text-sm font-medium mb-1">
-              Quantidade de Workers
+              <span className="text-green-400">📧</span> Workers para Campanhas
             </label>
             <input
               type="number"
-              value={settings.workers_count || '10'}
-              onChange={(e) => handleChange('workers_count', e.target.value)}
-              min="1"
+              value={settings.campaign_workers || '30'}
+              onChange={(e) => handleChange('campaign_workers', e.target.value)}
+              min="5"
               max="100"
               className="input w-full"
             />
             <p className="text-gray-500 text-xs mt-1">
-              Workers paralelos (1-100)
+              Workers dedicados para envio de campanhas (5-100)
             </p>
           </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              <span className="text-orange-400">🔥</span> Workers para Warmup
+            </label>
+            <input
+              type="number"
+              value={settings.warmup_workers || '5'}
+              onChange={(e) => handleChange('warmup_workers', e.target.value)}
+              min="1"
+              max="20"
+              className="input w-full"
+            />
+            <p className="text-gray-500 text-xs mt-1">
+              Workers dedicados para aquecimento (1-20)
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium mb-1">
               Tentativas de Reenvio
@@ -315,10 +355,13 @@ function Settings() {
       <div className="bg-blue-900/30 border border-blue-700 rounded-lg p-4 flex items-start gap-3">
         <AlertCircle className="w-5 h-5 text-blue-400 mt-0.5" />
         <div>
-          <h3 className="font-medium text-blue-300">Importante</h3>
+          <h3 className="font-medium text-blue-300">Importante - Workers Isolados</h3>
           <p className="text-blue-200 text-sm mt-1">
-            Alteracoes na quantidade de workers requerem reinicializacao do servidor.
-            O dominio de tracking sera aplicado imediatamente nas novas campanhas.
+            Os workers de campanha e warmup sao <strong>completamente isolados</strong>.
+            Campanhas usam uma fila dedicada e nunca sao afetadas pelo warmup.
+          </p>
+          <p className="text-blue-200 text-sm mt-2">
+            Alteracoes requerem reinicializacao do servidor para aplicar.
           </p>
         </div>
       </div>

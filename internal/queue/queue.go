@@ -11,11 +11,20 @@ import (
 )
 
 const (
-	QueueEmails    = "smtpenviador:queue:emails"
-	QueuePriority  = "smtpenviador:queue:priority"
-	QueueFailed    = "smtpenviador:queue:failed"
-	StatsKey       = "smtpenviador:stats"
-	RateLimitKey   = "smtpenviador:ratelimit"
+	// Campaign queue (high priority)
+	QueueCampaign         = "smtpenviador:queue:campaign"
+	QueueCampaignPriority = "smtpenviador:queue:campaign:priority"
+
+	// Warmup queue (low priority - separate from campaigns)
+	QueueWarmup = "smtpenviador:queue:warmup"
+
+	// Legacy queues (kept for backwards compatibility)
+	QueueEmails   = "smtpenviador:queue:emails"
+	QueuePriority = "smtpenviador:queue:priority"
+	QueueFailed   = "smtpenviador:queue:failed"
+
+	StatsKey     = "smtpenviador:stats"
+	RateLimitKey = "smtpenviador:ratelimit"
 )
 
 type EmailJob struct {
@@ -176,4 +185,111 @@ func (m *Manager) GetSMTPSentCount(smtpID string) int64 {
 	key := fmt.Sprintf("%s:%s:%d", RateLimitKey, smtpID, time.Now().Unix()/60)
 	count, _ := m.client.Get(m.ctx, key).Int64()
 	return count
+}
+
+// ==================== CAMPAIGN QUEUE (DEDICATED) ====================
+
+// PushCampaign adds an email job to the campaign queue
+func (m *Manager) PushCampaign(job *EmailJob) error {
+	data, err := json.Marshal(job)
+	if err != nil {
+		return fmt.Errorf("failed to marshal job: %w", err)
+	}
+	return m.client.LPush(m.ctx, QueueCampaign, data).Err()
+}
+
+// PushCampaignPriority adds an email job to the priority campaign queue
+func (m *Manager) PushCampaignPriority(job *EmailJob) error {
+	data, err := json.Marshal(job)
+	if err != nil {
+		return fmt.Errorf("failed to marshal job: %w", err)
+	}
+	return m.client.LPush(m.ctx, QueueCampaignPriority, data).Err()
+}
+
+// PopCampaign gets the next job from campaign queue only
+func (m *Manager) PopCampaign() (*EmailJob, error) {
+	// Try priority queue first
+	data, err := m.client.RPop(m.ctx, QueueCampaignPriority).Bytes()
+	if err == redis.Nil {
+		// Try normal campaign queue
+		data, err = m.client.RPop(m.ctx, QueueCampaign).Bytes()
+		if err == redis.Nil {
+			return nil, nil // No jobs available
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to pop campaign job: %w", err)
+	}
+
+	var job EmailJob
+	if err := json.Unmarshal(data, &job); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal job: %w", err)
+	}
+	return &job, nil
+}
+
+// GetCampaignQueueLength returns the length of the campaign queue
+func (m *Manager) GetCampaignQueueLength() (int64, error) {
+	normal, err := m.client.LLen(m.ctx, QueueCampaign).Result()
+	if err != nil {
+		return 0, err
+	}
+	priority, err := m.client.LLen(m.ctx, QueueCampaignPriority).Result()
+	if err != nil {
+		return 0, err
+	}
+	return normal + priority, nil
+}
+
+// ==================== WARMUP QUEUE (DEDICATED) ====================
+
+// PushWarmup adds an email job to the warmup queue
+func (m *Manager) PushWarmup(job *EmailJob) error {
+	data, err := json.Marshal(job)
+	if err != nil {
+		return fmt.Errorf("failed to marshal job: %w", err)
+	}
+	return m.client.LPush(m.ctx, QueueWarmup, data).Err()
+}
+
+// PopWarmup gets the next job from warmup queue only
+func (m *Manager) PopWarmup() (*EmailJob, error) {
+	data, err := m.client.RPop(m.ctx, QueueWarmup).Bytes()
+	if err == redis.Nil {
+		return nil, nil // No jobs available
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to pop warmup job: %w", err)
+	}
+
+	var job EmailJob
+	if err := json.Unmarshal(data, &job); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal job: %w", err)
+	}
+	return &job, nil
+}
+
+// GetWarmupQueueLength returns the length of the warmup queue
+func (m *Manager) GetWarmupQueueLength() (int64, error) {
+	return m.client.LLen(m.ctx, QueueWarmup).Result()
+}
+
+// ==================== COMBINED STATS ====================
+
+// GetAllQueueLengths returns lengths for all queues
+func (m *Manager) GetAllQueueLengths() (campaign int64, warmup int64, legacy int64, err error) {
+	campaign, err = m.GetCampaignQueueLength()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	warmup, err = m.GetWarmupQueueLength()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	legacy, err = m.GetQueueLength()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return campaign, warmup, legacy, nil
 }

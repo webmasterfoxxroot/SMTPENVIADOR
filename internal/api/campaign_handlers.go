@@ -1136,8 +1136,9 @@ func (s *Server) processBatch(batch []*queue.EmailJob, campaignID string) {
 			continue
 		}
 
-		if err := s.queue.Push(job); err != nil {
-			log.Printf("❌ Failed to push job to queue for %s: %v", job.To, err)
+		// Use dedicated CAMPAIGN queue (isolated from warmup)
+		if err := s.queue.PushCampaign(job); err != nil {
+			log.Printf("❌ Failed to push job to campaign queue for %s: %v", job.To, err)
 		}
 	}
 
