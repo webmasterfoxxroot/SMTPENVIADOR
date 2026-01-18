@@ -432,18 +432,22 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 
 	result := make(map[string]interface{})
 
-	// Get stats by country (top 10)
+	// Check if extended columns exist (migration 007)
+	var hasExtendedColumns bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'tracking_events' AND column_name = 'browser')`).Scan(&hasExtendedColumns)
+
+	// Get stats by country (top 10) - country column always exists
 	countryRows, err := s.db.Query(`
 		SELECT
 			COALESCE(te.country, 'Unknown') as country,
-			COALESCE(te.country_code, '') as country_code,
+			'' as country_code,
 			COUNT(*) as total,
 			COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
 			COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 		FROM tracking_events te
 		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
-		GROUP BY te.country, te.country_code
+		WHERE c.user_id = $1 AND `+dateFilter+`
+		GROUP BY te.country
 		ORDER BY total DESC
 		LIMIT 10
 	`, userID)
@@ -466,53 +470,18 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 		result["countries"] = countries
 	}
 
-	// Get stats by region/state (top 10)
-	regionRows, err := s.db.Query(`
-		SELECT
-			COALESCE(te.country, 'Unknown') as country,
-			COALESCE(te.region, 'Unknown') as region,
-			COUNT(*) as total,
-			COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
-			COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
-		FROM tracking_events te
-		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
-		GROUP BY te.country, te.region
-		ORDER BY total DESC
-		LIMIT 10
-	`, userID)
-	if err == nil {
-		defer regionRows.Close()
-		var regions []map[string]interface{}
-		for regionRows.Next() {
-			var country, region string
-			var total, opens, clicks int
-			if regionRows.Scan(&country, &region, &total, &opens, &clicks) == nil {
-				regions = append(regions, map[string]interface{}{
-					"country": country,
-					"region":  region,
-					"total":   total,
-					"opens":   opens,
-					"clicks":  clicks,
-				})
-			}
-		}
-		result["regions"] = regions
-	}
-
-	// Get stats by city (top 10)
+	// Get stats by city (top 10) - city column always exists
 	cityRows, err := s.db.Query(`
 		SELECT
 			COALESCE(te.city, 'Unknown') as city,
-			COALESCE(te.region, '') as region,
 			COALESCE(te.country, '') as country,
 			COUNT(*) as total,
 			COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
 			COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 		FROM tracking_events te
 		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
-		GROUP BY te.city, te.region, te.country
+		WHERE c.user_id = $1 AND `+dateFilter+`
+		GROUP BY te.city, te.country
 		ORDER BY total DESC
 		LIMIT 10
 	`, userID)
@@ -520,12 +489,11 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 		defer cityRows.Close()
 		var cities []map[string]interface{}
 		for cityRows.Next() {
-			var city, region, country string
+			var city, country string
 			var total, opens, clicks int
-			if cityRows.Scan(&city, &region, &country, &total, &opens, &clicks) == nil {
+			if cityRows.Scan(&city, &country, &total, &opens, &clicks) == nil {
 				cities = append(cities, map[string]interface{}{
 					"city":    city,
-					"region":  region,
 					"country": country,
 					"total":   total,
 					"opens":   opens,
@@ -536,149 +504,183 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 		result["cities"] = cities
 	}
 
-	// Get stats by browser (top 10)
-	browserRows, err := s.db.Query(`
-		SELECT
-			COALESCE(te.browser, 'Unknown') as browser,
-			COUNT(*) as total,
-			COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
-			COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
-		FROM tracking_events te
-		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
-		GROUP BY te.browser
-		ORDER BY total DESC
-		LIMIT 10
-	`, userID)
-	if err == nil {
-		defer browserRows.Close()
-		var browsers []map[string]interface{}
-		for browserRows.Next() {
-			var browser string
-			var total, opens, clicks int
-			if browserRows.Scan(&browser, &total, &opens, &clicks) == nil {
-				browsers = append(browsers, map[string]interface{}{
-					"browser": browser,
-					"total":   total,
-					"opens":   opens,
-					"clicks":  clicks,
-				})
+	if hasExtendedColumns {
+		// Get stats by region/state (top 10)
+		regionRows, err := s.db.Query(`
+			SELECT
+				COALESCE(te.country, 'Unknown') as country,
+				COALESCE(te.region, 'Unknown') as region,
+				COUNT(*) as total,
+				COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
+				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
+			FROM tracking_events te
+			JOIN campaigns c ON te.campaign_id = c.id
+			WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+			GROUP BY te.country, te.region
+			ORDER BY total DESC
+			LIMIT 10
+		`, userID)
+		if err == nil {
+			defer regionRows.Close()
+			var regions []map[string]interface{}
+			for regionRows.Next() {
+				var country, region string
+				var total, opens, clicks int
+				if regionRows.Scan(&country, &region, &total, &opens, &clicks) == nil {
+					regions = append(regions, map[string]interface{}{
+						"country": country,
+						"region":  region,
+						"total":   total,
+						"opens":   opens,
+						"clicks":  clicks,
+					})
+				}
 			}
+			result["regions"] = regions
 		}
-		result["browsers"] = browsers
-	}
 
-	// Get stats by device type
-	deviceRows, err := s.db.Query(`
-		SELECT
-			COALESCE(te.device_type, 'unknown') as device_type,
-			COUNT(*) as total,
-			COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
-			COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
-		FROM tracking_events te
-		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
-		GROUP BY te.device_type
-		ORDER BY total DESC
-	`, userID)
-	if err == nil {
-		defer deviceRows.Close()
-		var devices []map[string]interface{}
-		for deviceRows.Next() {
-			var deviceType string
-			var total, opens, clicks int
-			if deviceRows.Scan(&deviceType, &total, &opens, &clicks) == nil {
-				devices = append(devices, map[string]interface{}{
-					"device_type": deviceType,
-					"total":       total,
-					"opens":       opens,
-					"clicks":      clicks,
-				})
+		// Get stats by browser (top 10)
+		browserRows, err := s.db.Query(`
+			SELECT
+				COALESCE(te.browser, 'Unknown') as browser,
+				COUNT(*) as total,
+				COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
+				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
+			FROM tracking_events te
+			JOIN campaigns c ON te.campaign_id = c.id
+			WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+			GROUP BY te.browser
+			ORDER BY total DESC
+			LIMIT 10
+		`, userID)
+		if err == nil {
+			defer browserRows.Close()
+			var browsers []map[string]interface{}
+			for browserRows.Next() {
+				var browser string
+				var total, opens, clicks int
+				if browserRows.Scan(&browser, &total, &opens, &clicks) == nil {
+					browsers = append(browsers, map[string]interface{}{
+						"browser": browser,
+						"total":   total,
+						"opens":   opens,
+						"clicks":  clicks,
+					})
+				}
 			}
+			result["browsers"] = browsers
 		}
-		result["devices"] = devices
-	}
 
-	// Get stats by OS
-	osRows, err := s.db.Query(`
-		SELECT
-			COALESCE(te.os, 'Unknown') as os,
-			COUNT(*) as total,
-			COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
-			COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
-		FROM tracking_events te
-		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
-		GROUP BY te.os
-		ORDER BY total DESC
-		LIMIT 10
-	`, userID)
-	if err == nil {
-		defer osRows.Close()
-		var osList []map[string]interface{}
-		for osRows.Next() {
-			var osName string
-			var total, opens, clicks int
-			if osRows.Scan(&osName, &total, &opens, &clicks) == nil {
-				osList = append(osList, map[string]interface{}{
-					"os":     osName,
-					"total":  total,
-					"opens":  opens,
-					"clicks": clicks,
-				})
+		// Get stats by device type
+		deviceRows, err := s.db.Query(`
+			SELECT
+				COALESCE(te.device_type, 'unknown') as device_type,
+				COUNT(*) as total,
+				COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
+				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
+			FROM tracking_events te
+			JOIN campaigns c ON te.campaign_id = c.id
+			WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+			GROUP BY te.device_type
+			ORDER BY total DESC
+		`, userID)
+		if err == nil {
+			defer deviceRows.Close()
+			var devices []map[string]interface{}
+			for deviceRows.Next() {
+				var deviceType string
+				var total, opens, clicks int
+				if deviceRows.Scan(&deviceType, &total, &opens, &clicks) == nil {
+					devices = append(devices, map[string]interface{}{
+						"device_type": deviceType,
+						"total":       total,
+						"opens":       opens,
+						"clicks":      clicks,
+					})
+				}
 			}
+			result["devices"] = devices
 		}
-		result["os"] = osList
-	}
 
-	// Get stats by email client
-	emailClientRows, err := s.db.Query(`
-		SELECT
-			COALESCE(te.email_client, 'Unknown') as email_client,
-			COUNT(*) as total,
-			COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
-			COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
-		FROM tracking_events te
-		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL) AND te.email_client IS NOT NULL AND te.email_client != ''
-		GROUP BY te.email_client
-		ORDER BY total DESC
-		LIMIT 10
-	`, userID)
-	if err == nil {
-		defer emailClientRows.Close()
-		var emailClients []map[string]interface{}
-		for emailClientRows.Next() {
-			var emailClient string
-			var total, opens, clicks int
-			if emailClientRows.Scan(&emailClient, &total, &opens, &clicks) == nil {
-				emailClients = append(emailClients, map[string]interface{}{
-					"email_client": emailClient,
-					"total":        total,
-					"opens":        opens,
-					"clicks":       clicks,
-				})
+		// Get stats by OS
+		osRows, err := s.db.Query(`
+			SELECT
+				COALESCE(te.os, 'Unknown') as os,
+				COUNT(*) as total,
+				COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
+				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
+			FROM tracking_events te
+			JOIN campaigns c ON te.campaign_id = c.id
+			WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+			GROUP BY te.os
+			ORDER BY total DESC
+			LIMIT 10
+		`, userID)
+		if err == nil {
+			defer osRows.Close()
+			var osList []map[string]interface{}
+			for osRows.Next() {
+				var osName string
+				var total, opens, clicks int
+				if osRows.Scan(&osName, &total, &opens, &clicks) == nil {
+					osList = append(osList, map[string]interface{}{
+						"os":     osName,
+						"total":  total,
+						"opens":  opens,
+						"clicks": clicks,
+					})
+				}
 			}
+			result["os"] = osList
 		}
-		result["email_clients"] = emailClients
-	}
 
-	// Get bot vs human stats
-	var humanOpens, humanClicks, botOpens, botClicks, suspiciousOpens, suspiciousClicks int
-	err = s.db.QueryRow(`
-		SELECT
-			COUNT(CASE WHEN te.event_type = 'open' AND (te.is_bot = false OR te.is_bot IS NULL) AND (te.is_suspicious = false OR te.is_suspicious IS NULL) THEN 1 END) as human_opens,
-			COUNT(CASE WHEN te.event_type = 'click' AND (te.is_bot = false OR te.is_bot IS NULL) AND (te.is_suspicious = false OR te.is_suspicious IS NULL) THEN 1 END) as human_clicks,
-			COUNT(CASE WHEN te.event_type = 'open' AND te.is_bot = true THEN 1 END) as bot_opens,
-			COUNT(CASE WHEN te.event_type = 'click' AND te.is_bot = true THEN 1 END) as bot_clicks,
-			COUNT(CASE WHEN te.event_type = 'open' AND te.is_suspicious = true AND (te.is_bot = false OR te.is_bot IS NULL) THEN 1 END) as suspicious_opens,
-			COUNT(CASE WHEN te.event_type = 'click' AND te.is_suspicious = true AND (te.is_bot = false OR te.is_bot IS NULL) THEN 1 END) as suspicious_clicks
-		FROM tracking_events te
-		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE c.user_id = $1 AND `+dateFilter+`
-	`, userID).Scan(&humanOpens, &humanClicks, &botOpens, &botClicks, &suspiciousOpens, &suspiciousClicks)
+		// Get stats by email client
+		emailClientRows, err := s.db.Query(`
+			SELECT
+				COALESCE(te.email_client, 'Unknown') as email_client,
+				COUNT(*) as total,
+				COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
+				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
+			FROM tracking_events te
+			JOIN campaigns c ON te.campaign_id = c.id
+			WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL) AND te.email_client IS NOT NULL AND te.email_client != ''
+			GROUP BY te.email_client
+			ORDER BY total DESC
+			LIMIT 10
+		`, userID)
+		if err == nil {
+			defer emailClientRows.Close()
+			var emailClients []map[string]interface{}
+			for emailClientRows.Next() {
+				var emailClient string
+				var total, opens, clicks int
+				if emailClientRows.Scan(&emailClient, &total, &opens, &clicks) == nil {
+					emailClients = append(emailClients, map[string]interface{}{
+						"email_client": emailClient,
+						"total":        total,
+						"opens":        opens,
+						"clicks":       clicks,
+					})
+				}
+			}
+			result["email_clients"] = emailClients
+		}
 
-	if err == nil {
+		// Get bot vs human stats
+		var humanOpens, humanClicks, botOpens, botClicks, suspiciousOpens, suspiciousClicks int
+		s.db.QueryRow(`
+			SELECT
+				COUNT(CASE WHEN te.event_type = 'open' AND (te.is_bot = false OR te.is_bot IS NULL) AND (te.is_suspicious = false OR te.is_suspicious IS NULL) THEN 1 END) as human_opens,
+				COUNT(CASE WHEN te.event_type = 'click' AND (te.is_bot = false OR te.is_bot IS NULL) AND (te.is_suspicious = false OR te.is_suspicious IS NULL) THEN 1 END) as human_clicks,
+				COUNT(CASE WHEN te.event_type = 'open' AND te.is_bot = true THEN 1 END) as bot_opens,
+				COUNT(CASE WHEN te.event_type = 'click' AND te.is_bot = true THEN 1 END) as bot_clicks,
+				COUNT(CASE WHEN te.event_type = 'open' AND te.is_suspicious = true AND (te.is_bot = false OR te.is_bot IS NULL) THEN 1 END) as suspicious_opens,
+				COUNT(CASE WHEN te.event_type = 'click' AND te.is_suspicious = true AND (te.is_bot = false OR te.is_bot IS NULL) THEN 1 END) as suspicious_clicks
+			FROM tracking_events te
+			JOIN campaigns c ON te.campaign_id = c.id
+			WHERE c.user_id = $1 AND `+dateFilter+`
+		`, userID).Scan(&humanOpens, &humanClicks, &botOpens, &botClicks, &suspiciousOpens, &suspiciousClicks)
+
 		result["bot_stats"] = map[string]interface{}{
 			"human_opens":       humanOpens,
 			"human_clicks":      humanClicks,
@@ -689,36 +691,142 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 			"total_opens":       humanOpens + botOpens + suspiciousOpens,
 			"total_clicks":      humanClicks + botClicks + suspiciousClicks,
 		}
-	}
-
-	// Get top bot types
-	botTypeRows, err := s.db.Query(`
-		SELECT
-			COALESCE(te.bot_type, 'unknown') as bot_type,
-			COALESCE(te.bot_name, 'Unknown') as bot_name,
-			COUNT(*) as total
-		FROM tracking_events te
-		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE c.user_id = $1 AND `+dateFilter+` AND te.is_bot = true
-		GROUP BY te.bot_type, te.bot_name
-		ORDER BY total DESC
-		LIMIT 10
-	`, userID)
-	if err == nil {
-		defer botTypeRows.Close()
-		var botTypes []map[string]interface{}
-		for botTypeRows.Next() {
-			var botType, botName string
-			var total int
-			if botTypeRows.Scan(&botType, &botName, &total) == nil {
-				botTypes = append(botTypes, map[string]interface{}{
-					"bot_type": botType,
-					"bot_name": botName,
-					"total":    total,
-				})
+	} else {
+		// Fallback: Parse user_agent to extract browser info
+		browserRows, err := s.db.Query(`
+			SELECT
+				CASE
+					WHEN te.user_agent ILIKE '%Chrome%' AND te.user_agent NOT ILIKE '%Edg%' THEN 'Chrome'
+					WHEN te.user_agent ILIKE '%Firefox%' THEN 'Firefox'
+					WHEN te.user_agent ILIKE '%Safari%' AND te.user_agent NOT ILIKE '%Chrome%' THEN 'Safari'
+					WHEN te.user_agent ILIKE '%Edg%' THEN 'Edge'
+					WHEN te.user_agent ILIKE '%MSIE%' OR te.user_agent ILIKE '%Trident%' THEN 'Internet Explorer'
+					WHEN te.user_agent ILIKE '%Opera%' OR te.user_agent ILIKE '%OPR%' THEN 'Opera'
+					ELSE 'Other'
+				END as browser,
+				COUNT(*) as total,
+				COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
+				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
+			FROM tracking_events te
+			JOIN campaigns c ON te.campaign_id = c.id
+			WHERE c.user_id = $1 AND `+dateFilter+` AND te.user_agent IS NOT NULL
+			GROUP BY browser
+			ORDER BY total DESC
+			LIMIT 10
+		`, userID)
+		if err == nil {
+			defer browserRows.Close()
+			var browsers []map[string]interface{}
+			for browserRows.Next() {
+				var browser string
+				var total, opens, clicks int
+				if browserRows.Scan(&browser, &total, &opens, &clicks) == nil {
+					browsers = append(browsers, map[string]interface{}{
+						"browser": browser,
+						"total":   total,
+						"opens":   opens,
+						"clicks":  clicks,
+					})
+				}
 			}
+			result["browsers"] = browsers
 		}
-		result["bot_types"] = botTypes
+
+		// Fallback: Parse user_agent to extract device type
+		deviceRows, err := s.db.Query(`
+			SELECT
+				CASE
+					WHEN te.user_agent ILIKE '%Mobile%' OR te.user_agent ILIKE '%Android%' AND te.user_agent NOT ILIKE '%Tablet%' THEN 'mobile'
+					WHEN te.user_agent ILIKE '%Tablet%' OR te.user_agent ILIKE '%iPad%' THEN 'tablet'
+					ELSE 'desktop'
+				END as device_type,
+				COUNT(*) as total,
+				COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
+				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
+			FROM tracking_events te
+			JOIN campaigns c ON te.campaign_id = c.id
+			WHERE c.user_id = $1 AND `+dateFilter+` AND te.user_agent IS NOT NULL
+			GROUP BY device_type
+			ORDER BY total DESC
+		`, userID)
+		if err == nil {
+			defer deviceRows.Close()
+			var devices []map[string]interface{}
+			for deviceRows.Next() {
+				var deviceType string
+				var total, opens, clicks int
+				if deviceRows.Scan(&deviceType, &total, &opens, &clicks) == nil {
+					devices = append(devices, map[string]interface{}{
+						"device_type": deviceType,
+						"total":       total,
+						"opens":       opens,
+						"clicks":      clicks,
+					})
+				}
+			}
+			result["devices"] = devices
+		}
+
+		// Fallback: Parse user_agent to extract OS
+		osRows, err := s.db.Query(`
+			SELECT
+				CASE
+					WHEN te.user_agent ILIKE '%Windows%' THEN 'Windows'
+					WHEN te.user_agent ILIKE '%Mac OS%' OR te.user_agent ILIKE '%Macintosh%' THEN 'macOS'
+					WHEN te.user_agent ILIKE '%iPhone%' OR te.user_agent ILIKE '%iPad%' THEN 'iOS'
+					WHEN te.user_agent ILIKE '%Android%' THEN 'Android'
+					WHEN te.user_agent ILIKE '%Linux%' THEN 'Linux'
+					ELSE 'Other'
+				END as os,
+				COUNT(*) as total,
+				COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
+				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
+			FROM tracking_events te
+			JOIN campaigns c ON te.campaign_id = c.id
+			WHERE c.user_id = $1 AND `+dateFilter+` AND te.user_agent IS NOT NULL
+			GROUP BY os
+			ORDER BY total DESC
+			LIMIT 10
+		`, userID)
+		if err == nil {
+			defer osRows.Close()
+			var osList []map[string]interface{}
+			for osRows.Next() {
+				var osName string
+				var total, opens, clicks int
+				if osRows.Scan(&osName, &total, &opens, &clicks) == nil {
+					osList = append(osList, map[string]interface{}{
+						"os":     osName,
+						"total":  total,
+						"opens":  opens,
+						"clicks": clicks,
+					})
+				}
+			}
+			result["os"] = osList
+		}
+
+		// Basic bot stats without extended columns
+		var totalOpens, totalClicks int
+		s.db.QueryRow(`
+			SELECT
+				COUNT(CASE WHEN te.event_type = 'open' THEN 1 END),
+				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END)
+			FROM tracking_events te
+			JOIN campaigns c ON te.campaign_id = c.id
+			WHERE c.user_id = $1 AND `+dateFilter+`
+		`, userID).Scan(&totalOpens, &totalClicks)
+
+		result["bot_stats"] = map[string]interface{}{
+			"human_opens":       totalOpens,
+			"human_clicks":      totalClicks,
+			"bot_opens":         0,
+			"bot_clicks":        0,
+			"suspicious_opens":  0,
+			"suspicious_clicks": 0,
+			"total_opens":       totalOpens,
+			"total_clicks":      totalClicks,
+		}
 	}
 
 	return c.JSON(result)
