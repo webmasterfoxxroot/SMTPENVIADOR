@@ -72,7 +72,11 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 	engineStats := s.engine.GetStats()
 	stats["sending_rate"] = engineStats["sending_rate"]
 	stats["active_workers"] = engineStats["active_workers"]
-	stats["active_smtps"] = engineStats["active_smtps"]
+
+	// Get active SMTPs for this user (not global engine stats)
+	var activeSMTPs int
+	s.db.QueryRow(`SELECT COUNT(*) FROM smtp_servers WHERE active = true AND status = 'online' AND user_id = $1`, userID).Scan(&activeSMTPs)
+	stats["active_smtps"] = activeSMTPs
 
 	// Get active campaigns count
 	var activeCampaigns int
