@@ -208,6 +208,7 @@ func (m *Manager) PushCampaignPriority(job *EmailJob) error {
 }
 
 // PopCampaign gets the next job from campaign queue only
+// Also checks legacy queue for backwards compatibility
 func (m *Manager) PopCampaign() (*EmailJob, error) {
 	// Try priority queue first
 	data, err := m.client.RPop(m.ctx, QueueCampaignPriority).Bytes()
@@ -215,7 +216,11 @@ func (m *Manager) PopCampaign() (*EmailJob, error) {
 		// Try normal campaign queue
 		data, err = m.client.RPop(m.ctx, QueueCampaign).Bytes()
 		if err == redis.Nil {
-			return nil, nil // No jobs available
+			// Fallback to legacy queue for backwards compatibility
+			data, err = m.client.RPop(m.ctx, QueueEmails).Bytes()
+			if err == redis.Nil {
+				return nil, nil // No jobs available
+			}
 		}
 	}
 	if err != nil {
