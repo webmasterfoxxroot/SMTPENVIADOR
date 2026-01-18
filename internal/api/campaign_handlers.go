@@ -231,10 +231,13 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 
 	// Try ClickHouse first for email count, fallback to PostgreSQL
 	if s.ch != nil {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		count, err := s.ch.GetEmailCountForCampaign(ctx, listIDs)
 		if err == nil {
 			totalEmails = int(count)
+		} else {
+			log.Printf("[Campaign] ClickHouse email count failed (using PostgreSQL): %v", err)
 		}
 	}
 	if totalEmails == 0 {
@@ -459,8 +462,9 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 	// Queue emails - try ClickHouse first, then PostgreSQL
 	count := 0
 	if s.ch != nil {
-		// Use ClickHouse
-		ctx := context.Background()
+		// Use ClickHouse with timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 		chEmails, err := s.ch.GetEmailsForCampaign(ctx, listIDs)
 		if err != nil {
 			log.Printf("❌ Failed to get emails from ClickHouse: %v", err)
@@ -685,8 +689,9 @@ func (s *Server) autoStartCampaignByID(id string) {
 	count := 0
 
 	if s.ch != nil {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		chEmails, err := s.ch.GetEmailsForCampaign(ctx, listIDs)
+		cancel()
 		if err != nil {
 			fmt.Printf("[AutoStart] Error getting emails from ClickHouse: %v\n", err)
 		} else {
@@ -792,8 +797,9 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 	var totalEmails int
 	listIDs := []string{listID}
 	if s.ch != nil {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		count, err := s.ch.GetEmailCountForCampaign(ctx, listIDs)
+		cancel()
 		if err == nil {
 			totalEmails = int(count)
 		}
@@ -856,8 +862,9 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 	count := 0
 
 	if s.ch != nil {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		chEmails, err := s.ch.GetEmailsForCampaign(ctx, listIDs)
+		cancel()
 		if err != nil {
 			log.Printf("❌ Failed to get emails from ClickHouse: %v", err)
 		} else {
