@@ -220,7 +220,7 @@ func (w *Worker) processJob() {
 
 // processCampaignJob processes jobs from the CAMPAIGN queue only
 func (w *Worker) processCampaignJob() {
-	// Get job from CAMPAIGN queue only
+	// Get job from CAMPAIGN queue only (BRPOP waits for jobs efficiently)
 	job, err := w.queue.PopCampaign()
 	if err != nil {
 		log.Printf("⚠️ Campaign Worker %d: Failed to pop job: %v", w.id, err)
@@ -228,9 +228,8 @@ func (w *Worker) processCampaignJob() {
 		return
 	}
 
-	// No job available, wait a bit
+	// No job available (BRPOP timed out), continue to next iteration
 	if job == nil {
-		time.Sleep(100 * time.Millisecond)
 		return
 	}
 
@@ -240,7 +239,7 @@ func (w *Worker) processCampaignJob() {
 
 // processWarmupJob processes jobs from the WARMUP queue only
 func (w *Worker) processWarmupJob() {
-	// Get job from WARMUP queue only
+	// Get job from WARMUP queue only (BRPOP waits for jobs efficiently)
 	job, err := w.queue.PopWarmup()
 	if err != nil {
 		log.Printf("⚠️ Warmup Worker %d: Failed to pop job: %v", w.id, err)
@@ -248,9 +247,8 @@ func (w *Worker) processWarmupJob() {
 		return
 	}
 
-	// No job available, wait a bit (warmup can wait longer)
+	// No job available (BRPOP timed out), continue to next iteration
 	if job == nil {
-		time.Sleep(500 * time.Millisecond)
 		return
 	}
 
@@ -269,36 +267,45 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 		return
 	}
 
-	// Get SMTP connection
-	smtp := w.smtpPool.GetNextSMTP()
+	// Try to get an available SMTP (with rate limit capacity)
+	var smtp *SMTPConnection
+	var sender *SMTPSender
+	maxAttempts := w.smtpPool.GetActiveCount()
+	if maxAttempts == 0 {
+		maxAttempts = 1
+	}
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		smtp = w.smtpPool.GetNextSMTP()
+		if smtp == nil {
+			break
+		}
+
+		// Check rate limits before using this SMTP
+		if !w.queue.CheckBothRateLimits(smtp.ID, smtp.MaxPerMinute, smtp.MaxPerHour) {
+			smtp = nil // Try another SMTP
+			continue
+		}
+
+		// Get sender for this SMTP
+		sender = smtp.GetNextSender()
+		if sender == nil {
+			smtp = nil
+			continue
+		}
+
+		// Found a valid SMTP with capacity and sender
+		break
+	}
+
+	// No SMTP available with capacity
 	if smtp == nil {
-		// No SMTPs available - wait longer before pushing back
 		if job.Retries == 0 {
-			log.Printf("⚠️ Worker %d: No SMTP available for %s, will retry", w.id, job.To)
+			log.Printf("⚠️ Worker %d: No SMTP with capacity for %s, will retry", w.id, job.To)
 		}
 		job.Retries++
 		w.pushToQueue(job, queueType)
-		time.Sleep(5 * time.Second)
-		return
-	}
-
-	// Get next sender from SMTP (rotates automatically)
-	sender := smtp.GetNextSender()
-	if sender == nil {
-		if job.Retries == 0 {
-			log.Printf("⚠️ Worker %d: No senders for SMTP %s", w.id, smtp.Name)
-		}
-		job.Retries++
-		w.pushToQueue(job, queueType)
-		time.Sleep(2 * time.Second)
-		return
-	}
-
-	// Check rate limit
-	if !w.queue.CheckRateLimit(smtp.ID, smtp.MaxPerMinute) {
-		// Rate limited, push back without incrementing retries (this is normal)
-		w.pushToQueue(job, queueType)
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(1 * time.Second) // Wait 1s before retrying
 		return
 	}
 
