@@ -241,14 +241,18 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 		}
 	}
 	if totalEmails == 0 {
-		// Fallback to PostgreSQL
+		// Fallback to PostgreSQL - use LEFT JOIN for better performance
 		placeholders := make([]string, len(listIDs))
 		args := make([]interface{}, len(listIDs))
 		for i, id := range listIDs {
 			placeholders[i] = fmt.Sprintf("$%d", i+1)
 			args[i] = id
 		}
-		query := fmt.Sprintf(`SELECT COUNT(*) FROM emails WHERE list_id IN (%s) AND valid = true AND bounced = false AND unsubscribed = false AND LOWER(email) NOT IN (SELECT LOWER(email) FROM blacklist)`, strings.Join(placeholders, ","))
+		query := fmt.Sprintf(`
+			SELECT COUNT(*) FROM emails e
+			LEFT JOIN blacklist b ON LOWER(e.email) = LOWER(b.email)
+			WHERE e.list_id IN (%s) AND e.valid = true AND e.bounced = false AND e.unsubscribed = false AND b.email IS NULL
+		`, strings.Join(placeholders, ","))
 		s.db.QueryRow(query, args...).Scan(&totalEmails)
 	}
 
