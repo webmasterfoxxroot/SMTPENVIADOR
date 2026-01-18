@@ -14,7 +14,9 @@ import {
   AlertTriangle,
   Users,
   Zap,
-  RefreshCw
+  RefreshCw,
+  Inbox,
+  MessageSquare
 } from 'lucide-react'
 import {
   AreaChart,
@@ -25,46 +27,71 @@ import {
   Tooltip,
   ResponsiveContainer,
   BarChart,
-  Bar
+  Bar,
+  PieChart,
+  Pie,
+  Cell
 } from 'recharts'
 import { useNavigate } from 'react-router-dom'
 import api from '../services/api'
 
-// Modern Stat Card
-function StatCard({ icon: Icon, label, value, change, changeType, subtitle, onClick, highlight }) {
+// Colorful Stat Card
+function ColorStatCard({ icon: Icon, label, value, subtitle, color, onClick }) {
+  const colorClasses = {
+    blue: 'bg-gradient-to-br from-blue-500 to-blue-600 dark:from-blue-600 dark:to-blue-700',
+    green: 'bg-gradient-to-br from-emerald-500 to-emerald-600 dark:from-emerald-600 dark:to-emerald-700',
+    purple: 'bg-gradient-to-br from-purple-500 to-purple-600 dark:from-purple-600 dark:to-purple-700',
+    orange: 'bg-gradient-to-br from-orange-500 to-orange-600 dark:from-orange-600 dark:to-orange-700',
+    pink: 'bg-gradient-to-br from-pink-500 to-pink-600 dark:from-pink-600 dark:to-pink-700',
+    cyan: 'bg-gradient-to-br from-cyan-500 to-cyan-600 dark:from-cyan-600 dark:to-cyan-700',
+  }
+
   return (
     <div
       onClick={onClick}
-      className={`bg-white dark:bg-gray-800 rounded-2xl p-6 border transition-all duration-200 ${
-        onClick ? 'cursor-pointer hover:shadow-lg hover:border-gray-200 dark:hover:border-gray-600' : ''
-      } ${highlight ? 'border-blue-200 dark:border-blue-800 bg-blue-50/30 dark:bg-blue-900/20' : 'border-gray-100 dark:border-gray-700'}`}
+      className={`${colorClasses[color]} rounded-2xl p-5 text-white shadow-lg ${
+        onClick ? 'cursor-pointer hover:shadow-xl hover:scale-[1.02] transition-all duration-200' : ''
+      }`}
     >
       <div className="flex items-start justify-between">
-        <div className={`p-3 rounded-xl ${highlight ? 'bg-blue-100 dark:bg-blue-900/50' : 'bg-gray-100 dark:bg-gray-700'}`}>
-          <Icon className={`h-5 w-5 ${highlight ? 'text-blue-600 dark:text-blue-400' : 'text-gray-600 dark:text-gray-400'}`} />
+        <div className="p-2.5 bg-white/20 rounded-xl backdrop-blur-sm">
+          <Icon className="h-5 w-5" />
         </div>
-        {change !== undefined && (
-          <div className={`flex items-center gap-1 text-sm font-medium ${
-            changeType === 'positive' ? 'text-emerald-600 dark:text-emerald-400' :
-            changeType === 'negative' ? 'text-red-500 dark:text-red-400' : 'text-gray-400 dark:text-gray-500'
-          }`}>
-            {changeType === 'positive' ? <ArrowUpRight className="h-4 w-4" /> :
-             changeType === 'negative' ? <ArrowDownRight className="h-4 w-4" /> : null}
-            {change}
-          </div>
-        )}
       </div>
       <div className="mt-4">
-        <p className="text-3xl font-bold text-gray-900 dark:text-white">{value}</p>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{label}</p>
-        {subtitle && <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{subtitle}</p>}
+        <p className="text-3xl font-bold">{value}</p>
+        <p className="text-sm text-white/80 mt-1">{label}</p>
+        {subtitle && <p className="text-xs text-white/60 mt-0.5">{subtitle}</p>}
       </div>
     </div>
   )
 }
 
-// Progress Ring
-function ProgressRing({ value, size = 120, strokeWidth = 10, color = '#3b82f6' }) {
+// Small Stat Card with Icon
+function SmallStatCard({ icon: Icon, label, value, subtitle, iconBg, iconColor, onClick }) {
+  return (
+    <div
+      onClick={onClick}
+      className={`bg-white dark:bg-gray-800 rounded-2xl p-5 border border-gray-100 dark:border-gray-700 ${
+        onClick ? 'cursor-pointer hover:shadow-md hover:border-gray-200 dark:hover:border-gray-600 transition-all' : ''
+      }`}
+    >
+      <div className="flex items-center gap-4">
+        <div className={`p-3 rounded-xl ${iconBg}`}>
+          <Icon className={`h-5 w-5 ${iconColor}`} />
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-gray-900 dark:text-white">{value}</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">{label}</p>
+          {subtitle && <p className="text-xs text-gray-400 dark:text-gray-500">{subtitle}</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Progress Ring (Donut)
+function ProgressRing({ value, size = 120, strokeWidth = 12, color = '#3b82f6', label }) {
   const radius = (size - strokeWidth) / 2
   const circumference = radius * 2 * Math.PI
   const offset = circumference - (value / 100) * circumference
@@ -96,23 +123,28 @@ function ProgressRing({ value, size = 120, strokeWidth = 10, color = '#3b82f6' }
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
         <span className="text-2xl font-bold text-gray-900 dark:text-white">{value}%</span>
+        {label && <span className="text-xs text-gray-500 dark:text-gray-400">{label}</span>}
       </div>
     </div>
   )
 }
 
 // Activity Item
-function ActivityItem({ type, email, time }) {
+function ActivityItem({ type, email, time, subject }) {
   return (
-    <div className="flex items-center gap-3 py-3 border-b border-gray-50 dark:border-gray-700/50 last:border-0">
-      <div className={`w-2 h-2 rounded-full ${
+    <div className="flex items-center gap-3 py-3 px-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl mb-2">
+      <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
         type === 'open' ? 'bg-emerald-500' :
-        type === 'click' ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'
+        type === 'click' ? 'bg-blue-500' :
+        type === 'sent' ? 'bg-purple-500' : 'bg-gray-300 dark:bg-gray-600'
       }`} />
       <div className="flex-1 min-w-0">
-        <p className="text-sm text-gray-700 dark:text-gray-300 truncate">{email}</p>
-        <p className="text-xs text-gray-400 dark:text-gray-500">{type === 'open' ? 'Abriu' : 'Clicou'} - {time}</p>
+        <p className="text-sm text-gray-700 dark:text-gray-300 truncate">{subject || email}</p>
+        <p className="text-xs text-gray-400 dark:text-gray-500">
+          {type === 'open' ? 'Abriu' : type === 'click' ? 'Clicou' : 'Enviado'} - {email}
+        </p>
       </div>
+      <span className="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0">{time}</span>
     </div>
   )
 }
@@ -156,7 +188,8 @@ function Dashboard() {
     total_replies: 0,
     total_interactions: 0,
     inbox_rate: 0,
-    active_smtps: 0
+    active_smtps: 0,
+    active_seeds: 0
   })
   const [smtpHealth, setSmtpHealth] = useState([])
   const [loading, setLoading] = useState(true)
@@ -250,11 +283,17 @@ function Dashboard() {
     ? Math.round(((stats.today_sent - stats.today_failed) / stats.today_sent) * 100)
     : 100
 
+  // Donut chart data
+  const donutData = [
+    { name: 'Abertos', value: stats.today_opened || 0, color: '#10b981' },
+    { name: 'Não Abertos', value: Math.max(0, (stats.today_sent || 0) - (stats.today_opened || 0)), color: '#e5e7eb' },
+  ]
+
   return (
     <div className="space-y-6 pb-8">
       {/* Alert Banner */}
       {smtpHealth.length > 0 && (
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800 rounded-2xl p-4 flex items-center gap-4">
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl p-4 flex items-center gap-4">
           <div className="p-2 bg-red-100 dark:bg-red-900/50 rounded-xl">
             <AlertTriangle className="h-5 w-5 text-red-600 dark:text-red-400" />
           </div>
@@ -278,9 +317,9 @@ function Dashboard() {
           <p className="text-gray-500 dark:text-gray-400 mt-1">Visao geral do sistema</p>
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-800 rounded-xl">
+          <div className="flex items-center gap-2 px-4 py-2 bg-emerald-100 dark:bg-emerald-900/30 rounded-xl">
             <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-            <span className="text-sm text-gray-600 dark:text-gray-400">{stats.sending_rate}/s</span>
+            <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400">{stats.sending_rate}/s</span>
           </div>
           <button
             onClick={() => navigate('/campaigns')}
@@ -317,80 +356,73 @@ function Dashboard() {
 
       {activeTab === 'campaigns' ? (
         <>
-          {/* Campaign Stats */}
+          {/* Colorful Campaign Stats */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatCard
+            <ColorStatCard
               icon={Send}
               label="Emails Enviados"
               value={formatNumber(stats.today_sent)}
               subtitle="Hoje"
-              highlight
+              color="blue"
             />
-            <StatCard
+            <ColorStatCard
               icon={Eye}
               label="Aberturas"
               value={formatNumber(stats.today_opened)}
-              change={`${openRate}%`}
-              changeType={openRate > 20 ? 'positive' : openRate > 0 ? 'neutral' : 'neutral'}
-              subtitle="Taxa de abertura"
+              subtitle={`${openRate}% taxa de abertura`}
+              color="green"
             />
-            <StatCard
+            <ColorStatCard
               icon={MousePointer}
               label="Cliques"
               value={formatNumber(stats.today_clicked)}
-              change={`${clickRate}%`}
-              changeType={clickRate > 5 ? 'positive' : clickRate > 0 ? 'neutral' : 'neutral'}
-              subtitle="CTR"
+              subtitle={`${clickRate}% CTR`}
+              color="purple"
             />
-            <StatCard
+            <ColorStatCard
               icon={Zap}
               label="Na Fila"
               value={formatNumber(stats.queue_size)}
               subtitle="Aguardando envio"
+              color="orange"
             />
           </div>
 
           {/* Secondary Stats Row */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 border border-gray-100 dark:border-gray-700">
-              <div className="flex items-center gap-3">
-                <Server className="h-5 w-5 text-gray-400" />
-                <div>
-                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{stats.active_smtps}/{stats.total_smtps}</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">SMTPs Ativos</p>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 border border-gray-100 dark:border-gray-700">
-              <div className="flex items-center gap-3">
-                <TrendingUp className="h-5 w-5 text-gray-400" />
-                <div>
-                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{stats.active_campaigns}</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Campanhas Ativas</p>
-                </div>
-              </div>
-            </div>
-            <div
-              className="bg-white dark:bg-gray-800 rounded-2xl p-5 border border-gray-100 dark:border-gray-700 cursor-pointer hover:border-gray-200 dark:hover:border-gray-600 transition-colors"
+            <SmallStatCard
+              icon={Server}
+              label="SMTPs Ativos"
+              value={`${stats.active_smtps}/${stats.total_smtps}`}
+              iconBg="bg-blue-100 dark:bg-blue-900/30"
+              iconColor="text-blue-600 dark:text-blue-400"
+              onClick={() => navigate('/smtp')}
+            />
+            <SmallStatCard
+              icon={TrendingUp}
+              label="Campanhas Ativas"
+              value={stats.active_campaigns}
+              iconBg="bg-purple-100 dark:bg-purple-900/30"
+              iconColor="text-purple-600 dark:text-purple-400"
+              onClick={() => navigate('/campaigns')}
+            />
+            <SmallStatCard
+              icon={Mail}
+              label="Total de Emails"
+              value={formatNumber(stats.total_emails)}
+              subtitle={`${stats.total_lists} listas`}
+              iconBg="bg-cyan-100 dark:bg-cyan-900/30"
+              iconColor="text-cyan-600 dark:text-cyan-400"
               onClick={() => navigate('/lists')}
-            >
-              <div className="flex items-center gap-3">
-                <Mail className="h-5 w-5 text-gray-400" />
-                <div>
-                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{formatNumber(stats.total_emails)}</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">{stats.total_lists} listas</p>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 border border-gray-100 dark:border-gray-700">
-              <div className="flex items-center gap-3">
-                <CheckCircle className="h-5 w-5 text-gray-400" />
-                <div>
-                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{deliveryRate}%</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Taxa de Entrega</p>
-                </div>
-              </div>
-            </div>
+            />
+            <SmallStatCard
+              icon={CheckCircle}
+              label="Taxa de Entrega"
+              value={`${deliveryRate}%`}
+              subtitle="sucesso"
+              iconBg="bg-emerald-100 dark:bg-emerald-900/30"
+              iconColor="text-emerald-600 dark:text-emerald-400"
+            />
           </div>
 
           {/* Chart and Activity */}
@@ -431,7 +463,7 @@ function Dashboard() {
                   <span className="text-sm text-gray-600 dark:text-gray-400">Abertos</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-amber-500" />
+                  <div className="w-3 h-3 rounded-full bg-purple-500" />
                   <span className="text-sm text-gray-600 dark:text-gray-400">Cliques</span>
                 </div>
               </div>
@@ -442,11 +474,11 @@ function Dashboard() {
                     <AreaChart data={stats.hourly || []}>
                       <defs>
                         <linearGradient id="colorSent" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.1}/>
+                          <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2}/>
                           <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
                         </linearGradient>
                         <linearGradient id="colorOpened" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.1}/>
+                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
                           <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
                         </linearGradient>
                       </defs>
@@ -517,18 +549,19 @@ function Dashboard() {
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Atividade ao Vivo</h2>
                 <div className="flex items-center gap-2">
-                  <RefreshCw className="h-3 w-3 text-gray-400 animate-spin" />
-                  <span className="text-xs text-gray-400">Auto</span>
+                  <RefreshCw className="h-3 w-3 text-emerald-500 animate-spin" />
+                  <span className="text-xs text-emerald-600 dark:text-emerald-400">Auto</span>
                 </div>
               </div>
 
               {activities.length > 0 ? (
-                <div className="space-y-1">
-                  {activities.slice(0, 8).map((activity, index) => (
+                <div className="space-y-0">
+                  {activities.slice(0, 6).map((activity, index) => (
                     <ActivityItem
                       key={index}
                       type={activity.type}
                       email={activity.email}
+                      subject={activity.subject}
                       time={formatTimeAgo(activity.timestamp)}
                     />
                   ))}
@@ -544,44 +577,73 @@ function Dashboard() {
         </>
       ) : (
         <>
-          {/* Warmup Stats */}
+          {/* Warmup Stats - Colorful */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatCard
-              icon={Flame}
+            <ColorStatCard
+              icon={Mail}
               label="Emails Enviados"
               value={formatNumber(warmupStats.total_sent || 0)}
               subtitle="Total warmup"
-              highlight
+              color="blue"
               onClick={() => navigate('/warmup')}
             />
-            <StatCard
-              icon={Mail}
+            <ColorStatCard
+              icon={MessageSquare}
+              label="Interacoes"
+              value={formatNumber(warmupStats.total_interactions || 0)}
+              subtitle="Respostas e aberturas"
+              color="green"
+            />
+            <ColorStatCard
+              icon={MessageSquare}
               label="Respostas"
               value={formatNumber(warmupStats.total_replies || 0)}
               subtitle="Respostas automaticas"
+              color="purple"
             />
-            <StatCard
-              icon={Server}
-              label="SMTPs Ativos"
-              value={warmupStats.active_smtps || 0}
-              subtitle="Em warmup"
-            />
-            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Inbox Rate</p>
-                  <p className="text-3xl font-bold text-gray-900 dark:text-white">
-                    {warmupStats.inbox_rate?.toFixed(1) || 0}%
-                  </p>
-                </div>
-                <ProgressRing
-                  value={Math.round(warmupStats.inbox_rate || 0)}
-                  size={80}
-                  strokeWidth={8}
-                  color={warmupStats.inbox_rate >= 80 ? '#10b981' : warmupStats.inbox_rate >= 50 ? '#f59e0b' : '#ef4444'}
-                />
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 border border-gray-100 dark:border-gray-700 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Inbox Rate</p>
+                <p className="text-3xl font-bold text-gray-900 dark:text-white">
+                  {warmupStats.inbox_rate?.toFixed(1) || 0}%
+                </p>
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Taxa de entrada</p>
               </div>
+              <ProgressRing
+                value={Math.round(warmupStats.inbox_rate || 0)}
+                size={80}
+                strokeWidth={8}
+                color={warmupStats.inbox_rate >= 80 ? '#10b981' : warmupStats.inbox_rate >= 50 ? '#f59e0b' : '#ef4444'}
+              />
             </div>
+          </div>
+
+          {/* Warmup Secondary Stats */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <SmallStatCard
+              icon={Server}
+              label="SMTPs em Warmup"
+              value={warmupStats.active_smtps || 0}
+              iconBg="bg-orange-100 dark:bg-orange-900/30"
+              iconColor="text-orange-600 dark:text-orange-400"
+              onClick={() => navigate('/warmup')}
+            />
+            <SmallStatCard
+              icon={Users}
+              label="Seeds Ativos"
+              value={warmupStats.active_seeds || 0}
+              iconBg="bg-cyan-100 dark:bg-cyan-900/30"
+              iconColor="text-cyan-600 dark:text-cyan-400"
+              onClick={() => navigate('/warmup')}
+            />
+            <SmallStatCard
+              icon={Flame}
+              label="Templates"
+              value="75"
+              iconBg="bg-pink-100 dark:bg-pink-900/30"
+              iconColor="text-pink-600 dark:text-pink-400"
+              onClick={() => navigate('/warmup')}
+            />
           </div>
 
           {/* Warmup Quick Actions */}
@@ -590,9 +652,9 @@ function Dashboard() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <button
                 onClick={() => navigate('/warmup')}
-                className="flex items-center gap-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-left"
+                className="flex items-center gap-4 p-4 bg-gradient-to-r from-orange-50 to-amber-50 dark:from-orange-900/20 dark:to-amber-900/20 border border-orange-100 dark:border-orange-800 rounded-xl hover:shadow-md transition-all text-left"
               >
-                <div className="p-3 bg-orange-100 dark:bg-orange-900/30 rounded-xl">
+                <div className="p-3 bg-orange-100 dark:bg-orange-900/50 rounded-xl">
                   <Flame className="h-5 w-5 text-orange-600 dark:text-orange-400" />
                 </div>
                 <div>
@@ -602,9 +664,9 @@ function Dashboard() {
               </button>
               <button
                 onClick={() => navigate('/smtp')}
-                className="flex items-center gap-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-left"
+                className="flex items-center gap-4 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border border-blue-100 dark:border-blue-800 rounded-xl hover:shadow-md transition-all text-left"
               >
-                <div className="p-3 bg-blue-100 dark:bg-blue-900/30 rounded-xl">
+                <div className="p-3 bg-blue-100 dark:bg-blue-900/50 rounded-xl">
                   <Server className="h-5 w-5 text-blue-600 dark:text-blue-400" />
                 </div>
                 <div>
@@ -614,9 +676,9 @@ function Dashboard() {
               </button>
               <button
                 onClick={() => navigate('/warmup')}
-                className="flex items-center gap-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-left"
+                className="flex items-center gap-4 p-4 bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-900/20 dark:to-teal-900/20 border border-emerald-100 dark:border-emerald-800 rounded-xl hover:shadow-md transition-all text-left"
               >
-                <div className="p-3 bg-emerald-100 dark:bg-emerald-900/30 rounded-xl">
+                <div className="p-3 bg-emerald-100 dark:bg-emerald-900/50 rounded-xl">
                   <Users className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
                 </div>
                 <div>
@@ -628,29 +690,29 @@ function Dashboard() {
           </div>
 
           {/* Warmup Info Card */}
-          <div className="bg-gradient-to-br from-orange-50 to-amber-50 dark:from-orange-900/20 dark:to-amber-900/20 rounded-2xl p-6 border border-orange-100 dark:border-orange-800">
+          <div className="bg-gradient-to-br from-orange-500 to-amber-500 dark:from-orange-600 dark:to-amber-600 rounded-2xl p-6 text-white">
             <div className="flex items-start gap-4">
-              <div className="p-3 bg-orange-100 dark:bg-orange-900/50 rounded-xl">
-                <Flame className="h-6 w-6 text-orange-600 dark:text-orange-400" />
+              <div className="p-3 bg-white/20 rounded-xl backdrop-blur-sm">
+                <Flame className="h-6 w-6" />
               </div>
-              <div>
-                <h3 className="font-semibold text-gray-900 dark:text-white">Sobre o Warmup</h3>
-                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+              <div className="flex-1">
+                <h3 className="font-semibold text-lg">Sobre o Warmup</h3>
+                <p className="text-sm text-white/80 mt-1">
                   O warmup ajuda a construir a reputacao dos seus servidores SMTP enviando emails
                   gradualmente para contas seed. Isso aumenta a taxa de entrega na caixa de entrada.
                 </p>
-                <div className="flex gap-6 mt-4">
+                <div className="flex gap-8 mt-4">
                   <div>
-                    <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">{warmupStats.active_smtps || 0}</p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">SMTPs em warmup</p>
+                    <p className="text-3xl font-bold">{warmupStats.active_smtps || 0}</p>
+                    <p className="text-xs text-white/70">SMTPs em warmup</p>
                   </div>
                   <div>
-                    <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">{formatNumber(warmupStats.total_sent || 0)}</p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">Emails enviados</p>
+                    <p className="text-3xl font-bold">{formatNumber(warmupStats.total_sent || 0)}</p>
+                    <p className="text-xs text-white/70">Emails enviados</p>
                   </div>
                   <div>
-                    <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">{warmupStats.inbox_rate?.toFixed(0) || 0}%</p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">Taxa inbox</p>
+                    <p className="text-3xl font-bold">{warmupStats.inbox_rate?.toFixed(0) || 0}%</p>
+                    <p className="text-xs text-white/70">Taxa inbox</p>
                   </div>
                 </div>
               </div>
