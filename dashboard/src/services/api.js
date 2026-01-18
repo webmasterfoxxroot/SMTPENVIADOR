@@ -3,6 +3,7 @@ import { getToken, removeToken } from './auth'
 
 const api = axios.create({
   baseURL: '/api/v1',
+  timeout: 30000, // 30 seconds timeout
   headers: {
     'Content-Type': 'application/json'
   }
