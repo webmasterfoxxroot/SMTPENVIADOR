@@ -189,17 +189,48 @@ func (m *Manager) CheckBothRateLimits(smtpID string, maxPerMinute, maxPerHour in
 	return m.CheckRateLimitHourly(smtpID, maxPerHour)
 }
 
-// IncrementRateLimit increments the rate limit counters after successful send
+// IncrementRateLimit increments the rate limit counters after successful send (legacy/shared)
 func (m *Manager) IncrementRateLimit(smtpID string) {
-	// Increment per-minute counter
-	keyMin := fmt.Sprintf("%s:%s:%d", RateLimitKey, smtpID, time.Now().Unix()/60)
+	m.IncrementRateLimitForType(smtpID, "shared")
+}
+
+// CheckRateLimitForType checks rate limit for a specific queue type (campaign/warmup)
+// Each type has its own separate rate limit pool - campaigns don't compete with warmup
+func (m *Manager) CheckRateLimitForType(smtpID string, maxPerMinute int, queueType string) bool {
+	key := fmt.Sprintf("%s:%s:%s:%d", RateLimitKey, queueType, smtpID, time.Now().Unix()/60)
+	count, _ := m.client.Get(m.ctx, key).Int64()
+	return count < int64(maxPerMinute)
+}
+
+// CheckRateLimitHourlyForType checks hourly rate limit for a specific queue type
+func (m *Manager) CheckRateLimitHourlyForType(smtpID string, maxPerHour int, queueType string) bool {
+	if maxPerHour <= 0 {
+		return true
+	}
+	key := fmt.Sprintf("%s:%s:%s:hour:%d", RateLimitKey, queueType, smtpID, time.Now().Unix()/3600)
+	count, _ := m.client.Get(m.ctx, key).Int64()
+	return count < int64(maxPerHour)
+}
+
+// CheckBothRateLimitsForType checks both limits for a specific queue type
+func (m *Manager) CheckBothRateLimitsForType(smtpID string, maxPerMinute, maxPerHour int, queueType string) bool {
+	if !m.CheckRateLimitForType(smtpID, maxPerMinute, queueType) {
+		return false
+	}
+	return m.CheckRateLimitHourlyForType(smtpID, maxPerHour, queueType)
+}
+
+// IncrementRateLimitForType increments rate limit for a specific queue type
+func (m *Manager) IncrementRateLimitForType(smtpID string, queueType string) {
+	// Increment per-minute counter for this type
+	keyMin := fmt.Sprintf("%s:%s:%s:%d", RateLimitKey, queueType, smtpID, time.Now().Unix()/60)
 	count, _ := m.client.Incr(m.ctx, keyMin).Result()
 	if count == 1 {
 		m.client.Expire(m.ctx, keyMin, 2*time.Minute)
 	}
 
-	// Increment per-hour counter
-	keyHour := fmt.Sprintf("%s:%s:hour:%d", RateLimitKey, smtpID, time.Now().Unix()/3600)
+	// Increment per-hour counter for this type
+	keyHour := fmt.Sprintf("%s:%s:%s:hour:%d", RateLimitKey, queueType, smtpID, time.Now().Unix()/3600)
 	count, _ = m.client.Incr(m.ctx, keyHour).Result()
 	if count == 1 {
 		m.client.Expire(m.ctx, keyHour, 2*time.Hour)
