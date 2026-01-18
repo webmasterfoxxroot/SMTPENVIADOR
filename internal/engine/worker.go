@@ -12,6 +12,9 @@ import (
 	"smtpenviador/internal/queue"
 )
 
+// Pre-compiled regex for link processing (compiled once, reused for all emails)
+var linkRegex = regexp.MustCompile(`href="(https?://[^"]+)"`)
+
 // Worker processes email jobs from the queue
 type Worker struct {
 	id       int
@@ -214,9 +217,11 @@ func (w *Worker) processJob() {
 	w.updateSMTPStats(smtp.ID, true)
 	w.updateCampaignSentCount(job.CampaignID)
 
-	// Log every email sent for monitoring
+	// Log every 100 emails for monitoring (reduces log overhead)
 	sent := w.stats.TotalSent.Load()
-	log.Printf("✅ [%d] Email enviado para %s via %s", sent, job.To, smtp.Name)
+	if sent%100 == 0 {
+		log.Printf("✅ [%d] emails enviados (último: %s via %s)", sent, job.To, smtp.Name)
+	}
 }
 
 // processCampaignJob processes jobs from the CAMPAIGN queue only
@@ -387,12 +392,15 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 	w.updateSMTPStats(smtp.ID, true)
 	w.updateCampaignSentCount(job.CampaignID)
 
+	// Log every 100 emails for monitoring (reduces log overhead)
 	sent := w.stats.TotalSent.Load()
-	prefix := "📧"
-	if queueType == "warmup" {
-		prefix = "🔥"
+	if sent%100 == 0 {
+		prefix := "📧"
+		if queueType == "warmup" {
+			prefix = "🔥"
+		}
+		log.Printf("%s [%d] emails enviados (último: %s via %s)", prefix, sent, job.To, smtp.Name)
 	}
-	log.Printf("%s [%d] Email enviado para %s via %s", prefix, sent, job.To, smtp.Name)
 }
 
 // pushToQueue pushes a job back to the appropriate queue
@@ -464,19 +472,14 @@ func (w *Worker) processVariables(content string, variables map[string]string, e
 // generateTrackingPixel generates a tracking pixel for opens
 func (w *Worker) generateTrackingPixel(trackingDomain, campaignID, emailID string) string {
 	pixelURL := trackingDomain + `/track/open/` + campaignID + `/` + emailID
-	log.Printf("[Worker %d] Generated tracking pixel: %s", w.id, pixelURL)
 	return `<img src="` + pixelURL + `" width="1" height="1" style="display:none" />`
 }
 
-// processLinks replaces links with tracking URLs
+// processLinks replaces links with tracking URLs (uses pre-compiled regex for speed)
 func (w *Worker) processLinks(trackingDomain, content, campaignID, emailID string) string {
 	trackBase := trackingDomain + "/track/click/" + campaignID + "/" + emailID + "?url="
-	log.Printf("[Worker %d] Processing links with tracking base: %s", w.id, trackBase)
 
-	// Use regex to find and replace href URLs properly
-	// This captures the full URL including any query parameters
-	linkRegex := regexp.MustCompile(`href="(https?://[^"]+)"`)
-
+	// Use pre-compiled regex (package level) for speed
 	content = linkRegex.ReplaceAllStringFunc(content, func(match string) string {
 		// Extract the URL from href="URL"
 		urlMatch := linkRegex.FindStringSubmatch(match)
@@ -507,7 +510,6 @@ func (w *Worker) processLinks(trackingDomain, content, campaignID, emailID strin
 func (w *Worker) updateEmailStatus(id, status, errorMsg string) {
 	var query string
 	var err error
-	var result sql.Result
 
 	if status == "sent" {
 		query = `UPDATE campaign_emails SET status = $1, error_message = $2, sent_at = NOW() WHERE id = $3`
@@ -515,17 +517,11 @@ func (w *Worker) updateEmailStatus(id, status, errorMsg string) {
 		query = `UPDATE campaign_emails SET status = $1, error_message = $2 WHERE id = $3`
 	}
 
-	result, err = w.db.Exec(query, status, errorMsg, id)
+	_, err = w.db.Exec(query, status, errorMsg, id)
 	if err != nil {
-		log.Printf("❌ Worker %d: Failed to update email status for %s: %v", w.id, id, err)
-		return
+		log.Printf("❌ Worker %d: Failed to update email %s: %v", w.id, id, err)
 	}
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		log.Printf("⚠️ Worker %d: No rows updated for email %s (status: %s) - record may not exist", w.id, id, status)
-	} else {
-		log.Printf("📝 Worker %d: Updated email %s status to %s", w.id, id, status)
-	}
+	// Removed verbose logging for every email - too slow
 }
 
 // updateSMTPStats updates SMTP server statistics
