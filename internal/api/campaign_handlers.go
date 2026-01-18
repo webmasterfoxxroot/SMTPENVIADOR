@@ -82,9 +82,9 @@ type CampaignRequest struct {
 	ReplyTo     string     `json:"reply_to"`
 	HTMLContent string     `json:"html_content"`
 	TextContent string     `json:"text_content"`
-	ListID      string     `json:"list_id"`       // For backwards compatibility
-	ListIDs     []string   `json:"list_ids"`      // Multiple lists support
-	SmtpIDs     []string   `json:"smtp_ids"`      // Multiple SMTPs support
+	ListID      string     `json:"list_id"`  // For backwards compatibility
+	ListIDs     []string   `json:"list_ids"` // Multiple lists support
+	SmtpIDs     []string   `json:"smtp_ids"` // Multiple SMTPs support
 	SendRate    int        `json:"send_rate"`
 	ScheduledAt *time.Time `json:"scheduled_at"`
 	TrackOpens  bool       `json:"track_opens"`
@@ -141,24 +141,24 @@ func (s *Server) listCampaigns(c *fiber.Ctx) error {
 		}
 
 		campaigns = append(campaigns, fiber.Map{
-			"id":             id,
-			"name":           name,
-			"subject":        subject,
-			"from_name":      fromName,
-			"from_email":     fromEmail,
-			"status":         campaignStatus,
-			"total_emails":   totalEmails,
-			"sent_count":     sentCount,
-			"failed_count":   failedCount,
-			"open_count":     openCount,
-			"click_count":    clickCount,
-			"bounce_count":   bounceCount,
-			"scheduled_at":   scheduledAt,
-			"auto_start_at":  autoStartAtUnix,
-			"started_at":     startedAt,
-			"completed_at":   completedAt,
-			"created_at":     createdAt,
-			"list_name":      listName,
+			"id":            id,
+			"name":          name,
+			"subject":       subject,
+			"from_name":     fromName,
+			"from_email":    fromEmail,
+			"status":        campaignStatus,
+			"total_emails":  totalEmails,
+			"sent_count":    sentCount,
+			"failed_count":  failedCount,
+			"open_count":    openCount,
+			"click_count":   clickCount,
+			"bounce_count":  bounceCount,
+			"scheduled_at":  scheduledAt,
+			"auto_start_at": autoStartAtUnix,
+			"started_at":    startedAt,
+			"completed_at":  completedAt,
+			"created_at":    createdAt,
+			"list_name":     listName,
 		})
 	}
 
@@ -325,30 +325,30 @@ func (s *Server) getCampaign(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"id":            id,
-		"name":          name,
-		"subject":       subject,
-		"from_name":     fromName,
-		"from_email":    fromEmail,
-		"reply_to":      replyTo,
-		"html_content":  htmlContent,
-		"text_content":  textContent,
-		"list_id":       listID,
-		"list_ids":      listIDs,
-		"smtp_ids":      smtpIDs,
-		"status":        status,
-		"total_emails":  totalEmails,
-		"sent_count":    sentCount,
-		"failed_count":  failedCount,
-		"open_count":    openCount,
-		"click_count":   clickCount,
-		"bounce_count":  bounceCount,
-		"send_rate":     sendRate,
-		"scheduled_at":  scheduledAt,
-		"started_at":    startedAt,
-		"completed_at":  completedAt,
-		"created_at":    createdAt,
-		"updated_at":    updatedAt,
+		"id":           id,
+		"name":         name,
+		"subject":      subject,
+		"from_name":    fromName,
+		"from_email":   fromEmail,
+		"reply_to":     replyTo,
+		"html_content": htmlContent,
+		"text_content": textContent,
+		"list_id":      listID,
+		"list_ids":     listIDs,
+		"smtp_ids":     smtpIDs,
+		"status":       status,
+		"total_emails": totalEmails,
+		"sent_count":   sentCount,
+		"failed_count": failedCount,
+		"open_count":   openCount,
+		"click_count":  clickCount,
+		"bounce_count": bounceCount,
+		"send_rate":    sendRate,
+		"scheduled_at": scheduledAt,
+		"started_at":   startedAt,
+		"completed_at": completedAt,
+		"created_at":   createdAt,
+		"updated_at":   updatedAt,
 	})
 }
 
@@ -553,7 +553,126 @@ func (s *Server) resumeCampaign(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Campaign is not paused"})
 	}
 
-	return c.JSON(fiber.Map{"message": "Campaign resumed"})
+	// Re-queue pending emails
+	count := s.requeuePendingEmails(id)
+	log.Printf("[Campaign %s] Resumed and re-queued %d pending emails", id[:8], count)
+
+	return c.JSON(fiber.Map{
+		"message":  "Campaign resumed",
+		"requeued": count,
+	})
+}
+
+// requeueCampaign re-queues all pending emails for a running campaign
+func (s *Server) requeueCampaign(c *fiber.Ctx) error {
+	userID := getUserID(c)
+	id := c.Params("id")
+
+	// Verify campaign exists and is running
+	var status string
+	err := s.db.QueryRow(`SELECT status FROM campaigns WHERE id = $1 AND user_id = $2`, id, userID).Scan(&status)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
+	}
+
+	if status != "running" && status != "paused" {
+		return c.Status(400).JSON(fiber.Map{"error": "Campaign must be running or paused to requeue"})
+	}
+
+	// Re-queue pending emails
+	count := s.requeuePendingEmails(id)
+
+	return c.JSON(fiber.Map{
+		"message":  "Emails requeued",
+		"requeued": count,
+	})
+}
+
+// requeuePendingEmails re-queues all emails with status 'queued' for a campaign
+func (s *Server) requeuePendingEmails(campaignID string) int {
+	// Get campaign details
+	var fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	var trackOpens, trackClicks bool
+	err := s.db.QueryRow(`
+		SELECT from_email, from_name, reply_to, subject, html_content, text_content,
+		       COALESCE(track_opens, true), COALESCE(track_clicks, true)
+		FROM campaigns WHERE id = $1
+	`, campaignID).Scan(&fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
+	if err != nil {
+		log.Printf("❌ [Requeue] Failed to get campaign %s: %v", campaignID, err)
+		return 0
+	}
+
+	// Get tracking domain for this campaign
+	trackingDomain := s.getTrackingDomainForCampaign(campaignID)
+
+	// Get all pending emails from campaign_emails
+	rows, err := s.db.Query(`
+		SELECT ce.id, ce.email_id, ce.email, ce.recipient_name
+		FROM campaign_emails ce
+		WHERE ce.campaign_id = $1 AND ce.status = 'queued'
+	`, campaignID)
+	if err != nil {
+		log.Printf("❌ [Requeue] Failed to query pending emails: %v", err)
+		return 0
+	}
+	defer rows.Close()
+
+	count := 0
+	batchSize := 1000
+	batch := make([]*queue.EmailJob, 0, batchSize)
+
+	for rows.Next() {
+		var id, emailID, email string
+		var recipientName sql.NullString
+		if err := rows.Scan(&id, &emailID, &email, &recipientName); err != nil {
+			continue
+		}
+
+		name := ""
+		if recipientName.Valid {
+			name = recipientName.String
+		}
+
+		job := &queue.EmailJob{
+			ID:             id,
+			CampaignID:     campaignID,
+			EmailID:        emailID,
+			To:             email,
+			ToName:         name,
+			From:           fromEmail,
+			FromName:       fromName,
+			ReplyTo:        replyTo,
+			Subject:        subject,
+			HTMLContent:    htmlContent,
+			TextContent:    textContent,
+			Variables:      make(map[string]string),
+			TrackOpens:     trackOpens,
+			TrackClicks:    trackClicks,
+			TrackingDomain: trackingDomain,
+			CreatedAt:      time.Now(),
+		}
+
+		batch = append(batch, job)
+		count++
+
+		// Push batch to queue
+		if len(batch) >= batchSize {
+			for _, j := range batch {
+				s.queue.PushCampaign(j)
+			}
+			log.Printf("[Requeue %s] Queued %d emails...", campaignID[:8], count)
+			batch = make([]*queue.EmailJob, 0, batchSize)
+		}
+	}
+
+	// Push remaining batch
+	for _, j := range batch {
+		s.queue.PushCampaign(j)
+	}
+
+	log.Printf("[Requeue %s] Total re-queued: %d emails", campaignID[:8], count)
+	return count
 }
 
 // cancelCampaign cancels a campaign
