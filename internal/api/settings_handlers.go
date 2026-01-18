@@ -39,8 +39,13 @@ type Setting struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// getSettings returns all system settings
+// getSettings returns all system settings (admin only)
 func (s *Server) getSettings(c *fiber.Ctx) error {
+	// Check if user is admin
+	if !isAdmin(c) {
+		return c.Status(403).JSON(fiber.Map{"error": "Admin access required"})
+	}
+
 	rows, err := s.db.Query(`
 		SELECT key, value, description, updated_at
 		FROM settings
@@ -90,8 +95,13 @@ func (s *Server) getSetting(c *fiber.Ctx) error {
 	return c.JSON(setting)
 }
 
-// updateSetting updates a single setting
+// updateSetting updates a single setting (admin only)
 func (s *Server) updateSetting(c *fiber.Ctx) error {
+	// Check if user is admin
+	if !isAdmin(c) {
+		return c.Status(403).JSON(fiber.Map{"error": "Admin access required"})
+	}
+
 	key := c.Params("key")
 
 	var req struct {
@@ -128,8 +138,13 @@ func (s *Server) updateSetting(c *fiber.Ctx) error {
 	})
 }
 
-// updateSettings updates multiple settings at once (uses UPSERT)
+// updateSettings updates multiple settings at once (uses UPSERT) (admin only)
 func (s *Server) updateSettings(c *fiber.Ctx) error {
+	// Check if user is admin
+	if !isAdmin(c) {
+		return c.Status(403).JSON(fiber.Map{"error": "Admin access required"})
+	}
+
 	var req map[string]string
 
 	if err := c.BodyParser(&req); err != nil {
@@ -212,8 +227,13 @@ func getPublicIP() string {
 	return ""
 }
 
-// restartServer restarts the email engine
+// restartServer restarts the email engine (admin only)
 func (s *Server) restartServer(c *fiber.Ctx) error {
+	// Check if user is admin
+	if !isAdmin(c) {
+		return c.Status(403).JSON(fiber.Map{"error": "Admin access required"})
+	}
+
 	// Stop the engine
 	if s.engine.IsRunning() {
 		s.engine.Stop()
