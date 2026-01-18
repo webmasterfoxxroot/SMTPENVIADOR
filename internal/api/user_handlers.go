@@ -11,13 +11,14 @@ import (
 
 // User represents a user in the system
 type User struct {
-	ID        string    `json:"id"`
-	Email     string    `json:"email"`
-	Name      string    `json:"name"`
-	Role      string    `json:"role"`
-	Active    bool      `json:"active"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID             string    `json:"id"`
+	Email          string    `json:"email"`
+	Name           string    `json:"name"`
+	Role           string    `json:"role"`
+	Active         bool      `json:"active"`
+	TrackingDomain string    `json:"tracking_domain"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // CreateUserRequest represents the request to create a user
@@ -30,10 +31,11 @@ type CreateUserRequest struct {
 
 // UpdateUserRequest represents the request to update a user
 type UpdateUserRequest struct {
-	Email  string `json:"email,omitempty"`
-	Name   string `json:"name,omitempty"`
-	Role   string `json:"role,omitempty"`
-	Active *bool  `json:"active,omitempty"`
+	Email          string `json:"email,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Role           string `json:"role,omitempty"`
+	Active         *bool  `json:"active,omitempty"`
+	TrackingDomain string `json:"tracking_domain,omitempty"`
 }
 
 // ChangePasswordRequest represents the request to change password
@@ -51,7 +53,7 @@ func (s *Server) listUsers(c *fiber.Ctx) error {
 	}
 
 	rows, err := s.db.Query(`
-		SELECT id, email, name, role, active, created_at, updated_at
+		SELECT id, email, name, role, active, COALESCE(tracking_domain, ''), created_at, updated_at
 		FROM users
 		ORDER BY created_at DESC
 	`)
@@ -63,7 +65,7 @@ func (s *Server) listUsers(c *fiber.Ctx) error {
 	var users []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Active, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Active, &u.TrackingDomain, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			continue
 		}
 		users = append(users, u)
@@ -89,9 +91,9 @@ func (s *Server) getUser(c *fiber.Ctx) error {
 
 	var u User
 	err := s.db.QueryRow(`
-		SELECT id, email, name, role, active, created_at, updated_at
+		SELECT id, email, name, role, active, COALESCE(tracking_domain, ''), created_at, updated_at
 		FROM users WHERE id = $1
-	`, id).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Active, &u.CreatedAt, &u.UpdatedAt)
+	`, id).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Active, &u.TrackingDomain, &u.CreatedAt, &u.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
@@ -109,9 +111,9 @@ func (s *Server) getCurrentUser(c *fiber.Ctx) error {
 
 	var u User
 	err := s.db.QueryRow(`
-		SELECT id, email, name, role, active, created_at, updated_at
+		SELECT id, email, name, role, active, COALESCE(tracking_domain, ''), created_at, updated_at
 		FROM users WHERE id = $1
-	`, userId).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Active, &u.CreatedAt, &u.UpdatedAt)
+	`, userId).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Active, &u.TrackingDomain, &u.CreatedAt, &u.UpdatedAt)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch user"})
@@ -248,6 +250,12 @@ func (s *Server) updateUser(c *fiber.Ctx) error {
 		args = append(args, *req.Active)
 		argNum++
 	}
+	// Users can update their own tracking domain
+	if req.TrackingDomain != "" {
+		updates = append(updates, fmt.Sprintf("tracking_domain = $%d", argNum))
+		args = append(args, req.TrackingDomain)
+		argNum++
+	}
 
 	if len(updates) == 0 {
 		return c.Status(400).JSON(fiber.Map{"error": "No fields to update"})
@@ -275,9 +283,9 @@ func (s *Server) updateUser(c *fiber.Ctx) error {
 	// Return updated user
 	var u User
 	s.db.QueryRow(`
-		SELECT id, email, name, role, active, created_at, updated_at
+		SELECT id, email, name, role, active, COALESCE(tracking_domain, ''), created_at, updated_at
 		FROM users WHERE id = $1
-	`, id).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Active, &u.CreatedAt, &u.UpdatedAt)
+	`, id).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Active, &u.TrackingDomain, &u.CreatedAt, &u.UpdatedAt)
 
 	return c.JSON(u)
 }

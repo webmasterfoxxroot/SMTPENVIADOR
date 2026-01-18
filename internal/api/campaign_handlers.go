@@ -14,7 +14,7 @@ import (
 	"smtpenviador/internal/queue"
 )
 
-// getTrackingDomain returns the tracking domain from settings
+// getTrackingDomain returns the tracking domain from settings (global fallback)
 func (s *Server) getTrackingDomain() string {
 	var domain string
 	err := s.db.QueryRow(`SELECT value FROM settings WHERE key = 'tracking_domain'`).Scan(&domain)
@@ -22,6 +22,32 @@ func (s *Server) getTrackingDomain() string {
 		return s.cfg.TrackingDomain // Fallback to config
 	}
 	return domain
+}
+
+// getTrackingDomainForUser returns the tracking domain for a specific user
+func (s *Server) getTrackingDomainForUser(userID string) string {
+	var domain sql.NullString
+	err := s.db.QueryRow(`SELECT tracking_domain FROM users WHERE id = $1`, userID).Scan(&domain)
+	if err == nil && domain.Valid && domain.String != "" {
+		return domain.String
+	}
+	// Fallback to global settings
+	return s.getTrackingDomain()
+}
+
+// getTrackingDomainForCampaign returns the tracking domain for a campaign's owner
+func (s *Server) getTrackingDomainForCampaign(campaignID string) string {
+	var domain sql.NullString
+	err := s.db.QueryRow(`
+		SELECT u.tracking_domain FROM users u
+		JOIN campaigns c ON c.user_id = u.id
+		WHERE c.id = $1
+	`, campaignID).Scan(&domain)
+	if err == nil && domain.Valid && domain.String != "" {
+		return domain.String
+	}
+	// Fallback to global settings
+	return s.getTrackingDomain()
 }
 
 // ensureCampaignEmailsUpdated ensures the campaign_emails table has the email column
@@ -367,8 +393,8 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Campaign cannot be started in current status"})
 	}
 
-	// Get tracking domain from settings
-	trackingDomain := s.getTrackingDomain()
+	// Get tracking domain for campaign owner
+	trackingDomain := s.getTrackingDomainForCampaign(id)
 
 	// Parse list IDs - use list_ids if available, otherwise use list_id
 	var listIDs []string
@@ -604,8 +630,8 @@ func (s *Server) autoStartCampaignByID(id string) {
 
 	fmt.Printf("[AutoStart] Campaign %s - List: %s, From: %s\n", id, listID, fromEmail)
 
-	// Get tracking domain from settings
-	trackingDomain := s.getTrackingDomain()
+	// Get tracking domain for campaign owner
+	trackingDomain := s.getTrackingDomainForCampaign(id)
 
 	// Queue emails - try ClickHouse first, then PostgreSQL
 	listIDs := []string{listID}
@@ -769,8 +795,8 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
 	}
 
-	// Get tracking domain from settings
-	trackingDomain := s.getTrackingDomain()
+	// Get tracking domain for campaign owner
+	trackingDomain := s.getTrackingDomainForCampaign(id)
 
 	// Clear previous campaign_emails
 	s.db.Exec(`DELETE FROM campaign_emails WHERE campaign_id = $1`, id)
@@ -833,8 +859,8 @@ func (s *Server) resendToFailed(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
 	}
 
-	// Get tracking domain from settings
-	trackingDomain := s.getTrackingDomain()
+	// Get tracking domain for campaign owner
+	trackingDomain := s.getTrackingDomainForCampaign(id)
 
 	// Get failed emails
 	rows, err := s.db.Query(`
@@ -881,8 +907,8 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
 	}
 
-	// Get tracking domain from settings
-	trackingDomain := s.getTrackingDomain()
+	// Get tracking domain for campaign owner
+	trackingDomain := s.getTrackingDomainForCampaign(id)
 
 	// Get emails that were sent but not opened
 	rows, err := s.db.Query(`

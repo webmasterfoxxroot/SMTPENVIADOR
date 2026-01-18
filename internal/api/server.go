@@ -149,8 +149,8 @@ func (s *Server) startScheduledCampaign(id string) {
 		return
 	}
 
-	// Get tracking domain from settings
-	trackingDomain := s.getTrackingDomain()
+	// Get tracking domain for campaign owner
+	trackingDomain := s.getTrackingDomainForCampaign(id)
 
 	// Queue emails - try ClickHouse first, then PostgreSQL
 	listIDs := []string{listID}
