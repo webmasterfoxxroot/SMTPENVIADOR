@@ -84,6 +84,7 @@ type CampaignRequest struct {
 	TextContent string     `json:"text_content"`
 	ListID      string     `json:"list_id"`       // For backwards compatibility
 	ListIDs     []string   `json:"list_ids"`      // Multiple lists support
+	SmtpIDs     []string   `json:"smtp_ids"`      // Multiple SMTPs support
 	SendRate    int        `json:"send_rate"`
 	ScheduledAt *time.Time `json:"scheduled_at"`
 	TrackOpens  bool       `json:"track_opens"`
@@ -192,13 +193,37 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "At least one list is required"})
 	}
 
-	// Check if there are active SMTPs available for this user
+	// Handle SMTP selection - if smtp_ids provided, validate them; otherwise use all active SMTPs
+	smtpIDs := req.SmtpIDs
 	var smtpCount int
-	s.db.QueryRow(`SELECT COUNT(*) FROM smtp_servers WHERE active = true AND user_id = $1`, userID).Scan(&smtpCount)
 
-	if smtpCount == 0 {
-		return c.Status(400).JSON(fiber.Map{"error": "Nenhum SMTP ativo disponível. Adicione um SMTP antes de criar campanhas."})
+	if len(smtpIDs) > 0 {
+		// Validate that provided SMTPs belong to user and are active
+		placeholders := make([]string, len(smtpIDs))
+		args := make([]interface{}, len(smtpIDs)+1)
+		args[0] = userID
+		for i, id := range smtpIDs {
+			placeholders[i] = fmt.Sprintf("$%d", i+2)
+			args[i+1] = id
+		}
+		query := fmt.Sprintf(`SELECT COUNT(*) FROM smtp_servers WHERE active = true AND user_id = $1 AND id IN (%s)`, strings.Join(placeholders, ","))
+		s.db.QueryRow(query, args...).Scan(&smtpCount)
+
+		if smtpCount == 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "Nenhum dos SMTPs selecionados está ativo."})
+		}
+		if smtpCount != len(smtpIDs) {
+			return c.Status(400).JSON(fiber.Map{"error": "Alguns SMTPs selecionados são inválidos ou inativos."})
+		}
+	} else {
+		// No SMTPs selected - use all active SMTPs for this user
+		s.db.QueryRow(`SELECT COUNT(*) FROM smtp_servers WHERE active = true AND user_id = $1`, userID).Scan(&smtpCount)
+		if smtpCount == 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "Nenhum SMTP ativo disponível. Adicione um SMTP antes de criar campanhas."})
+		}
 	}
+
+	smtpIDsStr := strings.Join(smtpIDs, ",")
 
 	// Get email count from all selected lists
 	var totalEmails int
@@ -231,11 +256,11 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 	autoStartAt := time.Now().UTC().Add(60 * time.Second)
 	_, err := s.db.Exec(`
 		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to,
-		                       html_content, text_content, list_id, list_ids, send_rate,
+		                       html_content, text_content, list_id, list_ids, smtp_ids, send_rate,
 		                       scheduled_at, track_opens, track_clicks, total_emails, status, auto_start_at, user_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'draft', $16, $17)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'draft', $17, $18)
 	`, id, req.Name, req.Subject, req.FromName, req.FromEmail, req.ReplyTo,
-		req.HTMLContent, req.TextContent, listIDs[0], listIDsStr, req.SendRate,
+		req.HTMLContent, req.TextContent, listIDs[0], listIDsStr, smtpIDsStr, req.SendRate,
 		req.ScheduledAt, req.TrackOpens, req.TrackClicks, totalEmails, autoStartAt, userID)
 
 	if err != nil {
@@ -258,19 +283,19 @@ func (s *Server) getCampaign(c *fiber.Ctx) error {
 	id := c.Params("id")
 
 	var name, subject, fromName, fromEmail, replyTo, htmlContent, textContent, status, listID string
-	var listIDsStr sql.NullString
+	var listIDsStr, smtpIDsStr sql.NullString
 	var totalEmails, sentCount, failedCount, openCount, clickCount, bounceCount, sendRate int
 	var scheduledAt, startedAt, completedAt *time.Time
 	var createdAt, updatedAt time.Time
 
 	err := s.db.QueryRow(`
 		SELECT name, subject, from_name, from_email, reply_to, html_content, text_content,
-		       list_id, COALESCE(list_ids, ''), status, total_emails, sent_count, failed_count, open_count,
+		       list_id, COALESCE(list_ids, ''), COALESCE(smtp_ids, ''), status, total_emails, sent_count, failed_count, open_count,
 		       click_count, bounce_count, send_rate, scheduled_at, started_at,
 		       completed_at, created_at, updated_at
 		FROM campaigns WHERE id = $1 AND user_id = $2
 	`, id, userID).Scan(&name, &subject, &fromName, &fromEmail, &replyTo, &htmlContent, &textContent,
-		&listID, &listIDsStr, &status, &totalEmails, &sentCount, &failedCount, &openCount,
+		&listID, &listIDsStr, &smtpIDsStr, &status, &totalEmails, &sentCount, &failedCount, &openCount,
 		&clickCount, &bounceCount, &sendRate, &scheduledAt, &startedAt,
 		&completedAt, &createdAt, &updatedAt)
 
@@ -286,6 +311,12 @@ func (s *Server) getCampaign(c *fiber.Ctx) error {
 		listIDs = []string{listID}
 	}
 
+	// Parse smtp_ids
+	var smtpIDs []string
+	if smtpIDsStr.Valid && smtpIDsStr.String != "" {
+		smtpIDs = strings.Split(smtpIDsStr.String, ",")
+	}
+
 	return c.JSON(fiber.Map{
 		"id":            id,
 		"name":          name,
@@ -297,6 +328,7 @@ func (s *Server) getCampaign(c *fiber.Ctx) error {
 		"text_content":  textContent,
 		"list_id":       listID,
 		"list_ids":      listIDs,
+		"smtp_ids":      smtpIDs,
 		"status":        status,
 		"total_emails":  totalEmails,
 		"sent_count":    sentCount,
@@ -330,15 +362,30 @@ func (s *Server) updateCampaign(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Campaign cannot be edited in current status"})
 	}
 
+	// Support both list_id (single) and list_ids (multiple)
+	listIDs := req.ListIDs
+	if len(listIDs) == 0 && req.ListID != "" {
+		listIDs = []string{req.ListID}
+	}
+	listIDsStr := strings.Join(listIDs, ",")
+	firstListID := ""
+	if len(listIDs) > 0 {
+		firstListID = listIDs[0]
+	}
+
+	// Handle smtp_ids
+	smtpIDsStr := strings.Join(req.SmtpIDs, ",")
+
 	result, err := s.db.Exec(`
 		UPDATE campaigns SET
 			name = $1, subject = $2, from_name = $3, from_email = $4,
 			reply_to = $5, html_content = $6, text_content = $7,
-			list_id = $8, send_rate = $9, scheduled_at = $10
-		WHERE id = $11 AND user_id = $12
+			list_id = $8, list_ids = $9, smtp_ids = $10, send_rate = $11, scheduled_at = $12,
+			track_opens = $13, track_clicks = $14
+		WHERE id = $15 AND user_id = $16
 	`, req.Name, req.Subject, req.FromName, req.FromEmail, req.ReplyTo,
-		req.HTMLContent, req.TextContent, req.ListID, req.SendRate,
-		req.ScheduledAt, id, userID)
+		req.HTMLContent, req.TextContent, firstListID, listIDsStr, smtpIDsStr, req.SendRate,
+		req.ScheduledAt, req.TrackOpens, req.TrackClicks, id, userID)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update campaign"})

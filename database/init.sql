@@ -141,6 +141,7 @@ CREATE TABLE campaigns (
     text_content TEXT,
     list_id UUID REFERENCES email_lists(id),
     list_ids TEXT DEFAULT '', -- Comma-separated list IDs for multiple list support
+    smtp_ids TEXT DEFAULT '', -- Comma-separated SMTP IDs for multiple SMTP support
     status VARCHAR(50) DEFAULT 'draft', -- draft, scheduled, running, paused, completed, cancelled
     scheduled_at TIMESTAMP,
     auto_start_at TIMESTAMP, -- when campaign should auto-start (countdown)

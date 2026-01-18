@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Save, Loader2, ChevronDown, ChevronRight, Folder, Users, CheckCircle, FileText } from 'lucide-react'
+import { ArrowLeft, Save, Loader2, ChevronDown, ChevronRight, Folder, Users, CheckCircle, FileText, Server } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../services/api'
 
@@ -14,6 +14,7 @@ function CampaignEdit() {
   const [expandedGroups, setExpandedGroups] = useState({})
   const [templates, setTemplates] = useState([])
   const [selectedTemplate, setSelectedTemplate] = useState('')
+  const [smtps, setSmtps] = useState([])
 
   const [form, setForm] = useState({
     name: '',
@@ -22,6 +23,7 @@ function CampaignEdit() {
     html_content: '',
     text_content: '',
     list_ids: [],
+    smtp_ids: [],
     send_rate: 0,
     track_opens: true,
     track_clicks: true
@@ -31,6 +33,7 @@ function CampaignEdit() {
     fetchLists()
     fetchGroups()
     fetchTemplates()
+    fetchSmtps()
     if (id) {
       fetchCampaign()
     }
@@ -68,6 +71,17 @@ function CampaignEdit() {
     }
   }
 
+  const fetchSmtps = async () => {
+    try {
+      const response = await api.get('/smtp')
+      // Only show active SMTPs
+      const activeSMTPs = (response.data.data || []).filter(s => s.active)
+      setSmtps(activeSMTPs)
+    } catch (error) {
+      console.log('No SMTPs:', error)
+    }
+  }
+
   const handleTemplateSelect = async (templateId) => {
     if (!templateId) {
       setSelectedTemplate('')
@@ -101,7 +115,9 @@ function CampaignEdit() {
       const data = response.data
       // Handle both list_ids array and legacy list_id
       const listIds = data.list_ids || (data.list_id ? [data.list_id] : [])
-      setForm({ ...data, list_ids: listIds })
+      // Handle smtp_ids
+      const smtpIds = data.smtp_ids || []
+      setForm({ ...data, list_ids: listIds, smtp_ids: smtpIds })
     } catch (error) {
       toast.error('Erro ao carregar campanha')
       navigate('/campaigns')
@@ -151,6 +167,27 @@ function CampaignEdit() {
         return { ...prev, list_ids: [...prev.list_ids, listId] }
       }
     })
+  }
+
+  const toggleSmtp = (smtpId) => {
+    setForm(prev => {
+      const isSelected = prev.smtp_ids.includes(smtpId)
+      if (isSelected) {
+        return { ...prev, smtp_ids: prev.smtp_ids.filter(id => id !== smtpId) }
+      } else {
+        return { ...prev, smtp_ids: [...prev.smtp_ids, smtpId] }
+      }
+    })
+  }
+
+  const selectAllSmtps = () => {
+    const allIds = smtps.map(s => s.id)
+    const allSelected = allIds.every(id => form.smtp_ids.includes(id))
+    if (allSelected) {
+      setForm(prev => ({ ...prev, smtp_ids: [] }))
+    } else {
+      setForm(prev => ({ ...prev, smtp_ids: allIds }))
+    }
   }
 
   const toggleGroup = (groupId) => {
@@ -404,6 +441,77 @@ function CampaignEdit() {
                 </div>
               )}
             </div>
+          </div>
+
+          {/* SMTP Selection */}
+          <div className="mt-6">
+            <div className="flex items-center justify-between mb-3">
+              <label className="label mb-0 flex items-center gap-2">
+                <Server className="w-4 h-4" />
+                Servidores SMTP
+              </label>
+              <div className="flex items-center gap-2">
+                {form.smtp_ids.length > 0 && (
+                  <span className="text-sm text-green-600 font-medium">
+                    {form.smtp_ids.length} SMTP(s) selecionado(s)
+                  </span>
+                )}
+                {smtps.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={selectAllSmtps}
+                    className={`text-xs px-2 py-1 rounded ${
+                      form.smtp_ids.length === smtps.length
+                        ? 'bg-green-500 text-white'
+                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    }`}
+                  >
+                    {form.smtp_ids.length === smtps.length ? 'Desmarcar todos' : 'Selecionar todos'}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="border border-gray-200 rounded-lg max-h-60 overflow-y-auto">
+              {smtps.length === 0 ? (
+                <div className="p-4 text-center text-gray-500 text-sm">
+                  Nenhum SMTP ativo disponivel
+                </div>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {smtps.map(smtp => (
+                    <label
+                      key={smtp.id}
+                      className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={form.smtp_ids.includes(smtp.id)}
+                        onChange={() => toggleSmtp(smtp.id)}
+                        className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                      />
+                      <Server className="w-4 h-4 text-gray-400" />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium">{smtp.name || smtp.host}</div>
+                        <div className="text-xs text-gray-500">
+                          {smtp.host}:{smtp.port} - {smtp.from_email}
+                        </div>
+                      </div>
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        smtp.status === 'online'
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-yellow-100 text-yellow-700'
+                      }`}>
+                        {smtp.status}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              Deixe vazio para usar todos os SMTPs ativos. Selecione especificos para limitar quais serao usados.
+            </p>
           </div>
 
           <div className="flex gap-6 mt-4">
