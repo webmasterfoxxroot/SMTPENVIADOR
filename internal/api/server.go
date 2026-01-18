@@ -22,7 +22,7 @@ import (
 type Server struct {
 	app    *fiber.App
 	cfg    *config.Config
-	db     *sql.DB          // PostgreSQL for relational data
+	db     *sql.DB            // PostgreSQL for relational data
 	ch     *clickhouse.Client // ClickHouse for bulk data (emails, blacklist)
 	queue  *queue.Manager
 	engine *engine.Engine
@@ -32,8 +32,8 @@ type Server struct {
 func NewServer(cfg *config.Config, db *sql.DB, ch *clickhouse.Client, q *queue.Manager, eng *engine.Engine) *Server {
 	app := fiber.New(fiber.Config{
 		AppName:      "SMTPENVIADOR API",
-		ReadTimeout:  10 * time.Minute, // 10 min for large file uploads
-		WriteTimeout: 10 * time.Minute, // 10 min for large file uploads
+		ReadTimeout:  10 * time.Minute,  // 10 min for large file uploads
+		WriteTimeout: 10 * time.Minute,  // 10 min for large file uploads
 		BodyLimit:    500 * 1024 * 1024, // 500MB for list uploads
 	})
 
@@ -292,6 +292,7 @@ func (s *Server) setupRoutes() {
 	campaigns.Post("/:id/start", s.startCampaign)
 	campaigns.Post("/:id/pause", s.pauseCampaign)
 	campaigns.Post("/:id/resume", s.resumeCampaign)
+	campaigns.Post("/:id/requeue", s.requeueCampaign)
 	campaigns.Post("/:id/cancel", s.cancelCampaign)
 	campaigns.Post("/:id/cancel-auto-start", s.cancelAutoStart)
 	campaigns.Get("/:id/stats", s.getCampaignStats)
