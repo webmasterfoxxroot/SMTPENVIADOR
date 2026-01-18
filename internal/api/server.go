@@ -305,6 +305,8 @@ func (s *Server) setupRoutes() {
 	campaigns.Get("/:id/export", s.exportCampaignCSV)
 	campaigns.Get("/:id/export-emails", s.exportCampaignEmails)
 	campaigns.Get("/:id/details", s.getCampaignDetails)
+	campaigns.Get("/:id/tracking-stats", s.getTrackingStats)
+	campaigns.Get("/:id/tracking-stats/cities/:countryCode", s.getTrackingCityStats)
 
 	// Blacklist
 	blacklist := protected.Group("/blacklist")
