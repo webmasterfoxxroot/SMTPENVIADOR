@@ -164,20 +164,11 @@ func (m *Manager) GetStats() (map[string]int64, error) {
 }
 
 // CheckRateLimit checks if we can send from an SMTP (per-minute limit)
+// Returns true if under limit, false if at/over limit
 func (m *Manager) CheckRateLimit(smtpID string, maxPerMinute int) bool {
 	key := fmt.Sprintf("%s:%s:%d", RateLimitKey, smtpID, time.Now().Unix()/60)
-
-	count, err := m.client.Incr(m.ctx, key).Result()
-	if err != nil {
-		return false
-	}
-
-	// Set expiry on first increment
-	if count == 1 {
-		m.client.Expire(m.ctx, key, 2*time.Minute)
-	}
-
-	return count <= int64(maxPerMinute)
+	count, _ := m.client.Get(m.ctx, key).Int64()
+	return count < int64(maxPerMinute)
 }
 
 // CheckRateLimitHourly checks if we can send from an SMTP (per-hour limit)
@@ -185,30 +176,34 @@ func (m *Manager) CheckRateLimitHourly(smtpID string, maxPerHour int) bool {
 	if maxPerHour <= 0 {
 		return true // No hourly limit
 	}
-
 	key := fmt.Sprintf("%s:%s:hour:%d", RateLimitKey, smtpID, time.Now().Unix()/3600)
-
-	count, err := m.client.Incr(m.ctx, key).Result()
-	if err != nil {
-		return false
-	}
-
-	// Set expiry on first increment
-	if count == 1 {
-		m.client.Expire(m.ctx, key, 2*time.Hour)
-	}
-
-	return count <= int64(maxPerHour)
+	count, _ := m.client.Get(m.ctx, key).Int64()
+	return count < int64(maxPerHour)
 }
 
-// CheckBothRateLimits checks both per-minute and per-hour limits
+// CheckBothRateLimits checks both per-minute and per-hour limits (read-only)
 func (m *Manager) CheckBothRateLimits(smtpID string, maxPerMinute, maxPerHour int) bool {
-	// Check per-minute first (more likely to hit)
 	if !m.CheckRateLimit(smtpID, maxPerMinute) {
 		return false
 	}
-	// Check per-hour
 	return m.CheckRateLimitHourly(smtpID, maxPerHour)
+}
+
+// IncrementRateLimit increments the rate limit counters after successful send
+func (m *Manager) IncrementRateLimit(smtpID string) {
+	// Increment per-minute counter
+	keyMin := fmt.Sprintf("%s:%s:%d", RateLimitKey, smtpID, time.Now().Unix()/60)
+	count, _ := m.client.Incr(m.ctx, keyMin).Result()
+	if count == 1 {
+		m.client.Expire(m.ctx, keyMin, 2*time.Minute)
+	}
+
+	// Increment per-hour counter
+	keyHour := fmt.Sprintf("%s:%s:hour:%d", RateLimitKey, smtpID, time.Now().Unix()/3600)
+	count, _ = m.client.Incr(m.ctx, keyHour).Result()
+	if count == 1 {
+		m.client.Expire(m.ctx, keyHour, 2*time.Hour)
+	}
 }
 
 // GetSMTPSentCount returns how many emails sent from an SMTP in current minute
