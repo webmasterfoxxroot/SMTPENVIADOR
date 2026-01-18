@@ -27,6 +27,68 @@ type EmailListRequest struct {
 
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
 
+// detectEmailColumn detects which column contains email addresses
+// First checks header names, then scans data to find valid emails
+func detectEmailColumn(line string, delimiter string, isHeader bool) int {
+	parts := strings.Split(line, delimiter)
+
+	// If this is a header line, check column names
+	if isHeader {
+		emailHeaders := []string{"email", "e-mail", "e_mail", "mail", "emailaddress", "email_address", "correo", "endereco_email"}
+		for i, part := range parts {
+			cleaned := strings.ToLower(strings.TrimSpace(part))
+			// Remove quotes if present
+			cleaned = strings.Trim(cleaned, "\"'")
+			for _, header := range emailHeaders {
+				if cleaned == header {
+					return i
+				}
+			}
+		}
+	}
+
+	// Scan for column containing valid email
+	for i, part := range parts {
+		cleaned := strings.ToLower(strings.TrimSpace(part))
+		// Remove quotes if present
+		cleaned = strings.Trim(cleaned, "\"'")
+		if emailRegex.MatchString(cleaned) {
+			return i
+		}
+	}
+
+	// Default to first column
+	return 0
+}
+
+// parseCSVLine handles CSV parsing with quoted fields
+func parseCSVLine(line string, delimiter string) []string {
+	// Simple case: no quotes
+	if !strings.Contains(line, "\"") {
+		return strings.Split(line, delimiter)
+	}
+
+	// Handle quoted fields
+	var parts []string
+	var current strings.Builder
+	inQuotes := false
+
+	for i := 0; i < len(line); i++ {
+		char := line[i]
+		if char == '"' {
+			inQuotes = !inQuotes
+		} else if string(char) == delimiter && !inQuotes {
+			parts = append(parts, current.String())
+			current.Reset()
+		} else {
+			current.WriteByte(char)
+		}
+	}
+	parts = append(parts, current.String())
+
+	return parts
+}
+
 // resumeOrphanedImportJobs checks for import jobs that were interrupted by server restart
 // and resumes them automatically
 func (s *Server) resumeOrphanedImportJobs() {
@@ -588,11 +650,12 @@ func (s *Server) uploadEmails(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "No file uploaded"})
 	}
 
-	// Get column mappings
-	emailCol := c.FormValue("email_column", "0")
-	nameCol := c.FormValue("name_column", "1")
+	// Get column mappings (auto = auto-detect)
+	emailCol := c.FormValue("email_column", "auto")
+	nameCol := c.FormValue("name_column", "")
 	delimiter := c.FormValue("delimiter", ",")
 	hasHeader := c.FormValue("has_header", "true") == "true"
+	autoDetectEmail := emailCol == "auto" || emailCol == ""
 
 	// Open file
 	f, err := file.Open()
@@ -651,9 +714,15 @@ func (s *Server) uploadEmails(c *fiber.Ctx) error {
 		blRows.Close()
 	}
 
-	// Parse column indexes
-	emailIdx := parseColIndex(emailCol)
-	nameIdx := parseColIndex(nameCol)
+	// Parse column indexes (will be updated if auto-detect)
+	emailIdx := 0
+	if !autoDetectEmail {
+		emailIdx = parseColIndex(emailCol)
+	}
+	nameIdx := -1
+	if nameCol != "" {
+		nameIdx = parseColIndex(nameCol)
+	}
 
 	// Batch size for commits (process 10k at a time)
 	const batchSize = 10000
@@ -675,29 +744,37 @@ func (s *Server) uploadEmails(c *fiber.Ctx) error {
 	for scanner.Scan() {
 		lineNum++
 
-		// Skip header
-		if lineNum == 1 && hasHeader {
-			continue
-		}
-
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
 
-		// Parse line
-		parts := strings.Split(line, delimiter)
+		// Auto-detect email column from first line
+		if lineNum == 1 && autoDetectEmail {
+			emailIdx = detectEmailColumn(line, delimiter, hasHeader)
+			log.Printf("Auto-detected email column at index %d", emailIdx)
+		}
+
+		// Skip header
+		if lineNum == 1 && hasHeader {
+			continue
+		}
+
+		// Parse line (handles quoted CSV fields)
+		parts := parseCSVLine(line, delimiter)
 		if len(parts) == 0 {
 			continue
 		}
 
-		// Get email
+		// Get email from detected/specified column
 		var email, name string
 		if emailIdx < len(parts) {
 			email = strings.TrimSpace(parts[emailIdx])
+			email = strings.Trim(email, "\"'")
 		}
 		if nameIdx >= 0 && nameIdx < len(parts) {
 			name = strings.TrimSpace(parts[nameIdx])
+			name = strings.Trim(name, "\"'")
 		}
 
 		// Validate email
@@ -1142,30 +1219,46 @@ func (s *Server) processImportJobDB(jobID string) {
 	lastProgressLog := time.Now()
 	lastProgressUpdate := time.Now()
 
+	// Auto-detect email column from first line
+	emailColIdx := 0
+
 	for scanner.Scan() {
 		lineNum++
-
-		// Skip header
-		if lineNum == 1 && hasHeader {
-			continue
-		}
 
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
 
-		// Parse line
-		parts := strings.Split(line, delimiter)
+		// First line: detect email column
+		if lineNum == 1 {
+			emailColIdx = detectEmailColumn(line, delimiter, hasHeader)
+			log.Printf("Import job %s: detected email column at index %d", jobID, emailColIdx)
+
+			// Skip if this is a header line
+			if hasHeader {
+				continue
+			}
+		}
+
+		// Parse line (handles quoted CSV fields)
+		parts := parseCSVLine(line, delimiter)
 		if len(parts) == 0 {
 			continue
 		}
 
-		// Get email (first column)
+		// Get email from detected column
 		var email, name string
-		email = strings.TrimSpace(parts[0])
-		if len(parts) > 1 {
-			name = strings.TrimSpace(parts[1])
+		if emailColIdx < len(parts) {
+			email = strings.TrimSpace(parts[emailColIdx])
+			// Remove quotes if present
+			email = strings.Trim(email, "\"'")
+		}
+		// Try to get name from adjacent column if exists
+		nameColIdx := emailColIdx + 1
+		if nameColIdx < len(parts) {
+			name = strings.TrimSpace(parts[nameColIdx])
+			name = strings.Trim(name, "\"'")
 		}
 
 		// Validate email
