@@ -268,35 +268,35 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 		return
 	}
 
-	// Try to get an available SMTP (with rate limit capacity)
+	// Get all active SMTPs and find the one with most remaining capacity
 	var smtp *SMTPConnection
 	var sender *SMTPSender
-	maxAttempts := w.smtpPool.GetActiveCount()
-	if maxAttempts == 0 {
-		maxAttempts = 1
-	}
+	allSMTPs := w.smtpPool.GetAllActiveSMTPs()
 
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		smtp = w.smtpPool.GetNextSMTP()
-		if smtp == nil {
-			break
+	if len(allSMTPs) > 0 {
+		var bestCapacity int64 = -1
+
+		for _, candidate := range allSMTPs {
+			// Check rate limits for THIS queue type (campaign/warmup have separate limits)
+			if !w.queue.CheckBothRateLimitsForType(candidate.ID, candidate.MaxPerMinute, candidate.MaxPerHour, queueType) {
+				continue // Skip - no capacity
+			}
+
+			// Get remaining capacity for this SMTP
+			capacity := w.queue.GetSMTPRemainingCapacity(candidate.ID, candidate.MaxPerMinute, queueType)
+
+			// Choose SMTP with most remaining capacity
+			if capacity > bestCapacity {
+				// Get sender for this SMTP
+				candidateSender := candidate.GetNextSender()
+				if candidateSender == nil {
+					continue
+				}
+				bestCapacity = capacity
+				smtp = candidate
+				sender = candidateSender
+			}
 		}
-
-		// Check rate limits for THIS queue type (campaign/warmup have separate limits)
-		if !w.queue.CheckBothRateLimitsForType(smtp.ID, smtp.MaxPerMinute, smtp.MaxPerHour, queueType) {
-			smtp = nil // Try another SMTP
-			continue
-		}
-
-		// Get sender for this SMTP
-		sender = smtp.GetNextSender()
-		if sender == nil {
-			smtp = nil
-			continue
-		}
-
-		// Found a valid SMTP with capacity and sender
-		break
 	}
 
 	// No SMTP available with capacity
@@ -306,7 +306,15 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 		}
 		job.Retries++
 		w.pushToQueue(job, queueType)
-		time.Sleep(1 * time.Second) // Wait 1s before retrying
+		// Smart wait: only wait until next minute boundary when rate limits reset
+		// Calculate time until next minute (when per-minute limits reset)
+		now := time.Now()
+		nextMinute := now.Truncate(time.Minute).Add(time.Minute)
+		waitTime := nextMinute.Sub(now)
+		if waitTime > 100*time.Millisecond {
+			waitTime = 100 * time.Millisecond // Max wait 100ms, let other workers try
+		}
+		time.Sleep(waitTime)
 		return
 	}
 

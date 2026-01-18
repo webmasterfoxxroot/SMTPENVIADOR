@@ -48,12 +48,32 @@ type SMTPConnection struct {
 	Active         bool
 	Status         string
 	Senders        []SMTPSender // List of senders for this SMTP
-	client         *smtp.Client
 	mu             sync.Mutex
 	lastUsed       time.Time
 	sentCount      int64
 	senderIndex    int // For rotating senders
+	// Connection pool
+	connPool     chan *persistentConn
+	poolSize     int
+	poolInitOnce sync.Once
 }
+
+// persistentConn holds a persistent SMTP connection
+type persistentConn struct {
+	client    *smtp.Client
+	conn      net.Conn
+	createdAt time.Time
+	sendCount int
+	tlsMode   string // Track TLS mode for proper reconnection
+}
+
+const (
+	// Pool configuration - optimized for high volume sending
+	defaultPoolSize    = 10                      // Default connections per SMTP (can be overridden by MaxConnections)
+	maxConnAge         = 30 * time.Minute        // Max age before forcing reconnect (30 min)
+	maxSendsPerConn    = 10000                   // Max sends per connection (10k emails before reconnect)
+	connGetTimeout     = 50 * time.Millisecond   // How long to wait for a pooled conn
+)
 
 // SendParams holds email parameters
 type SendParams struct {
@@ -180,6 +200,20 @@ func (p *SMTPPool) GetNextSMTP() *SMTPConnection {
 	return nil
 }
 
+// GetAllActiveSMTPs returns all active SMTPs for smart selection
+func (p *SMTPPool) GetAllActiveSMTPs() []*SMTPConnection {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	result := make([]*SMTPConnection, 0, len(p.servers))
+	for _, server := range p.servers {
+		if server.Active && server.Status == "online" && len(server.Senders) > 0 {
+			result = append(result, server)
+		}
+	}
+	return result
+}
+
 // GetNextSender returns the next sender for this SMTP (round-robin)
 func (s *SMTPConnection) GetNextSender() *SMTPSender {
 	s.mu.Lock()
@@ -279,13 +313,34 @@ func (p *SMTPPool) CloseAll() {
 	}
 }
 
-// Send sends an email through this SMTP connection
+// Send sends an email through this SMTP connection using pooled connections
 func (s *SMTPConnection) Send(params SendParams) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Build message first (no lock needed)
+	msg := s.buildMessage(params)
 
-	addr := fmt.Sprintf("%s:%d", s.Host, s.Port)
+	// Get a connection from the pool
+	pc, err := s.getPooledConn()
+	if err != nil {
+		return fmt.Errorf("failed to get connection: %w", err)
+	}
 
+	// Send the message
+	err = s.sendMessagePooled(pc, params.From, params.To, msg)
+	if err != nil {
+		// Connection failed, close it and don't return to pool
+		if pc.client != nil {
+			pc.client.Quit()
+		}
+		return err
+	}
+
+	// Return connection to pool for reuse
+	s.releaseConn(pc)
+	return nil
+}
+
+// buildMessage builds the email message
+func (s *SMTPConnection) buildMessage(params SendParams) []byte {
 	// Generate unique boundary and message ID (ASCII only)
 	boundary := fmt.Sprintf("=_%d_%d_=", time.Now().UnixNano(), time.Now().Unix())
 	messageID := fmt.Sprintf("<%d.%d@%s>", time.Now().UnixNano(), time.Now().Unix(), s.Host)
@@ -335,15 +390,56 @@ func (s *SMTPConnection) Send(params SendParams) error {
 	message += encodeBase64WithLineBreaks([]byte(params.HTMLContent))
 	message += "--" + boundary + "--\r\n"
 
-	// Handle different TLS modes
-	switch s.TLSMode {
-	case "tls":
-		return s.sendWithImplicitTLS(addr, params.From, params.To, []byte(message))
-	case "starttls":
-		return s.sendWithSTARTTLS(addr, params.From, params.To, []byte(message))
-	default: // "none" or empty
-		return s.sendPlain(addr, params.From, params.To, []byte(message))
+	return []byte(message)
+}
+
+// sendMessagePooled sends email using a pooled connection (no QUIT, uses RSET)
+func (s *SMTPConnection) sendMessagePooled(pc *persistentConn, from, to string, msg []byte) error {
+	client := pc.client
+	if client == nil {
+		return fmt.Errorf("no client connection")
 	}
+
+	// Send MAIL FROM without SMTPUTF8 extension
+	id, err := client.Text.Cmd("MAIL FROM:<%s>", from)
+	if err != nil {
+		return fmt.Errorf("failed to send MAIL FROM: %w", err)
+	}
+	client.Text.StartResponse(id)
+	code, message, err := client.Text.ReadResponse(250)
+	client.Text.EndResponse(id)
+	if err != nil {
+		return fmt.Errorf("MAIL FROM failed (%d): %s - %w", code, message, err)
+	}
+
+	// Send RCPT TO
+	id, err = client.Text.Cmd("RCPT TO:<%s>", to)
+	if err != nil {
+		return fmt.Errorf("failed to send RCPT TO: %w", err)
+	}
+	client.Text.StartResponse(id)
+	code, message, err = client.Text.ReadResponse(250)
+	client.Text.EndResponse(id)
+	if err != nil {
+		return fmt.Errorf("RCPT TO failed (%d): %s - %w", code, message, err)
+	}
+
+	// Send DATA command and message body
+	w, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("failed to get data writer: %w", err)
+	}
+
+	if _, err := w.Write(msg); err != nil {
+		return fmt.Errorf("failed to write message: %w", err)
+	}
+
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("failed to close writer: %w", err)
+	}
+
+	// DON'T call Quit() - connection will be reused
+	return nil
 }
 
 // sendWithImplicitTLS sends email using implicit TLS (port 465)
@@ -556,15 +652,228 @@ func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
 	return nil, nil
 }
 
-// Close closes the SMTP connection
+// Close closes all pooled SMTP connections
 func (s *SMTPConnection) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.client != nil {
-		s.client.Close()
-		s.client = nil
+	// Close all connections in the pool
+	if s.connPool != nil {
+		close(s.connPool)
+		for pc := range s.connPool {
+			if pc.client != nil {
+				pc.client.Quit()
+			}
+		}
+		s.connPool = nil
 	}
+}
+
+// initPool initializes the connection pool
+func (s *SMTPConnection) initPool() {
+	s.poolInitOnce.Do(func() {
+		s.poolSize = defaultPoolSize
+		if s.MaxConnections > 0 {
+			s.poolSize = s.MaxConnections
+		}
+		s.connPool = make(chan *persistentConn, s.poolSize)
+		log.Printf("📦 Initialized connection pool for SMTP %s with %d connections", s.Name, s.poolSize)
+	})
+}
+
+// getPooledConn gets a connection from the pool or creates a new one
+func (s *SMTPConnection) getPooledConn() (*persistentConn, error) {
+	s.initPool()
+
+	// Try to get an existing connection from the pool
+	select {
+	case pc := <-s.connPool:
+		// Check if connection is still valid
+		if pc != nil && s.isConnValid(pc) {
+			return pc, nil
+		}
+		// Connection expired or invalid, close it and create new
+		if pc != nil && pc.client != nil {
+			pc.client.Quit()
+		}
+	case <-time.After(connGetTimeout):
+		// Pool empty, create new connection
+	}
+
+	// Create a new connection
+	return s.createConnection()
+}
+
+// releaseConn returns a connection to the pool
+func (s *SMTPConnection) releaseConn(pc *persistentConn) {
+	if pc == nil || pc.client == nil {
+		return
+	}
+
+	// Check if connection is still reusable
+	if !s.isConnValid(pc) {
+		pc.client.Quit()
+		return
+	}
+
+	// Reset connection for next use
+	if err := s.resetConnection(pc); err != nil {
+		pc.client.Quit()
+		return
+	}
+
+	pc.sendCount++
+
+	// Try to return to pool
+	select {
+	case s.connPool <- pc:
+		// Returned to pool
+	default:
+		// Pool full, close connection
+		pc.client.Quit()
+	}
+}
+
+// isConnValid checks if a connection is still valid for reuse
+func (s *SMTPConnection) isConnValid(pc *persistentConn) bool {
+	if pc.client == nil {
+		return false
+	}
+	if time.Since(pc.createdAt) > maxConnAge {
+		return false
+	}
+	if pc.sendCount >= maxSendsPerConn {
+		return false
+	}
+	return true
+}
+
+// resetConnection sends RSET to prepare for next message
+func (s *SMTPConnection) resetConnection(pc *persistentConn) error {
+	if pc.client == nil {
+		return fmt.Errorf("no client")
+	}
+	return pc.client.Reset()
+}
+
+// createConnection creates a new SMTP connection based on TLS mode
+func (s *SMTPConnection) createConnection() (*persistentConn, error) {
+	addr := fmt.Sprintf("%s:%d", s.Host, s.Port)
+
+	switch s.TLSMode {
+	case "tls":
+		return s.createImplicitTLSConn(addr)
+	case "starttls":
+		return s.createSTARTTLSConn(addr)
+	default:
+		return s.createPlainConn(addr)
+	}
+}
+
+// createImplicitTLSConn creates a connection with implicit TLS (port 465)
+func (s *SMTPConnection) createImplicitTLSConn(addr string) (*persistentConn, error) {
+	tlsConfig := &tls.Config{
+		ServerName:         s.Host,
+		InsecureSkipVerify: true,
+	}
+
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", addr, tlsConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect with TLS: %w", err)
+	}
+
+	client, err := smtp.NewClient(conn, s.Host)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create client: %w", err)
+	}
+
+	if err := s.authenticate(client); err != nil {
+		client.Close()
+		return nil, err
+	}
+
+	return &persistentConn{
+		client:    client,
+		conn:      conn,
+		createdAt: time.Now(),
+		sendCount: 0,
+		tlsMode:   "tls",
+	}, nil
+}
+
+// createSTARTTLSConn creates a connection with STARTTLS
+func (s *SMTPConnection) createSTARTTLSConn(addr string) (*persistentConn, error) {
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect: %w", err)
+	}
+
+	client, err := smtp.NewClient(conn, s.Host)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create client: %w", err)
+	}
+
+	if err := client.Hello("[127.0.0.1]"); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to say hello: %w", err)
+	}
+
+	tlsConfig := &tls.Config{
+		ServerName:         s.Host,
+		InsecureSkipVerify: true,
+	}
+
+	if err := client.StartTLS(tlsConfig); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to start TLS: %w", err)
+	}
+
+	if err := s.authenticate(client); err != nil {
+		client.Close()
+		return nil, err
+	}
+
+	return &persistentConn{
+		client:    client,
+		conn:      conn,
+		createdAt: time.Now(),
+		sendCount: 0,
+		tlsMode:   "starttls",
+	}, nil
+}
+
+// createPlainConn creates a plain connection without TLS
+func (s *SMTPConnection) createPlainConn(addr string) (*persistentConn, error) {
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect: %w", err)
+	}
+
+	client, err := smtp.NewClient(conn, s.Host)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create client: %w", err)
+	}
+
+	if err := client.Hello("[127.0.0.1]"); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to say hello: %w", err)
+	}
+
+	if err := s.authenticate(client); err != nil {
+		client.Close()
+		return nil, err
+	}
+
+	return &persistentConn{
+		client:    client,
+		conn:      conn,
+		createdAt: time.Now(),
+		sendCount: 0,
+		tlsMode:   "none",
+	}, nil
 }
 
 // formatAddress formats email address with name (RFC 2047 encoded)
