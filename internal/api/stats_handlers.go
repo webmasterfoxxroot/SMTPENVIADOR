@@ -635,16 +635,23 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 		}
 
 		// Get stats by email client
+		// Include all opens - show "Navegador Web" for opens without detected email client
 		emailClientRows, err := s.db.Query(`
 			SELECT
-				COALESCE(te.email_client, 'Unknown') as email_client,
+				CASE
+					WHEN te.email_client IS NULL OR te.email_client = '' THEN 'Navegador Web'
+					ELSE te.email_client
+				END as email_client,
 				COUNT(*) as total,
 				COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
 				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 			FROM tracking_events te
 			JOIN campaigns c ON te.campaign_id = c.id
-			WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL) AND te.email_client IS NOT NULL AND te.email_client != ''
-			GROUP BY te.email_client
+			WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+			GROUP BY CASE
+				WHEN te.email_client IS NULL OR te.email_client = '' THEN 'Navegador Web'
+				ELSE te.email_client
+			END
 			ORDER BY total DESC
 			LIMIT 10
 		`, userID)
@@ -820,6 +827,50 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 				}
 			}
 			result["os"] = osList
+		}
+
+		// Fallback: Parse user_agent to extract email client
+		emailClientRows, err := s.db.Query(`
+			SELECT
+				CASE
+					WHEN te.user_agent ILIKE '%Thunderbird%' THEN 'Mozilla Thunderbird'
+					WHEN te.user_agent ILIKE '%Outlook%' THEN 'Microsoft Outlook'
+					WHEN te.user_agent ILIKE '%Apple-Mail%' OR te.user_agent ILIKE '%AppleMail%' THEN 'Apple Mail'
+					WHEN te.user_agent ILIKE '%Gmail%' THEN 'Gmail'
+					WHEN te.user_agent ILIKE '%Yahoo%' THEN 'Yahoo Mail'
+					WHEN te.user_agent ILIKE '%Spark%' THEN 'Spark'
+					WHEN te.user_agent ILIKE '%Airmail%' THEN 'Airmail'
+					WHEN te.user_agent ILIKE '%Mailbird%' THEN 'Mailbird'
+					WHEN te.user_agent ILIKE '%eM Client%' THEN 'eM Client'
+					WHEN te.user_agent ILIKE '%Postbox%' THEN 'Postbox'
+					ELSE 'Navegador Web'
+				END as email_client,
+				COUNT(*) as total,
+				COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
+				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
+			FROM tracking_events te
+			JOIN campaigns c ON te.campaign_id = c.id
+			WHERE c.user_id = $1 AND `+dateFilter+`
+			GROUP BY email_client
+			ORDER BY total DESC
+			LIMIT 10
+		`, userID)
+		if err == nil {
+			defer emailClientRows.Close()
+			var emailClients []map[string]interface{}
+			for emailClientRows.Next() {
+				var emailClient string
+				var total, opens, clicks int
+				if emailClientRows.Scan(&emailClient, &total, &opens, &clicks) == nil {
+					emailClients = append(emailClients, map[string]interface{}{
+						"email_client": emailClient,
+						"total":        total,
+						"opens":        opens,
+						"clicks":       clicks,
+					})
+				}
+			}
+			result["email_clients"] = emailClients
 		}
 
 		// Fallback: Add empty regions if not available
