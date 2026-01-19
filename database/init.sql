@@ -191,13 +191,43 @@ CREATE TABLE tracking_events (
     link_url TEXT,
     ip_address VARCHAR(45),
     user_agent TEXT,
+    -- Geolocation fields
     country VARCHAR(100),
+    country_code VARCHAR(10), -- ISO 3166-1 alpha-2 code (e.g., BR, US)
+    region VARCHAR(100),
     city VARCHAR(100),
+    lat DECIMAL(10, 8),
+    lon DECIMAL(11, 8),
+    timezone VARCHAR(100),
+    isp VARCHAR(255),
+    -- Device/browser fields
+    browser VARCHAR(100),
+    browser_version VARCHAR(50),
+    os VARCHAR(100),
+    os_version VARCHAR(50),
+    device VARCHAR(100),
+    device_type VARCHAR(50), -- desktop, mobile, tablet, bot
+    email_client VARCHAR(100),
+    -- Bot detection fields
+    is_bot BOOLEAN DEFAULT false,
+    is_suspicious BOOLEAN DEFAULT false,
+    bot_type VARCHAR(100), -- search_engine, social_media, security_scanner, etc
+    bot_name VARCHAR(100), -- Googlebot, Barracuda, etc
+    bot_score INTEGER DEFAULT 0, -- 0-100 (higher = more likely bot)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_tracking_events_campaign_id ON tracking_events(campaign_id);
 CREATE INDEX idx_tracking_events_event_type ON tracking_events(event_type);
+CREATE INDEX idx_tracking_events_country ON tracking_events(country);
+CREATE INDEX idx_tracking_events_country_code ON tracking_events(country_code);
+CREATE INDEX idx_tracking_events_city ON tracking_events(city);
+CREATE INDEX idx_tracking_events_device_type ON tracking_events(device_type);
+CREATE INDEX idx_tracking_events_browser ON tracking_events(browser);
+CREATE INDEX idx_tracking_events_is_bot ON tracking_events(is_bot);
+CREATE INDEX idx_tracking_events_created_at ON tracking_events(created_at);
+CREATE INDEX idx_tracking_events_campaign_bot ON tracking_events(campaign_id, is_bot);
+CREATE INDEX idx_tracking_events_campaign_country ON tracking_events(campaign_id, country);
 
 -- Blacklist table
 CREATE TABLE blacklist (
