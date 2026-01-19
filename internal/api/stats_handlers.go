@@ -437,6 +437,7 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'tracking_events' AND column_name = 'browser')`).Scan(&hasExtendedColumns)
 
 	// Get stats by country (top 10) - country column always exists
+	// Exclude events without real geolocation data (Email Proxy, etc.)
 	countryRows, err := s.db.Query(`
 		SELECT
 			COALESCE(te.country, 'Unknown') as country,
@@ -447,6 +448,8 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 		FROM tracking_events te
 		JOIN campaigns c ON te.campaign_id = c.id
 		WHERE c.user_id = $1 AND `+dateFilter+`
+			AND te.country IS NOT NULL AND te.country != ''
+			AND (te.is_bot = false OR te.is_bot IS NULL)
 		GROUP BY te.country
 		ORDER BY total DESC
 		LIMIT 10
@@ -471,6 +474,7 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 	}
 
 	// Get stats by city (top 10) - city column always exists
+	// Exclude events without real geolocation data (Email Proxy, etc.)
 	cityRows, err := s.db.Query(`
 		SELECT
 			COALESCE(te.city, 'Unknown') as city,
@@ -481,6 +485,8 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 		FROM tracking_events te
 		JOIN campaigns c ON te.campaign_id = c.id
 		WHERE c.user_id = $1 AND `+dateFilter+`
+			AND te.city IS NOT NULL AND te.city != ''
+			AND (te.is_bot = false OR te.is_bot IS NULL)
 		GROUP BY te.city, te.country
 		ORDER BY total DESC
 		LIMIT 10
@@ -506,6 +512,7 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 
 	if hasExtendedColumns {
 		// Get stats by region/state (top 10)
+		// Exclude events without real geolocation data (Email Proxy, etc.)
 		regionRows, err := s.db.Query(`
 			SELECT
 				COALESCE(te.country, 'Unknown') as country,
@@ -515,7 +522,9 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 			FROM tracking_events te
 			JOIN campaigns c ON te.campaign_id = c.id
-			WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+			WHERE c.user_id = $1 AND `+dateFilter+`
+				AND te.region IS NOT NULL AND te.region != ''
+				AND (te.is_bot = false OR te.is_bot IS NULL)
 			GROUP BY te.country, te.region
 			ORDER BY total DESC
 			LIMIT 10
@@ -540,6 +549,7 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 		}
 
 		// Get stats by browser (top 10)
+		// Exclude Email Proxy (no real browser data)
 		browserRows, err := s.db.Query(`
 			SELECT
 				COALESCE(te.browser, 'Unknown') as browser,
@@ -548,7 +558,9 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 			FROM tracking_events te
 			JOIN campaigns c ON te.campaign_id = c.id
-			WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+			WHERE c.user_id = $1 AND `+dateFilter+`
+				AND (te.is_bot = false OR te.is_bot IS NULL)
+				AND te.browser IS NOT NULL AND te.browser != '' AND te.browser != 'Email Proxy' AND te.browser != 'Unknown'
 			GROUP BY te.browser
 			ORDER BY total DESC
 			LIMIT 10
@@ -572,6 +584,7 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 		}
 
 		// Get stats by device type
+		// Exclude unknown device types (Email Proxy, etc.)
 		deviceRows, err := s.db.Query(`
 			SELECT
 				COALESCE(te.device_type, 'unknown') as device_type,
@@ -580,7 +593,9 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 			FROM tracking_events te
 			JOIN campaigns c ON te.campaign_id = c.id
-			WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+			WHERE c.user_id = $1 AND `+dateFilter+`
+				AND (te.is_bot = false OR te.is_bot IS NULL)
+				AND te.device_type IS NOT NULL AND te.device_type != '' AND te.device_type != 'unknown'
 			GROUP BY te.device_type
 			ORDER BY total DESC
 		`, userID)
@@ -603,6 +618,7 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 		}
 
 		// Get stats by OS
+		// Exclude unknown OS (Email Proxy, etc.)
 		osRows, err := s.db.Query(`
 			SELECT
 				COALESCE(te.os, 'Unknown') as os,
@@ -611,7 +627,9 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 			FROM tracking_events te
 			JOIN campaigns c ON te.campaign_id = c.id
-			WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+			WHERE c.user_id = $1 AND `+dateFilter+`
+				AND (te.is_bot = false OR te.is_bot IS NULL)
+				AND te.os IS NOT NULL AND te.os != '' AND te.os != 'Unknown'
 			GROUP BY te.os
 			ORDER BY total DESC
 			LIMIT 10
@@ -635,23 +653,19 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 		}
 
 		// Get stats by email client
-		// Include all opens - show "Navegador Web" for opens without detected email client
+		// Exclude Unknown (no detected email client)
 		emailClientRows, err := s.db.Query(`
 			SELECT
-				CASE
-					WHEN te.email_client IS NULL OR te.email_client = '' THEN 'Navegador Web'
-					ELSE te.email_client
-				END as email_client,
+				te.email_client,
 				COUNT(*) as total,
 				COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
 				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 			FROM tracking_events te
 			JOIN campaigns c ON te.campaign_id = c.id
-			WHERE c.user_id = $1 AND `+dateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
-			GROUP BY CASE
-				WHEN te.email_client IS NULL OR te.email_client = '' THEN 'Navegador Web'
-				ELSE te.email_client
-			END
+			WHERE c.user_id = $1 AND `+dateFilter+`
+				AND (te.is_bot = false OR te.is_bot IS NULL)
+				AND te.email_client IS NOT NULL AND te.email_client != '' AND te.email_client != 'Unknown'
+			GROUP BY te.email_client
 			ORDER BY total DESC
 			LIMIT 10
 		`, userID)
@@ -1135,7 +1149,7 @@ func (s *Server) getCombinedStats(c *fiber.Ctx) error {
 	// Include tracking stats inline (for geolocation, browsers, devices)
 	trackingDateFilter := strings.Replace(dateFilter, "ce.created_at", "te.created_at", 1)
 
-	// Get stats by country (top 5)
+	// Get stats by country (top 5) - exclude events without real geolocation
 	countryRows, _ := s.db.Query(`
 		SELECT
 			COALESCE(te.country, 'Unknown') as country,
@@ -1145,7 +1159,9 @@ func (s *Server) getCombinedStats(c *fiber.Ctx) error {
 			COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 		FROM tracking_events te
 		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE c.user_id = $1 AND `+trackingDateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+		WHERE c.user_id = $1 AND `+trackingDateFilter+`
+			AND te.country IS NOT NULL AND te.country != ''
+			AND (te.is_bot = false OR te.is_bot IS NULL)
 		GROUP BY te.country, te.country_code
 		ORDER BY total DESC
 		LIMIT 5
@@ -1168,7 +1184,7 @@ func (s *Server) getCombinedStats(c *fiber.Ctx) error {
 		result["countries"] = countries
 	}
 
-	// Get stats by browser (top 5)
+	// Get stats by browser (top 5) - exclude Email Proxy and Unknown
 	browserRows, _ := s.db.Query(`
 		SELECT
 			COALESCE(te.browser, 'Unknown') as browser,
@@ -1177,7 +1193,9 @@ func (s *Server) getCombinedStats(c *fiber.Ctx) error {
 			COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 		FROM tracking_events te
 		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE c.user_id = $1 AND `+trackingDateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+		WHERE c.user_id = $1 AND `+trackingDateFilter+`
+			AND (te.is_bot = false OR te.is_bot IS NULL)
+			AND te.browser IS NOT NULL AND te.browser != '' AND te.browser != 'Email Proxy' AND te.browser != 'Unknown'
 		GROUP BY te.browser
 		ORDER BY total DESC
 		LIMIT 5
@@ -1199,7 +1217,7 @@ func (s *Server) getCombinedStats(c *fiber.Ctx) error {
 		result["browsers"] = browsers
 	}
 
-	// Get stats by device type
+	// Get stats by device type - exclude unknown
 	deviceRows, _ := s.db.Query(`
 		SELECT
 			COALESCE(te.device_type, 'unknown') as device_type,
@@ -1208,7 +1226,9 @@ func (s *Server) getCombinedStats(c *fiber.Ctx) error {
 			COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 		FROM tracking_events te
 		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE c.user_id = $1 AND `+trackingDateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+		WHERE c.user_id = $1 AND `+trackingDateFilter+`
+			AND (te.is_bot = false OR te.is_bot IS NULL)
+			AND te.device_type IS NOT NULL AND te.device_type != '' AND te.device_type != 'unknown'
 		GROUP BY te.device_type
 		ORDER BY total DESC
 	`, userID)
@@ -1229,7 +1249,7 @@ func (s *Server) getCombinedStats(c *fiber.Ctx) error {
 		result["devices"] = devices
 	}
 
-	// Get stats by OS (top 5)
+	// Get stats by OS (top 5) - exclude Unknown
 	osRows, _ := s.db.Query(`
 		SELECT
 			COALESCE(te.os, 'Unknown') as os,
@@ -1238,7 +1258,9 @@ func (s *Server) getCombinedStats(c *fiber.Ctx) error {
 			COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 		FROM tracking_events te
 		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE c.user_id = $1 AND `+trackingDateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+		WHERE c.user_id = $1 AND `+trackingDateFilter+`
+			AND (te.is_bot = false OR te.is_bot IS NULL)
+			AND te.os IS NOT NULL AND te.os != '' AND te.os != 'Unknown'
 		GROUP BY te.os
 		ORDER BY total DESC
 		LIMIT 5
@@ -1260,7 +1282,7 @@ func (s *Server) getCombinedStats(c *fiber.Ctx) error {
 		result["os"] = osList
 	}
 
-	// Get stats by region/state (top 5)
+	// Get stats by region/state (top 5) - exclude events without real geolocation
 	regionRows, _ := s.db.Query(`
 		SELECT
 			COALESCE(te.country, 'Unknown') as country,
@@ -1270,7 +1292,9 @@ func (s *Server) getCombinedStats(c *fiber.Ctx) error {
 			COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 		FROM tracking_events te
 		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE c.user_id = $1 AND `+trackingDateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+		WHERE c.user_id = $1 AND `+trackingDateFilter+`
+			AND te.region IS NOT NULL AND te.region != ''
+			AND (te.is_bot = false OR te.is_bot IS NULL)
 		GROUP BY te.country, te.region
 		ORDER BY total DESC
 		LIMIT 5
@@ -1293,7 +1317,7 @@ func (s *Server) getCombinedStats(c *fiber.Ctx) error {
 		result["regions"] = regions
 	}
 
-	// Get stats by city (top 5)
+	// Get stats by city (top 5) - exclude events without real geolocation
 	cityRows, _ := s.db.Query(`
 		SELECT
 			COALESCE(te.city, 'Unknown') as city,
@@ -1303,7 +1327,9 @@ func (s *Server) getCombinedStats(c *fiber.Ctx) error {
 			COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 		FROM tracking_events te
 		JOIN campaigns c ON te.campaign_id = c.id
-		WHERE c.user_id = $1 AND `+trackingDateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+		WHERE c.user_id = $1 AND `+trackingDateFilter+`
+			AND te.city IS NOT NULL AND te.city != ''
+			AND (te.is_bot = false OR te.is_bot IS NULL)
 		GROUP BY te.city, te.country
 		ORDER BY total DESC
 		LIMIT 5
