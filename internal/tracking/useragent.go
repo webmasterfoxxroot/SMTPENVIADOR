@@ -33,10 +33,23 @@ func ParseUserAgent(ua string) *DeviceInfo {
 		info.Browser = "Unknown"
 		info.OS = "Unknown"
 		info.Device = "Unknown"
+		info.EmailClient = "Unknown"
 		return info
 	}
 
 	uaLower := strings.ToLower(ua)
+
+	// Handle truncated user-agents from email proxies (Gmail, Yahoo, etc.)
+	// These proxies send minimal UA like "Mozilla/5.0" to protect user privacy
+	if ua == "Mozilla/5.0" || len(ua) < 20 {
+		info.Browser = "Email Proxy"
+		info.OS = "Unknown"
+		info.Device = "Unknown"
+		info.DeviceType = "unknown"
+		info.IsDesktop = false
+		info.EmailClient = "Navegador Web"
+		return info
+	}
 
 	// Detect email clients first
 	info.EmailClient = detectEmailClient(uaLower)
@@ -75,56 +88,79 @@ func ParseUserAgent(ua string) *DeviceInfo {
 	// Detect device brand
 	info.Device = detectDevice(ua)
 
+	// If no email client detected, mark as "Navegador Web" (browser-based access)
+	if info.EmailClient == "" {
+		info.EmailClient = "Navegador Web"
+	}
+
 	return info
 }
 
 // detectEmailClient identifies email client from user agent
 func detectEmailClient(ua string) string {
-	emailClients := map[string]string{
-		"thunderbird":      "Mozilla Thunderbird",
-		"outlook":          "Microsoft Outlook",
-		"microsoft office": "Microsoft Outlook",
-		"windowslivemail":  "Windows Live Mail",
-		"apple mail":       "Apple Mail",
-		"apple-mail":       "Apple Mail",
-		"applemail":        "Apple Mail",
-		"airmail":          "Airmail",
-		"gmail":            "Gmail",
-		"googleimageproxy": "Gmail",
-		"yahoo":            "Yahoo Mail",
-		"ymail":            "Yahoo Mail",
-		"aol":              "AOL Mail",
-		"mail.ru":          "Mail.ru",
-		"yandex":           "Yandex Mail",
-		"mailspring":       "Mailspring",
-		"em client":        "eM Client",
-		"postbox":          "Postbox",
-		"mailmate":         "MailMate",
-		"spark":            "Spark",
-		"newton":           "Newton Mail",
-		"protonmail":       "ProtonMail",
-		"tutanota":         "Tutanota",
-		"zoho":             "Zoho Mail",
-		"fastmail":         "FastMail",
-		"roundcube":        "Roundcube",
-		"squirrelmail":     "SquirrelMail",
-		"horde":            "Horde",
-		"zimbra":           "Zimbra",
-		"evolution":        "Evolution",
-		"claws":            "Claws Mail",
-		"mutt":             "Mutt",
-		"alpine":           "Alpine",
-		"kmail":            "KMail",
-		"geary":            "Geary",
-		"mailbird":         "Mailbird",
-		"foxmail":          "Foxmail",
-		"the bat":          "The Bat!",
-		"mailpro":          "MailPro",
+	// Check in order of specificity (more specific patterns first)
+	emailClients := []struct {
+		pattern string
+		name    string
+	}{
+		// Microsoft Outlook variants
+		{"msoffice", "Outlook"},
+		{"ms-office", "Outlook"},
+		{"microsoft office", "Outlook"},
+		{"outlook", "Outlook"},
+		{"windowslivemail", "Windows Live Mail"},
+
+		// Apple
+		{"apple mail", "Apple Mail"},
+		{"apple-mail", "Apple Mail"},
+		{"applemail", "Apple Mail"},
+
+		// Mozilla
+		{"thunderbird", "Thunderbird"},
+
+		// Gmail
+		{"googleimageproxy", "Gmail"},
+		{"gmail", "Gmail"},
+
+		// Yahoo
+		{"yahoomailproxy", "Yahoo Mail"},
+		{"yahoo", "Yahoo Mail"},
+		{"ymail", "Yahoo Mail"},
+
+		// Other email clients
+		{"airmail", "Airmail"},
+		{"aol", "AOL"},
+		{"mail.ru", "Mail.ru"},
+		{"yandex", "Yandex"},
+		{"mailspring", "Mailspring"},
+		{"em client", "eM Client"},
+		{"postbox", "Postbox"},
+		{"mailmate", "MailMate"},
+		{"spark", "Spark"},
+		{"newton", "Newton"},
+		{"protonmail", "ProtonMail"},
+		{"tutanota", "Tutanota"},
+		{"zoho", "Zoho"},
+		{"fastmail", "FastMail"},
+		{"roundcube", "Roundcube"},
+		{"squirrelmail", "SquirrelMail"},
+		{"horde", "Horde"},
+		{"zimbra", "Zimbra"},
+		{"evolution", "Evolution"},
+		{"claws", "Claws Mail"},
+		{"mutt", "Mutt"},
+		{"alpine", "Alpine"},
+		{"kmail", "KMail"},
+		{"geary", "Geary"},
+		{"mailbird", "Mailbird"},
+		{"foxmail", "Foxmail"},
+		{"the bat", "The Bat!"},
+		{"mailpro", "MailPro"},
 	}
 
-	for key, name := range emailClients {
-		if strings.Contains(ua, key) {
-			return name
+	for _, client := range emailClients {
+		if strings.Contains(ua, client.pattern) {
+			return client.name
 		}
 	}
 
@@ -351,13 +387,13 @@ func detectBrowser(ua string) (string, string) {
 	// Edge (new Chromium-based)
 	if strings.Contains(uaLower, "edg/") {
 		version := extractVersion(ua, `Edg/(\d+(?:\.\d+)*)`)
-		return "Microsoft Edge", version
+		return "Edge", version
 	}
 
 	// Edge (old)
 	if strings.Contains(uaLower, "edge/") {
 		version := extractVersion(ua, `Edge/(\d+(?:\.\d+)*)`)
-		return "Microsoft Edge", version
+		return "Edge", version
 	}
 
 	// Opera
@@ -369,7 +405,7 @@ func detectBrowser(ua string) (string, string) {
 	// Samsung Browser
 	if strings.Contains(uaLower, "samsungbrowser") {
 		version := extractVersion(ua, `SamsungBrowser/(\d+(?:\.\d+)*)`)
-		return "Samsung Browser", version
+		return "Samsung", version
 	}
 
 	// UC Browser
@@ -410,7 +446,7 @@ func detectBrowser(ua string) (string, string) {
 	// IE
 	if strings.Contains(uaLower, "msie") || strings.Contains(uaLower, "trident") {
 		version := extractVersion(ua, `(?:MSIE |rv:)(\d+(?:\.\d+)*)`)
-		return "Internet Explorer", version
+		return "IE", version
 	}
 
 	return "Unknown", ""
