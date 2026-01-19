@@ -25,6 +25,7 @@ function CampaignEdit() {
     list_ids: [],
     smtp_ids: [],
     send_rate: 0,
+    threads: 10,
     track_opens: true,
     track_clicks: true
   })
@@ -287,7 +288,7 @@ function CampaignEdit() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="label">Nome da Campanha</label>
               <input
@@ -298,6 +299,18 @@ function CampaignEdit() {
                 placeholder="Black Friday 2024"
                 required
               />
+            </div>
+            <div>
+              <label className="label">Threads (envios paralelos)</label>
+              <input
+                type="number"
+                value={form.threads}
+                onChange={(e) => setForm({ ...form, threads: Math.min(100, Math.max(1, parseInt(e.target.value) || 10)) })}
+                className="input"
+                min="1"
+                max="100"
+              />
+              <p className="text-xs text-gray-500 mt-1">1-100 workers paralelos</p>
             </div>
             <div>
               <label className="label">Taxa de Envio (emails/min, 0 = ilimitado)</label>

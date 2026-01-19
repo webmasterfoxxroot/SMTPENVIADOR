@@ -86,6 +86,7 @@ type CampaignRequest struct {
 	ListIDs     []string   `json:"list_ids"` // Multiple lists support
 	SmtpIDs     []string   `json:"smtp_ids"` // Multiple SMTPs support
 	SendRate    int        `json:"send_rate"`
+	Threads     int        `json:"threads"`  // Number of parallel threads/workers (1-100)
 	ScheduledAt *time.Time `json:"scheduled_at"`
 	TrackOpens  bool       `json:"track_opens"`
 	TrackClicks bool       `json:"track_clicks"`
@@ -258,16 +259,24 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 
 	id := uuid.New().String()
 
+	// Validate threads (1-100, default 10)
+	threads := req.Threads
+	if threads <= 0 {
+		threads = 10 // Default
+	} else if threads > 100 {
+		threads = 100 // Max limit
+	}
+
 	// Insert campaign as draft with auto_start_at = NOW() + 60 seconds (in UTC)
 	// Use first list_id for backwards compatibility, store all in list_ids
 	autoStartAt := time.Now().UTC().Add(60 * time.Second)
 	_, err := s.db.Exec(`
 		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to,
-		                       html_content, text_content, list_id, list_ids, smtp_ids, send_rate,
+		                       html_content, text_content, list_id, list_ids, smtp_ids, send_rate, threads,
 		                       scheduled_at, track_opens, track_clicks, total_emails, status, auto_start_at, user_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'draft', $17, $18)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'draft', $18, $19)
 	`, id, req.Name, req.Subject, req.FromName, req.FromEmail, req.ReplyTo,
-		req.HTMLContent, req.TextContent, listIDs[0], listIDsStr, smtpIDsStr, req.SendRate,
+		req.HTMLContent, req.TextContent, listIDs[0], listIDsStr, smtpIDsStr, req.SendRate, threads,
 		req.ScheduledAt, req.TrackOpens, req.TrackClicks, totalEmails, autoStartAt, userID)
 
 	if err != nil {
@@ -280,6 +289,7 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 		"id":            id,
 		"total_emails":  totalEmails,
 		"smtp_count":    smtpCount,
+		"threads":       threads,
 		"auto_start_at": autoStartAt.Unix(),
 	})
 }
@@ -291,19 +301,19 @@ func (s *Server) getCampaign(c *fiber.Ctx) error {
 
 	var name, subject, fromName, fromEmail, replyTo, htmlContent, textContent, status, listID string
 	var listIDsStr, smtpIDsStr sql.NullString
-	var totalEmails, sentCount, failedCount, openCount, clickCount, bounceCount, sendRate int
+	var totalEmails, sentCount, failedCount, openCount, clickCount, bounceCount, sendRate, threads int
 	var scheduledAt, startedAt, completedAt *time.Time
 	var createdAt, updatedAt time.Time
 
 	err := s.db.QueryRow(`
 		SELECT name, subject, from_name, from_email, reply_to, html_content, text_content,
 		       list_id, COALESCE(list_ids, ''), COALESCE(smtp_ids, ''), status, total_emails, sent_count, failed_count, open_count,
-		       click_count, bounce_count, send_rate, scheduled_at, started_at,
+		       click_count, bounce_count, send_rate, COALESCE(threads, 10), scheduled_at, started_at,
 		       completed_at, created_at, updated_at
 		FROM campaigns WHERE id = $1 AND user_id = $2
 	`, id, userID).Scan(&name, &subject, &fromName, &fromEmail, &replyTo, &htmlContent, &textContent,
 		&listID, &listIDsStr, &smtpIDsStr, &status, &totalEmails, &sentCount, &failedCount, &openCount,
-		&clickCount, &bounceCount, &sendRate, &scheduledAt, &startedAt,
+		&clickCount, &bounceCount, &sendRate, &threads, &scheduledAt, &startedAt,
 		&completedAt, &createdAt, &updatedAt)
 
 	if err != nil {
@@ -344,6 +354,7 @@ func (s *Server) getCampaign(c *fiber.Ctx) error {
 		"click_count":  clickCount,
 		"bounce_count": bounceCount,
 		"send_rate":    sendRate,
+		"threads":      threads,
 		"scheduled_at": scheduledAt,
 		"started_at":   startedAt,
 		"completed_at": completedAt,
@@ -383,15 +394,23 @@ func (s *Server) updateCampaign(c *fiber.Ctx) error {
 	// Handle smtp_ids
 	smtpIDsStr := strings.Join(req.SmtpIDs, ",")
 
+	// Validate threads (1-100, default 10)
+	threads := req.Threads
+	if threads <= 0 {
+		threads = 10 // Default
+	} else if threads > 100 {
+		threads = 100 // Max limit
+	}
+
 	result, err := s.db.Exec(`
 		UPDATE campaigns SET
 			name = $1, subject = $2, from_name = $3, from_email = $4,
 			reply_to = $5, html_content = $6, text_content = $7,
-			list_id = $8, list_ids = $9, smtp_ids = $10, send_rate = $11, scheduled_at = $12,
-			track_opens = $13, track_clicks = $14
-		WHERE id = $15 AND user_id = $16
+			list_id = $8, list_ids = $9, smtp_ids = $10, send_rate = $11, threads = $12, scheduled_at = $13,
+			track_opens = $14, track_clicks = $15
+		WHERE id = $16 AND user_id = $17
 	`, req.Name, req.Subject, req.FromName, req.FromEmail, req.ReplyTo,
-		req.HTMLContent, req.TextContent, firstListID, listIDsStr, smtpIDsStr, req.SendRate,
+		req.HTMLContent, req.TextContent, firstListID, listIDsStr, smtpIDsStr, req.SendRate, threads,
 		req.ScheduledAt, req.TrackOpens, req.TrackClicks, id, userID)
 
 	if err != nil {
