@@ -311,13 +311,18 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 		}
 		job.Retries++
 		w.pushToQueue(job, queueType)
-		// Smart wait: only wait until next minute boundary when rate limits reset
-		// Calculate time until next minute (when per-minute limits reset)
+		// Wait until next minute boundary when per-minute rate limits reset
+		// This prevents busy-looping when all SMTPs are at capacity
 		now := time.Now()
 		nextMinute := now.Truncate(time.Minute).Add(time.Minute)
 		waitTime := nextMinute.Sub(now)
-		if waitTime > 100*time.Millisecond {
-			waitTime = 100 * time.Millisecond // Max wait 100ms, let other workers try
+		// Cap wait time at 10 seconds - balances efficiency with responsiveness
+		if waitTime > 10*time.Second {
+			waitTime = 10 * time.Second
+		}
+		// Minimum wait of 1 second to avoid busy-looping
+		if waitTime < 1*time.Second {
+			waitTime = 1 * time.Second
 		}
 		time.Sleep(waitTime)
 		return
