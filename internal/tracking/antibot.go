@@ -369,32 +369,30 @@ func isSecurityScanner(ua string) bool {
 	return false
 }
 
-// isEmailPrefetch detects email preview/prefetch services
+// isEmailPrefetch detects email preview/prefetch services (NOT email clients)
+// Important: We should NOT mark legitimate email clients (Gmail, Outlook, etc) as bots
+// We only want to detect automated prefetch/preview mechanisms
 func isEmailPrefetch(ua string) bool {
+	// Only detect PREFETCH/PROXY services, NOT regular email clients
 	prefetchers := []string{
-		// Google/Gmail
-		"googleimageproxy", "google-image", "google image proxy",
-		"gmail", "google-apps",
+		// Google image proxy (automated prefetch, not user action)
+		"googleimageproxy", "google-image-proxy", "google image proxy",
+		"googleimages",
 
-		// Yahoo
-		"yahoomailproxy", "yahoo mail proxy", "yahoo! mail",
-		"mx.yahoo.com",
+		// Yahoo mail proxy (automated prefetch)
+		"yahoomailproxy", "yahoo mail proxy", "yahoo-mail-proxy",
 
-		// Microsoft/Outlook
-		"outlook", "outlookpreview", "microsoft office",
-		"office 365", "ms office", "exchange", "owa",
-		"thunderbird",
+		// Microsoft prefetch (link scanner, not user viewing)
+		"outlooksafebrowsing", "safelinks.protection",
+		"microsoft-azure-atp", "atp.azure.com",
 
-		// Apple
-		"apple mail", "apple-mail", "applemail", "icloud",
+		// Generic link prefetchers (automated scanning)
+		"link prefetch", "linkpreview", "link-preview",
+		"urlpreview", "url-preview",
 
-		// Other email clients
-		"airmail", "mailspring", "em client", "postbox",
-		"mailmate", "spark", "newton", "protonmail",
-		"tutanota", "zoho mail", "fastmail", "roundcube",
-
-		// Generic prefetch
-		"prefetch", "prerender", "preload", "link prefetch",
+		// Email security link scanners (click before user)
+		"emailsecurity", "email-security",
+		"linkchecker", "link-checker",
 	}
 
 	for _, pf := range prefetchers {
@@ -409,8 +407,9 @@ func isEmailPrefetch(ua string) bool {
 // isHeadlessBrowser detects headless browsers
 func isHeadlessBrowser(ua string) bool {
 	headless := []string{
-		"headless", "headlesschrome", "headless chrome",
-		"phantomjs", "phantom.js", "phantom",
+		// Explicit headless indicators
+		"headlesschrome", "headless chrome", "headless",
+		"phantomjs", "phantom.js",
 		"puppeteer", "playwright", "selenium",
 		"webdriver", "chromedriver", "geckodriver",
 		"chromium-browser/headless", "chrome/headless",
@@ -425,13 +424,8 @@ func isHeadlessBrowser(ua string) bool {
 		}
 	}
 
-	// HeadlessChrome detection
-	if strings.Contains(ua, "chrome") && !strings.Contains(ua, "mobile") {
-		// Chrome without typical desktop indicators
-		if !strings.Contains(ua, "safari") {
-			return true
-		}
-	}
+	// Note: We removed the Chrome without Safari detection as it caused false positives
+	// Real headless Chrome includes "HeadlessChrome" in the UA which is already detected above
 
 	return false
 }
