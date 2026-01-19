@@ -95,43 +95,69 @@ func (s *Server) trackOpen(c *fiber.Ctx) error {
 		exists = true
 	}
 
-	// Record open event with full tracking info (for analytics)
-	go s.recordEventWithTracking(campaignID, emailID, "open", "", ip, userAgent, trackingInfo)
+	// Record open event with full tracking info (for analytics) - batched for performance
+	if s.batchUpdater != nil {
+		s.batchUpdater.AddEvent(tracking.TrackingEvent{
+			CampaignID:     campaignID,
+			EmailID:        emailID,
+			EventType:      "open",
+			IPAddress:      ip,
+			UserAgent:      userAgent,
+			Country:        trackingInfo.Country,
+			CountryCode:    trackingInfo.CountryCode,
+			Region:         trackingInfo.Region,
+			City:           trackingInfo.City,
+			Lat:            trackingInfo.Lat,
+			Lon:            trackingInfo.Lon,
+			Timezone:       trackingInfo.Timezone,
+			ISP:            trackingInfo.ISP,
+			Browser:        trackingInfo.Browser,
+			BrowserVersion: trackingInfo.BrowserVersion,
+			OS:             trackingInfo.OS,
+			OSVersion:      trackingInfo.OSVersion,
+			Device:         trackingInfo.Device,
+			DeviceType:     trackingInfo.DeviceType,
+			EmailClient:    trackingInfo.EmailClient,
+			IsBot:          trackingInfo.IsBot,
+			IsSuspicious:   trackingInfo.IsSuspicious,
+			BotType:        trackingInfo.BotType,
+			BotName:        trackingInfo.BotName,
+			BotScore:       trackingInfo.BotScore,
+		})
+	} else {
+		go s.recordEventWithTracking(campaignID, emailID, "open", "", ip, userAgent, trackingInfo)
+	}
 
 	// Only count if first open and record exists
 	// We count ALL opens (even from bots) - the dashboard can filter later
 	if exists && !alreadyOpened {
 		log.Printf("[Tracking] Recording first open for campaign=%s, email=%s (bot=%v)", campaignID, emailID, trackingInfo.IsBot)
 
-		// Update campaign_emails - also set status to 'sent' if still queued (tracking proves delivery)
-		result, err := s.db.Exec(`
-			UPDATE campaign_emails
-			SET opened_at = NOW(),
-			    status = CASE WHEN status = 'queued' THEN 'sent' ELSE status END,
-			    sent_at = CASE WHEN sent_at IS NULL THEN NOW() ELSE sent_at END
-			WHERE campaign_id = $1 AND email_id = $2 AND opened_at IS NULL
-		`, campaignID, emailID)
-
-		if err != nil {
-			log.Printf("[Tracking] Failed to update campaign_emails: %v", err)
+		// Use batch updater for better performance (updates every 2 seconds)
+		if s.batchUpdater != nil {
+			s.batchUpdater.AddOpen(campaignID, emailID)
 		} else {
-			rowsAffected, _ := result.RowsAffected()
-			log.Printf("[Tracking] Updated %d rows in campaign_emails", rowsAffected)
+			// Fallback to synchronous update
+			result, err := s.db.Exec(`
+				UPDATE campaign_emails
+				SET opened_at = NOW(),
+				    status = CASE WHEN status = 'queued' THEN 'sent' ELSE status END,
+				    sent_at = CASE WHEN sent_at IS NULL THEN NOW() ELSE sent_at END
+				WHERE campaign_id = $1 AND email_id = $2 AND opened_at IS NULL
+			`, campaignID, emailID)
+
+			if err != nil {
+				log.Printf("[Tracking] Failed to update campaign_emails: %v", err)
+			} else {
+				rowsAffected, _ := result.RowsAffected()
+				log.Printf("[Tracking] Updated %d rows in campaign_emails", rowsAffected)
+			}
+
+			// Update campaign open count (only once per email)
+			s.db.Exec(`
+				UPDATE campaigns SET open_count = open_count + 1 WHERE id = $1
+			`, campaignID)
 		}
-
-		// Update campaign open count (only once per email)
-		s.db.Exec(`
-			UPDATE campaigns SET open_count = open_count + 1 WHERE id = $1
-		`, campaignID)
-
-		// Also update sent_count if status was queued
-		s.db.Exec(`
-			UPDATE campaigns SET sent_count = sent_count + 1
-			WHERE id = $1 AND EXISTS (
-				SELECT 1 FROM campaign_emails
-				WHERE campaign_id = $1 AND email_id = $2 AND status = 'sent'
-			)
-		`, campaignID, emailID)
 
 		// Increment Redis stat
 		go s.queue.IncrementStat("opened", 1)
@@ -206,33 +232,69 @@ func (s *Server) trackClick(c *fiber.Ctx) error {
 		exists = true
 	}
 
-	// Record click event (for analytics - all clicks)
-	go s.recordEventWithTracking(campaignID, emailID, "click", decodedURL, ip, userAgent, trackingInfo)
+	// Record click event (for analytics - all clicks) - batched for performance
+	if s.batchUpdater != nil {
+		s.batchUpdater.AddEvent(tracking.TrackingEvent{
+			CampaignID:     campaignID,
+			EmailID:        emailID,
+			EventType:      "click",
+			LinkURL:        decodedURL,
+			IPAddress:      ip,
+			UserAgent:      userAgent,
+			Country:        trackingInfo.Country,
+			CountryCode:    trackingInfo.CountryCode,
+			Region:         trackingInfo.Region,
+			City:           trackingInfo.City,
+			Lat:            trackingInfo.Lat,
+			Lon:            trackingInfo.Lon,
+			Timezone:       trackingInfo.Timezone,
+			ISP:            trackingInfo.ISP,
+			Browser:        trackingInfo.Browser,
+			BrowserVersion: trackingInfo.BrowserVersion,
+			OS:             trackingInfo.OS,
+			OSVersion:      trackingInfo.OSVersion,
+			Device:         trackingInfo.Device,
+			DeviceType:     trackingInfo.DeviceType,
+			EmailClient:    trackingInfo.EmailClient,
+			IsBot:          trackingInfo.IsBot,
+			IsSuspicious:   trackingInfo.IsSuspicious,
+			BotType:        trackingInfo.BotType,
+			BotName:        trackingInfo.BotName,
+			BotScore:       trackingInfo.BotScore,
+		})
+	} else {
+		go s.recordEventWithTracking(campaignID, emailID, "click", decodedURL, ip, userAgent, trackingInfo)
+	}
 
 	// Only count if first click and record exists
 	if exists && !alreadyClicked {
 		log.Printf("[Tracking] Recording first click for campaign=%s, email=%s", campaignID, emailID)
 
-		// Update campaign_emails - also set status to 'sent' if still queued (tracking proves delivery)
-		result, err := s.db.Exec(`
-			UPDATE campaign_emails
-			SET clicked_at = NOW(),
-			    status = CASE WHEN status = 'queued' THEN 'sent' ELSE status END,
-			    sent_at = CASE WHEN sent_at IS NULL THEN NOW() ELSE sent_at END
-			WHERE campaign_id = $1 AND email_id = $2 AND clicked_at IS NULL
-		`, campaignID, emailID)
-
-		if err != nil {
-			log.Printf("[Tracking] Failed to update campaign_emails for click: %v", err)
+		// Use batch updater for better performance (updates every 2 seconds)
+		if s.batchUpdater != nil {
+			s.batchUpdater.AddClick(campaignID, emailID)
 		} else {
-			rowsAffected, _ := result.RowsAffected()
-			log.Printf("[Tracking] Updated %d rows for click", rowsAffected)
-		}
+			// Fallback to synchronous update
+			result, err := s.db.Exec(`
+				UPDATE campaign_emails
+				SET clicked_at = NOW(),
+				    status = CASE WHEN status = 'queued' THEN 'sent' ELSE status END,
+				    sent_at = CASE WHEN sent_at IS NULL THEN NOW() ELSE sent_at END
+				WHERE campaign_id = $1 AND email_id = $2 AND clicked_at IS NULL
+			`, campaignID, emailID)
 
-		// Update campaign click count (only once per email)
-		s.db.Exec(`
-			UPDATE campaigns SET click_count = click_count + 1 WHERE id = $1
-		`, campaignID)
+			if err != nil {
+				log.Printf("[Tracking] Failed to update campaign_emails for click: %v", err)
+			} else {
+				rowsAffected, _ := result.RowsAffected()
+				log.Printf("[Tracking] Updated %d rows for click", rowsAffected)
+			}
+
+			// Update campaign click count (only once per email)
+			s.db.Exec(`
+				UPDATE campaigns SET click_count = click_count + 1 WHERE id = $1
+			`, campaignID)
+		}
 
 		// Increment Redis stat
 		go s.queue.IncrementStat("clicked", 1)

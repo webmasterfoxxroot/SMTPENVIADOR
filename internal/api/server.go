@@ -16,16 +16,18 @@ import (
 	"smtpenviador/internal/config"
 	"smtpenviador/internal/engine"
 	"smtpenviador/internal/queue"
+	"smtpenviador/internal/tracking"
 )
 
 // Server represents the API server
 type Server struct {
-	app    *fiber.App
-	cfg    *config.Config
-	db     *sql.DB            // PostgreSQL for relational data
-	ch     *clickhouse.Client // ClickHouse for bulk data (emails, blacklist)
-	queue  *queue.Manager
-	engine *engine.Engine
+	app          *fiber.App
+	cfg          *config.Config
+	db           *sql.DB                  // PostgreSQL for relational data
+	ch           *clickhouse.Client       // ClickHouse for bulk data (emails, blacklist)
+	queue        *queue.Manager
+	engine       *engine.Engine
+	batchUpdater *tracking.BatchUpdater   // Batch updater for tracking events
 }
 
 // NewServer creates a new API server
@@ -37,13 +39,18 @@ func NewServer(cfg *config.Config, db *sql.DB, ch *clickhouse.Client, q *queue.M
 		BodyLimit:    500 * 1024 * 1024, // 500MB for list uploads
 	})
 
+	// Initialize batch updater for tracking events (flushes every 2 seconds)
+	batchUpdater := tracking.NewBatchUpdater(db, 2*time.Second)
+	batchUpdater.Start()
+
 	server := &Server{
-		app:    app,
-		cfg:    cfg,
-		db:     db,
-		ch:     ch,
-		queue:  q,
-		engine: eng,
+		app:          app,
+		cfg:          cfg,
+		db:           db,
+		ch:           ch,
+		queue:        q,
+		engine:       eng,
+		batchUpdater: batchUpdater,
 	}
 
 	server.setupMiddlewares()
