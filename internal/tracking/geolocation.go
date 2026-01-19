@@ -130,6 +130,11 @@ func (g *GeoService) Lookup(ip string) *GeoInfo {
 		info = &GeoInfo{IP: ip, Status: "fail", Message: "All APIs failed"}
 	}
 
+	// Clean region name (remove "State of", "Province of", etc.)
+	if info.RegionName != "" {
+		info.RegionName = cleanRegionName(info.RegionName)
+	}
+
 	// Cache result
 	if info.Status == "success" {
 		g.cacheMu.Lock()
@@ -508,4 +513,33 @@ func (g *GeoService) GetCacheStats() (size int, hitRate float64) {
 	g.cacheMu.RLock()
 	defer g.cacheMu.RUnlock()
 	return len(g.cache), 0 // hitRate would need additional tracking
+}
+
+// cleanRegionName removes common prefixes from region names
+// e.g., "State of São Paulo" -> "São Paulo", "Province of Ontario" -> "Ontario"
+func cleanRegionName(region string) string {
+	prefixes := []string{
+		"State of ",
+		"Province of ",
+		"Region of ",
+		"Republic of ",
+		"Autonomous Region of ",
+		"Federal District of ",
+		"Territory of ",
+		"Estado de ",
+		"Provincia de ",
+		"Região de ",
+	}
+
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(region, prefix) {
+			return strings.TrimPrefix(region, prefix)
+		}
+		// Also check lowercase
+		if strings.HasPrefix(strings.ToLower(region), strings.ToLower(prefix)) {
+			return region[len(prefix):]
+		}
+	}
+
+	return region
 }
