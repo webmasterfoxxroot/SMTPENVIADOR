@@ -204,11 +204,22 @@ WHERE (device_type IS NULL OR device_type = '')
   AND os IN ('Windows', 'macOS', 'Linux')
   AND is_bot = false;
 
--- 18. Clear geolocation data for bots (they shouldn't count in location stats)
--- Note: We keep the original data but you can uncomment this if you want to clear it
--- UPDATE tracking_events
--- SET country = NULL, city = NULL, region = NULL
--- WHERE is_bot = true;
+-- 18. Clean region names (remove "State of", "Province of", etc.)
+UPDATE tracking_events
+SET region = REGEXP_REPLACE(region, '^State of ', '', 'i')
+WHERE region ILIKE 'State of %';
+
+UPDATE tracking_events
+SET region = REGEXP_REPLACE(region, '^Province of ', '', 'i')
+WHERE region ILIKE 'Province of %';
+
+UPDATE tracking_events
+SET region = REGEXP_REPLACE(region, '^Region of ', '', 'i')
+WHERE region ILIKE 'Region of %';
+
+UPDATE tracking_events
+SET region = REGEXP_REPLACE(region, '^Estado de ', '', 'i')
+WHERE region ILIKE 'Estado de %';
 
 -- Verify results
 SELECT
