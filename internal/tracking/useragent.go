@@ -133,36 +133,60 @@ func detectEmailClient(ua string) string {
 
 // detectBot checks if user agent is a known bot
 func detectBot(ua string) bool {
+	// First, check for legitimate email clients that should NOT be marked as bots
+	// These are real users opening emails on their devices
+	legitimateClients := []string{
+		"outlook/",     // Outlook app (not outlookpreview which is prefetch)
+		"outlook-ios",  // Outlook iOS app
+		"outlook-android",
+		"thunderbird/",
+		"apple-mail",
+		"gmail/",       // Gmail app (not googleimageproxy)
+		"yahoo mail/",  // Yahoo Mail app (not proxy)
+		"samsung mail",
+		"mail/",        // Generic mail apps
+	}
+
+	// If it's a legitimate email client, don't mark as bot
+	for _, client := range legitimateClients {
+		if strings.Contains(ua, client) {
+			return false
+		}
+	}
+
 	botPatterns := []string{
 		// Search engine bots
 		"googlebot", "bingbot", "yandexbot", "duckduckbot", "baiduspider",
 		"sogou", "exabot", "facebot", "ia_archiver", "alexabot",
 
-		// Social media bots
-		"facebookexternalhit", "twitterbot", "linkedinbot", "pinterest",
-		"slackbot", "telegrambot", "whatsapp", "discordbot", "skypeuripreview",
+		// Social media bots (link preview generators)
+		"facebookexternalhit", "twitterbot", "linkedinbot", "pinterestbot",
+		"slackbot", "telegrambot", "discordbot", "skypeuripreview",
 
-		// Email service bots/prefetchers
+		// Email prefetch/proxy services (automated, not user action)
 		"yahoo! slurp", "msnbot", "googleimageproxy", "yahoomailproxy",
-		"outlook-ios", "outlookpreview", "mx.yahoo.com",
+		"outlookpreview", // Only the preview scanner, not the app
 
 		// Security scanners and prefetchers
 		"barracuda", "proofpoint", "mimecast", "symantec", "mcafee",
 		"fortiguard", "websense", "bluecoat", "zscaler", "fireeye",
 		"sophos", "kaspersky", "avast", "avg", "bitdefender",
 
-		// Link prefetchers
-		"prefetch", "prerender", "headless", "phantom", "selenium",
+		// Headless browsers and automation
+		"headlesschrome", "headless", "phantomjs", "selenium",
 		"puppeteer", "playwright", "webdriver",
 
-		// Generic bot patterns
-		"bot", "crawler", "spider", "scraper", "curl", "wget", "python",
-		"java/", "perl", "ruby", "php/", "go-http-client", "axios",
-		"node-fetch", "http_request", "libwww", "lwp-",
+		// HTTP libraries (not real browsers)
+		"curl/", "wget/", "python-requests", "python-urllib",
+		"go-http-client", "axios/", "node-fetch", "http_request",
+		"libwww", "lwp-", "httpclient", "okhttp",
 
-		// Monitoring and testing
+		// Monitoring and testing bots
 		"pingdom", "uptimerobot", "statuscake", "newrelic", "datadog",
 		"gtmetrix", "pagespeed", "lighthouse", "webpagetest",
+
+		// Generic bot patterns (careful - only explicit bot identifiers)
+		"googlebot", "bingbot", "crawler", "spider", "scraper",
 	}
 
 	for _, pattern := range botPatterns {

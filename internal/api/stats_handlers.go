@@ -696,12 +696,17 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 		browserRows, err := s.db.Query(`
 			SELECT
 				CASE
-					WHEN te.user_agent ILIKE '%Chrome%' AND te.user_agent NOT ILIKE '%Edg%' THEN 'Chrome'
+					WHEN te.user_agent ILIKE '%Edg/%' OR te.user_agent ILIKE '%Edge/%' THEN 'Microsoft Edge'
+					WHEN te.user_agent ILIKE '%OPR/%' OR te.user_agent ILIKE '%Opera%' THEN 'Opera'
+					WHEN te.user_agent ILIKE '%Vivaldi%' THEN 'Vivaldi'
+					WHEN te.user_agent ILIKE '%Brave%' THEN 'Brave'
+					WHEN te.user_agent ILIKE '%SamsungBrowser%' THEN 'Samsung Browser'
+					WHEN te.user_agent ILIKE '%UCBrowser%' THEN 'UC Browser'
 					WHEN te.user_agent ILIKE '%Firefox%' THEN 'Firefox'
-					WHEN te.user_agent ILIKE '%Safari%' AND te.user_agent NOT ILIKE '%Chrome%' THEN 'Safari'
-					WHEN te.user_agent ILIKE '%Edg%' THEN 'Edge'
+					WHEN te.user_agent ILIKE '%Safari%' AND te.user_agent NOT ILIKE '%Chrome%' AND te.user_agent NOT ILIKE '%Chromium%' THEN 'Safari'
+					WHEN te.user_agent ILIKE '%Chrome%' OR te.user_agent ILIKE '%Chromium%' THEN 'Chrome'
 					WHEN te.user_agent ILIKE '%MSIE%' OR te.user_agent ILIKE '%Trident%' THEN 'Internet Explorer'
-					WHEN te.user_agent ILIKE '%Opera%' OR te.user_agent ILIKE '%OPR%' THEN 'Opera'
+					WHEN te.user_agent IS NULL OR te.user_agent = '' THEN 'Unknown'
 					ELSE 'Other'
 				END as browser,
 				COUNT(*) as total,
@@ -709,7 +714,7 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 			FROM tracking_events te
 			JOIN campaigns c ON te.campaign_id = c.id
-			WHERE c.user_id = $1 AND `+dateFilter+` AND te.user_agent IS NOT NULL
+			WHERE c.user_id = $1 AND `+dateFilter+`
 			GROUP BY browser
 			ORDER BY total DESC
 			LIMIT 10
@@ -736,8 +741,11 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 		deviceRows, err := s.db.Query(`
 			SELECT
 				CASE
-					WHEN te.user_agent ILIKE '%Mobile%' OR te.user_agent ILIKE '%Android%' AND te.user_agent NOT ILIKE '%Tablet%' THEN 'mobile'
-					WHEN te.user_agent ILIKE '%Tablet%' OR te.user_agent ILIKE '%iPad%' THEN 'tablet'
+					WHEN te.user_agent ILIKE '%iPad%' OR te.user_agent ILIKE '%Tablet%' OR te.user_agent ILIKE '%Kindle%' THEN 'tablet'
+					WHEN te.user_agent ILIKE '%iPhone%' OR te.user_agent ILIKE '%iPod%' THEN 'mobile'
+					WHEN te.user_agent ILIKE '%Mobile%' THEN 'mobile'
+					WHEN te.user_agent ILIKE '%Android%' AND te.user_agent NOT ILIKE '%Mobile%' THEN 'tablet'
+					WHEN te.user_agent ILIKE '%Android%' THEN 'mobile'
 					ELSE 'desktop'
 				END as device_type,
 				COUNT(*) as total,
@@ -745,7 +753,7 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 			FROM tracking_events te
 			JOIN campaigns c ON te.campaign_id = c.id
-			WHERE c.user_id = $1 AND `+dateFilter+` AND te.user_agent IS NOT NULL
+			WHERE c.user_id = $1 AND `+dateFilter+`
 			GROUP BY device_type
 			ORDER BY total DESC
 		`, userID)
@@ -771,11 +779,19 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 		osRows, err := s.db.Query(`
 			SELECT
 				CASE
-					WHEN te.user_agent ILIKE '%Windows%' THEN 'Windows'
-					WHEN te.user_agent ILIKE '%Mac OS%' OR te.user_agent ILIKE '%Macintosh%' THEN 'macOS'
-					WHEN te.user_agent ILIKE '%iPhone%' OR te.user_agent ILIKE '%iPad%' THEN 'iOS'
+					WHEN te.user_agent ILIKE '%iPhone%' OR te.user_agent ILIKE '%iPad%' OR te.user_agent ILIKE '%iPod%' THEN 'iOS'
 					WHEN te.user_agent ILIKE '%Android%' THEN 'Android'
-					WHEN te.user_agent ILIKE '%Linux%' THEN 'Linux'
+					WHEN te.user_agent ILIKE '%Windows NT 10%' THEN 'Windows 10/11'
+					WHEN te.user_agent ILIKE '%Windows NT 6.3%' THEN 'Windows 8.1'
+					WHEN te.user_agent ILIKE '%Windows NT 6.2%' THEN 'Windows 8'
+					WHEN te.user_agent ILIKE '%Windows NT 6.1%' THEN 'Windows 7'
+					WHEN te.user_agent ILIKE '%Windows%' THEN 'Windows'
+					WHEN te.user_agent ILIKE '%Mac OS X%' OR te.user_agent ILIKE '%Macintosh%' THEN 'macOS'
+					WHEN te.user_agent ILIKE '%Ubuntu%' THEN 'Ubuntu'
+					WHEN te.user_agent ILIKE '%Fedora%' THEN 'Fedora'
+					WHEN te.user_agent ILIKE '%Linux%' AND te.user_agent NOT ILIKE '%Android%' THEN 'Linux'
+					WHEN te.user_agent ILIKE '%CrOS%' THEN 'Chrome OS'
+					WHEN te.user_agent IS NULL OR te.user_agent = '' THEN 'Unknown'
 					ELSE 'Other'
 				END as os,
 				COUNT(*) as total,
@@ -783,7 +799,7 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 				COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
 			FROM tracking_events te
 			JOIN campaigns c ON te.campaign_id = c.id
-			WHERE c.user_id = $1 AND `+dateFilter+` AND te.user_agent IS NOT NULL
+			WHERE c.user_id = $1 AND `+dateFilter+`
 			GROUP BY os
 			ORDER BY total DESC
 			LIMIT 10
@@ -805,6 +821,9 @@ func (s *Server) getDashboardTrackingStats(c *fiber.Ctx) error {
 			}
 			result["os"] = osList
 		}
+
+		// Fallback: Add empty regions if not available
+		result["regions"] = []map[string]interface{}{}
 
 		// Basic bot stats without extended columns
 		var totalOpens, totalClicks int
@@ -1157,6 +1176,103 @@ func (s *Server) getCombinedStats(c *fiber.Ctx) error {
 			})
 		}
 		result["devices"] = devices
+	}
+
+	// Get stats by OS (top 5)
+	osRows, _ := s.db.Query(`
+		SELECT
+			COALESCE(te.os, 'Unknown') as os,
+			COUNT(*) as total,
+			COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
+			COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
+		FROM tracking_events te
+		JOIN campaigns c ON te.campaign_id = c.id
+		WHERE c.user_id = $1 AND `+trackingDateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+		GROUP BY te.os
+		ORDER BY total DESC
+		LIMIT 5
+	`, userID)
+	if osRows != nil {
+		defer osRows.Close()
+		var osList []map[string]interface{}
+		for osRows.Next() {
+			var osName string
+			var total, opens, clicks int
+			osRows.Scan(&osName, &total, &opens, &clicks)
+			osList = append(osList, map[string]interface{}{
+				"os":     osName,
+				"total":  total,
+				"opens":  opens,
+				"clicks": clicks,
+			})
+		}
+		result["os"] = osList
+	}
+
+	// Get stats by region/state (top 5)
+	regionRows, _ := s.db.Query(`
+		SELECT
+			COALESCE(te.country, 'Unknown') as country,
+			COALESCE(te.region, 'Unknown') as region,
+			COUNT(*) as total,
+			COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
+			COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
+		FROM tracking_events te
+		JOIN campaigns c ON te.campaign_id = c.id
+		WHERE c.user_id = $1 AND `+trackingDateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+		GROUP BY te.country, te.region
+		ORDER BY total DESC
+		LIMIT 5
+	`, userID)
+	if regionRows != nil {
+		defer regionRows.Close()
+		var regions []map[string]interface{}
+		for regionRows.Next() {
+			var country, region string
+			var total, opens, clicks int
+			regionRows.Scan(&country, &region, &total, &opens, &clicks)
+			regions = append(regions, map[string]interface{}{
+				"country": country,
+				"region":  region,
+				"total":   total,
+				"opens":   opens,
+				"clicks":  clicks,
+			})
+		}
+		result["regions"] = regions
+	}
+
+	// Get stats by city (top 5)
+	cityRows, _ := s.db.Query(`
+		SELECT
+			COALESCE(te.city, 'Unknown') as city,
+			COALESCE(te.country, '') as country,
+			COUNT(*) as total,
+			COUNT(CASE WHEN te.event_type = 'open' THEN 1 END) as opens,
+			COUNT(CASE WHEN te.event_type = 'click' THEN 1 END) as clicks
+		FROM tracking_events te
+		JOIN campaigns c ON te.campaign_id = c.id
+		WHERE c.user_id = $1 AND `+trackingDateFilter+` AND (te.is_bot = false OR te.is_bot IS NULL)
+		GROUP BY te.city, te.country
+		ORDER BY total DESC
+		LIMIT 5
+	`, userID)
+	if cityRows != nil {
+		defer cityRows.Close()
+		var cities []map[string]interface{}
+		for cityRows.Next() {
+			var city, country string
+			var total, opens, clicks int
+			cityRows.Scan(&city, &country, &total, &opens, &clicks)
+			cities = append(cities, map[string]interface{}{
+				"city":    city,
+				"country": country,
+				"total":   total,
+				"opens":   opens,
+				"clicks":  clicks,
+			})
+		}
+		result["cities"] = cities
 	}
 
 	// Get bot stats summary
