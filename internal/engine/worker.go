@@ -415,16 +415,20 @@ func (w *Worker) pushToQueue(job *queue.EmailJob, queueType string) {
 	}
 }
 
-// updateCampaignSentCount updates the campaign sent_count
+// updateCampaignSentCount updates the campaign sent_count (async to avoid blocking)
 func (w *Worker) updateCampaignSentCount(campaignID string) {
-	w.db.Exec(`UPDATE campaigns SET sent_count = sent_count + 1 WHERE id = $1`, campaignID)
-	w.checkCampaignCompletion(campaignID)
+	go func() {
+		w.db.Exec(`UPDATE campaigns SET sent_count = sent_count + 1 WHERE id = $1`, campaignID)
+		w.checkCampaignCompletion(campaignID)
+	}()
 }
 
-// updateCampaignFailedCount updates the campaign failed_count
+// updateCampaignFailedCount updates the campaign failed_count (async to avoid blocking)
 func (w *Worker) updateCampaignFailedCount(campaignID string) {
-	w.db.Exec(`UPDATE campaigns SET failed_count = failed_count + 1 WHERE id = $1`, campaignID)
-	w.checkCampaignCompletion(campaignID)
+	go func() {
+		w.db.Exec(`UPDATE campaigns SET failed_count = failed_count + 1 WHERE id = $1`, campaignID)
+		w.checkCampaignCompletion(campaignID)
+	}()
 }
 
 // checkCampaignCompletion checks if campaign is complete and updates status
@@ -506,29 +510,28 @@ func (w *Worker) processLinks(trackingDomain, content, campaignID, emailID strin
 	return content
 }
 
-// updateEmailStatus updates the campaign_email status
+// updateEmailStatus updates the campaign_email status (async to avoid blocking)
 func (w *Worker) updateEmailStatus(id, status, errorMsg string) {
-	var query string
-	var err error
+	go func() {
+		var query string
 
-	if status == "sent" {
-		query = `UPDATE campaign_emails SET status = $1, error_message = $2, sent_at = NOW() WHERE id = $3`
-	} else {
-		query = `UPDATE campaign_emails SET status = $1, error_message = $2 WHERE id = $3`
-	}
+		if status == "sent" {
+			query = `UPDATE campaign_emails SET status = $1, error_message = $2, sent_at = NOW() WHERE id = $3`
+		} else {
+			query = `UPDATE campaign_emails SET status = $1, error_message = $2 WHERE id = $3`
+		}
 
-	_, err = w.db.Exec(query, status, errorMsg, id)
-	if err != nil {
-		log.Printf("❌ Worker %d: Failed to update email %s: %v", w.id, id, err)
-	}
-	// Removed verbose logging for every email - too slow
+		w.db.Exec(query, status, errorMsg, id)
+	}()
 }
 
-// updateSMTPStats updates SMTP server statistics
+// updateSMTPStats updates SMTP server statistics (async to avoid blocking)
 func (w *Worker) updateSMTPStats(smtpID string, success bool) {
-	if success {
-		w.db.Exec(`UPDATE smtp_servers SET total_sent = total_sent + 1 WHERE id = $1`, smtpID)
-	} else {
-		w.db.Exec(`UPDATE smtp_servers SET total_failed = total_failed + 1 WHERE id = $1`, smtpID)
-	}
+	go func() {
+		if success {
+			w.db.Exec(`UPDATE smtp_servers SET total_sent = total_sent + 1 WHERE id = $1`, smtpID)
+		} else {
+			w.db.Exec(`UPDATE smtp_servers SET total_failed = total_failed + 1 WHERE id = $1`, smtpID)
+		}
+	}()
 }
