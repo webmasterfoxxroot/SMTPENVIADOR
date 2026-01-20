@@ -20,8 +20,11 @@ FROM alpine:3.19
 
 WORKDIR /app
 
-# Install ca-certificates for HTTPS
-RUN apk --no-cache add ca-certificates tzdata
+# Install ca-certificates, timezone data, and Chromium for browser automation
+RUN apk --no-cache add ca-certificates tzdata chromium chromium-chromedriver
+
+# Set Chrome path for chromedp
+ENV CHROME_PATH=/usr/bin/chromium-browser
 
 # Copy binary from builder
 COPY --from=builder /app/smtpenviador .
