@@ -3235,11 +3235,11 @@ func (s *Server) sendSMTPEmailWithProxy(smtpHost string, smtpPort int, username,
 		"\r\n"+
 		"%s", fromHeader, to, encodedSubject, messageID, time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 -0700"), encodeBase64WithLineBreaks([]byte(body)))
 
-	// Connect through HTTP CONNECT proxy based on TLS mode
+	// Connect through proxy based on TLS mode (tries HTTP CONNECT, then SOCKS5)
 	switch tlsMode {
 	case "tls":
 		// Implicit TLS (port 465)
-		conn, err := dialHTTPProxy(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
+		conn, err := dialProxyWithFallback(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
 		if err != nil {
 			return fmt.Errorf("proxy connection failed: %v", err)
 		}
@@ -3261,7 +3261,7 @@ func (s *Server) sendSMTPEmailWithProxy(smtpHost string, smtpPort int, username,
 
 	case "starttls":
 		// STARTTLS (port 587)
-		conn, err := dialHTTPProxy(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
+		conn, err := dialProxyWithFallback(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
 		if err != nil {
 			return fmt.Errorf("proxy connection failed: %v", err)
 		}
@@ -3281,7 +3281,7 @@ func (s *Server) sendSMTPEmailWithProxy(smtpHost string, smtpPort int, username,
 
 	default:
 		// Plain (no TLS)
-		conn, err := dialHTTPProxy(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
+		conn, err := dialProxyWithFallback(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
 		if err != nil {
 			return fmt.Errorf("proxy connection failed: %v", err)
 		}
@@ -3339,6 +3339,113 @@ func dialHTTPProxy(proxyHost string, proxyPort int, proxyUser, proxyPass, target
 	return conn, nil
 }
 
+// dialSOCKS5Proxy connects to a target through a SOCKS5 proxy with username/password auth
+func dialSOCKS5Proxy(proxyHost string, proxyPort int, proxyUser, proxyPass, targetHost string, targetPort int) (net.Conn, error) {
+	// Connect to proxy
+	proxyAddr := fmt.Sprintf("%s:%d", proxyHost, proxyPort)
+	conn, err := net.DialTimeout("tcp", proxyAddr, 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to SOCKS5 proxy: %v", err)
+	}
+
+	// SOCKS5 greeting with username/password auth
+	conn.Write([]byte{0x05, 0x01, 0x02}) // Version 5, 1 auth method, username/password (0x02)
+
+	// Read server's choice
+	response := make([]byte, 2)
+	_, err = conn.Read(response)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("SOCKS5 greeting failed: %v", err)
+	}
+	if response[0] != 0x05 || response[1] != 0x02 {
+		conn.Close()
+		return nil, fmt.Errorf("SOCKS5 server doesn't support username/password auth")
+	}
+
+	// Username/password authentication
+	authReq := []byte{0x01} // Version
+	authReq = append(authReq, byte(len(proxyUser)))
+	authReq = append(authReq, []byte(proxyUser)...)
+	authReq = append(authReq, byte(len(proxyPass)))
+	authReq = append(authReq, []byte(proxyPass)...)
+	conn.Write(authReq)
+
+	// Read auth response
+	authResp := make([]byte, 2)
+	_, err = conn.Read(authResp)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("SOCKS5 auth failed: %v", err)
+	}
+	if authResp[1] != 0x00 {
+		conn.Close()
+		return nil, fmt.Errorf("SOCKS5 authentication failed")
+	}
+
+	// Connect request
+	connectReq := []byte{0x05, 0x01, 0x00, 0x03} // Version, Connect, Reserved, Domain
+	connectReq = append(connectReq, byte(len(targetHost)))
+	connectReq = append(connectReq, []byte(targetHost)...)
+	connectReq = append(connectReq, byte(targetPort>>8), byte(targetPort&0xff)) // Port in big endian
+	conn.Write(connectReq)
+
+	// Read connect response
+	connectResp := make([]byte, 10)
+	n, err := conn.Read(connectResp)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("SOCKS5 connect failed: %v", err)
+	}
+	if n < 2 || connectResp[1] != 0x00 {
+		conn.Close()
+		errMsg := "unknown error"
+		if n >= 2 {
+			switch connectResp[1] {
+			case 0x01:
+				errMsg = "general SOCKS server failure"
+			case 0x02:
+				errMsg = "connection not allowed by ruleset"
+			case 0x03:
+				errMsg = "network unreachable"
+			case 0x04:
+				errMsg = "host unreachable"
+			case 0x05:
+				errMsg = "connection refused"
+			case 0x06:
+				errMsg = "TTL expired"
+			case 0x07:
+				errMsg = "command not supported"
+			case 0x08:
+				errMsg = "address type not supported"
+			}
+		}
+		return nil, fmt.Errorf("SOCKS5 connect failed: %s", errMsg)
+	}
+
+	return conn, nil
+}
+
+// dialProxyWithFallback tries HTTP CONNECT first, then falls back to SOCKS5
+func dialProxyWithFallback(proxyHost string, proxyPort int, proxyUser, proxyPass, targetHost string, targetPort int) (net.Conn, error) {
+	// Try HTTP CONNECT first
+	conn, err := dialHTTPProxy(proxyHost, proxyPort, proxyUser, proxyPass, targetHost, targetPort)
+	if err == nil {
+		return conn, nil
+	}
+	httpErr := err
+
+	// If HTTP CONNECT failed (e.g., 403), try SOCKS5
+	log.Printf("[Proxy] HTTP CONNECT failed: %v, trying SOCKS5...", httpErr)
+	conn, err = dialSOCKS5Proxy(proxyHost, proxyPort, proxyUser, proxyPass, targetHost, targetPort)
+	if err == nil {
+		return conn, nil
+	}
+
+	// Both failed
+	return nil, fmt.Errorf("proxy connection failed - HTTP: %v, SOCKS5: %v", httpErr, err)
+}
+
 // sendSMTPEmailWithProxyAndGetIP sends email through HTTP CONNECT proxy and returns the IP used
 func (s *Server) sendSMTPEmailWithProxyAndGetIP(proxyHost string, proxyPort int, proxyUsername, proxyPassword string,
 	smtpHost string, smtpPort int, username, password, tlsMode, from, to, subject, body, messageID string) (string, error) {
@@ -3377,31 +3484,41 @@ func (s *Server) sendSMTPEmailWithProxyAndGetIP(proxyHost string, proxyPort int,
 		"\r\n"+
 		"%s", fromHeader, to, encodedSubject, messageID, time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 -0700"), encodeBase64WithLineBreaks([]byte(body)))
 
-	// Get the IP we're using by connecting to ipinfo.io through proxy
+	// Get the IP we're using by making HTTP request through proxy
 	var proxyIP string
-	ipConn, err := dialHTTPProxy(proxyHost, proxyPort, proxyUsername, proxyPassword, "ipinfo.io", 80)
-	if err == nil {
-		// Send HTTP request to get IP info
-		fmt.Fprintf(ipConn, "GET /ip HTTP/1.1\r\nHost: ipinfo.io\r\nConnection: close\r\n\r\n")
-		response := make([]byte, 1024)
-		n, _ := ipConn.Read(response)
-		ipConn.Close()
-		// Parse IP from response (last line after headers)
-		lines := strings.Split(string(response[:n]), "\r\n")
-		for i := len(lines) - 1; i >= 0; i-- {
-			line := strings.TrimSpace(lines[i])
-			if line != "" && !strings.Contains(line, ":") {
-				proxyIP = line
+	proxyURL := fmt.Sprintf("http://%s:%s@%s:%d", proxyUsername, proxyPassword, proxyHost, proxyPort)
+	proxyParsed, _ := url.Parse(proxyURL)
+	ipClient := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyParsed),
+		},
+		Timeout: 10 * time.Second,
+	}
+	// Try DigiProxy's own endpoint first, then fallback to ipinfo.io
+	ipCheckURLs := []string{
+		"https://prem.digiproxy.cc/",    // DigiProxy premium endpoint
+		"https://res.digiproxy.cc/",     // DigiProxy residential endpoint
+		"http://ipinfo.io/ip",           // Fallback
+	}
+	for _, checkURL := range ipCheckURLs {
+		resp, err := ipClient.Get(checkURL)
+		if err == nil {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			ip := strings.TrimSpace(string(body))
+			// Validate it looks like an IP
+			if ip != "" && (strings.Count(ip, ".") == 3 || strings.Contains(ip, ":")) {
+				proxyIP = ip
 				break
 			}
 		}
 	}
 
-	// Connect through proxy based on TLS mode
+	// Connect through proxy based on TLS mode (tries HTTP CONNECT, then SOCKS5)
 	switch tlsMode {
 	case "tls":
 		// Implicit TLS (port 465)
-		conn, err := dialHTTPProxy(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
+		conn, err := dialProxyWithFallback(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
 		if err != nil {
 			return proxyIP, fmt.Errorf("proxy connection failed: %v", err)
 		}
@@ -3423,7 +3540,7 @@ func (s *Server) sendSMTPEmailWithProxyAndGetIP(proxyHost string, proxyPort int,
 
 	case "starttls":
 		// STARTTLS (port 587)
-		conn, err := dialHTTPProxy(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
+		conn, err := dialProxyWithFallback(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
 		if err != nil {
 			return proxyIP, fmt.Errorf("proxy connection failed: %v", err)
 		}
@@ -3443,7 +3560,7 @@ func (s *Server) sendSMTPEmailWithProxyAndGetIP(proxyHost string, proxyPort int,
 
 	default:
 		// Plain (no TLS)
-		conn, err := dialHTTPProxy(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
+		conn, err := dialProxyWithFallback(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
 		if err != nil {
 			return proxyIP, fmt.Errorf("proxy connection failed: %v", err)
 		}
