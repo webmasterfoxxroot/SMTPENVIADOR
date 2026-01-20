@@ -23,7 +23,6 @@ import (
 	"github.com/emersion/go-sasl"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
-	"golang.org/x/net/proxy"
 )
 
 // Package-level variables for seed batch rotation
@@ -3313,7 +3312,51 @@ func (s *Server) sendSMTPEmailWithProxy(smtpHost string, smtpPort int, username,
 	}
 }
 
-// sendSMTPEmailWithProxyAndGetIP sends email through SOAX proxy and returns the IP used
+// dialHTTPProxy connects to a target through an HTTP CONNECT proxy
+func dialHTTPProxy(proxyHost string, proxyPort int, proxyUser, proxyPass, targetHost string, targetPort int) (net.Conn, error) {
+	// Connect to proxy
+	proxyAddr := fmt.Sprintf("%s:%d", proxyHost, proxyPort)
+	conn, err := net.DialTimeout("tcp", proxyAddr, 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to proxy: %v", err)
+	}
+
+	// Send CONNECT request
+	targetAddr := fmt.Sprintf("%s:%d", targetHost, targetPort)
+	connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", targetAddr, targetAddr)
+
+	// Add proxy authentication if provided
+	if proxyUser != "" && proxyPass != "" {
+		auth := base64.StdEncoding.EncodeToString([]byte(proxyUser + ":" + proxyPass))
+		connectReq += fmt.Sprintf("Proxy-Authorization: Basic %s\r\n", auth)
+	}
+	connectReq += "\r\n"
+
+	_, err = conn.Write([]byte(connectReq))
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to send CONNECT request: %v", err)
+	}
+
+	// Read response
+	response := make([]byte, 1024)
+	n, err := conn.Read(response)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to read proxy response: %v", err)
+	}
+
+	// Check if connection was established
+	respStr := string(response[:n])
+	if !strings.Contains(respStr, "200") {
+		conn.Close()
+		return nil, fmt.Errorf("proxy connection failed: %s", strings.Split(respStr, "\r\n")[0])
+	}
+
+	return conn, nil
+}
+
+// sendSMTPEmailWithProxyAndGetIP sends email through HTTP CONNECT proxy and returns the IP used
 func (s *Server) sendSMTPEmailWithProxyAndGetIP(proxyHost string, proxyPort int, proxyUsername, proxyPassword string,
 	smtpHost string, smtpPort int, username, password, tlsMode, from, to, subject, body, messageID string) (string, error) {
 
@@ -3351,21 +3394,9 @@ func (s *Server) sendSMTPEmailWithProxyAndGetIP(proxyHost string, proxyPort int,
 		"\r\n"+
 		"%s", fromHeader, to, encodedSubject, messageID, time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 -0700"), encodeBase64WithLineBreaks([]byte(body)))
 
-	// Create SOCKS5 dialer with SOAX authentication
-	proxyAddr := fmt.Sprintf("%s:%d", proxyHost, proxyPort)
-	auth := &proxy.Auth{
-		User:     proxyUsername,
-		Password: proxyPassword,
-	}
-
-	dialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, proxy.Direct)
-	if err != nil {
-		return "", fmt.Errorf("failed to create SOCKS5 dialer: %v", err)
-	}
-
-	// Get the IP we're using by connecting to ipinfo.io
+	// Get the IP we're using by connecting to ipinfo.io through proxy
 	var proxyIP string
-	ipConn, err := dialer.Dial("tcp", "ipinfo.io:80")
+	ipConn, err := dialHTTPProxy(proxyHost, proxyPort, proxyUsername, proxyPassword, "ipinfo.io", 80)
 	if err == nil {
 		// Send HTTP request to get IP info
 		fmt.Fprintf(ipConn, "GET /ip HTTP/1.1\r\nHost: ipinfo.io\r\nConnection: close\r\n\r\n")
@@ -3383,13 +3414,11 @@ func (s *Server) sendSMTPEmailWithProxyAndGetIP(proxyHost string, proxyPort int,
 		}
 	}
 
-	smtpAddr := fmt.Sprintf("%s:%d", smtpHost, smtpPort)
-
 	// Connect through proxy based on TLS mode
 	switch tlsMode {
 	case "tls":
 		// Implicit TLS (port 465)
-		conn, err := dialer.Dial("tcp", smtpAddr)
+		conn, err := dialHTTPProxy(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
 		if err != nil {
 			return proxyIP, fmt.Errorf("proxy connection failed: %v", err)
 		}
@@ -3411,7 +3440,7 @@ func (s *Server) sendSMTPEmailWithProxyAndGetIP(proxyHost string, proxyPort int,
 
 	case "starttls":
 		// STARTTLS (port 587)
-		conn, err := dialer.Dial("tcp", smtpAddr)
+		conn, err := dialHTTPProxy(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
 		if err != nil {
 			return proxyIP, fmt.Errorf("proxy connection failed: %v", err)
 		}
@@ -3431,7 +3460,7 @@ func (s *Server) sendSMTPEmailWithProxyAndGetIP(proxyHost string, proxyPort int,
 
 	default:
 		// Plain (no TLS)
-		conn, err := dialer.Dial("tcp", smtpAddr)
+		conn, err := dialHTTPProxy(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
 		if err != nil {
 			return proxyIP, fmt.Errorf("proxy connection failed: %v", err)
 		}
