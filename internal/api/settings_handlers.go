@@ -283,10 +283,10 @@ func (s *Server) testProxy(c *fiber.Ctx) error {
 	sessionID := fmt.Sprintf("%d", time.Now().UnixNano())
 
 	// SOAX residential proxy format:
-	// Username: Package API Key
-	// Password: wifi;country;sessid-XXXXX; (GEO params separated by ;)
+	// Username: Package login (like 0YFEkZzfrwBX4Wfp)
+	// Password: wifi;country;session_id;; (GEO params separated by ;)
 	proxyUser := req.APIKey
-	proxyPass := fmt.Sprintf("wifi;%s;sessid-%s;", selectedCountry, sessionID)
+	proxyPass := fmt.Sprintf("wifi;%s;%s;;", selectedCountry, sessionID)
 	proxyHost := "proxy.soax.com"
 	proxyPort := "9000"
 
