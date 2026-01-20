@@ -2,8 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log"
 	"time"
 
@@ -332,39 +330,6 @@ func (s *Server) updateWebWarmupSettings(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"message": "Settings updated"})
-}
-
-// Browser automation result
-type BrowserResult struct {
-	Success bool
-	IP      string
-	Error   string
-}
-
-// Test Outlook web login using chromedp
-func (s *Server) testOutlookWebLogin(ctx context.Context, email, password string, settings *WebWarmupSettings) (*BrowserResult, error) {
-	// For now, return a placeholder - we'll implement chromedp next
-	// This is where the actual browser automation will happen
-
-	log.Printf("[Web Warmup] Testing login for %s (proxy: %v)", email, settings.UseProxy)
-
-	// TODO: Implement actual chromedp browser automation
-	// For now, simulate a test
-	return &BrowserResult{
-		Success: true,
-		IP:      "Pending chromedp implementation",
-	}, nil
-}
-
-// Send email via Outlook web interface
-func (s *Server) sendOutlookWebEmail(ctx context.Context, email, password, toEmail, subject, body string, settings *WebWarmupSettings) (*BrowserResult, error) {
-	// TODO: Implement actual chromedp browser automation for sending email
-	log.Printf("[Web Warmup] Sending email from %s to %s via web", email, toEmail)
-
-	return &BrowserResult{
-		Success: true,
-		IP:      "Pending chromedp implementation",
-	}, nil
 }
 
 // Register web warmup routes

@@ -4,6 +4,8 @@ go 1.21
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.17.1
+	github.com/chromedp/cdproto v0.0.0-20240116100315-4a0ec5e4c400
+	github.com/chromedp/chromedp v0.9.5
 	github.com/emersion/go-imap v1.2.1
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
 	github.com/gofiber/fiber/v2 v2.52.0
