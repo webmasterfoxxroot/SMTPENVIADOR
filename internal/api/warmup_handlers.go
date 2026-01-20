@@ -22,6 +22,7 @@ import (
 	"github.com/emersion/go-sasl"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"golang.org/x/net/proxy"
 )
 
 // Package-level variables for seed batch rotation
@@ -208,6 +209,13 @@ func (s *Server) initWarmupTables() {
 	// Add TLS mode columns to warmup_seeds (migration)
 	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS imap_tls_mode VARCHAR(20) DEFAULT 'tls'`)      // tls, starttls, none
 	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS smtp_tls_mode VARCHAR(20) DEFAULT 'starttls'`) // tls, starttls, none
+
+	// Add proxy columns to warmup_seeds (SOAX proxy support)
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS proxy_enabled BOOLEAN DEFAULT false`)
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS proxy_host VARCHAR(255) DEFAULT 'proxy.soax.com'`)
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS proxy_port INT DEFAULT 9000`)
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS proxy_username VARCHAR(255)`)
+	s.db.Exec(`ALTER TABLE warmup_seeds ADD COLUMN IF NOT EXISTS proxy_password VARCHAR(255)`)
 
 	// Add IMAP fields to smtp_senders for internal warmup (migration)
 	s.db.Exec(`ALTER TABLE smtp_senders ADD COLUMN IF NOT EXISTS imap_host VARCHAR(255)`)
@@ -1109,7 +1117,9 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 			COALESCE(stats.total_inbox, 0) as total_inbox,
 			COALESCE(stats.total_spam, 0) as total_spam,
 			COALESCE(stats.total_moved, 0) as total_moved,
-			COALESCE(stats.total_replied, 0) as total_replied
+			COALESCE(stats.total_replied, 0) as total_replied,
+			COALESCE(ws.proxy_enabled, false), COALESCE(ws.proxy_host, 'proxy.soax.com'),
+			COALESCE(ws.proxy_port, 9000), COALESCE(ws.proxy_username, ''), COALESCE(ws.proxy_password, '')
 		FROM warmup_seeds ws
 		LEFT JOIN (
 			SELECT
@@ -1142,12 +1152,16 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 		var errorMsg sql.NullString
 		var createdAt time.Time
 		var totalSent, totalReceived, totalInbox, totalSpam, totalMoved, totalReplied int
+		var proxyEnabled bool
+		var proxyHost, proxyUsername, proxyPassword string
+		var proxyPort int
 
 		err := rows.Scan(&id, &email, &provider, &imapHost, &imapPort, &smtpHost, &smtpPort,
 			&useTLS, &status, &lastCheck, &errorMsg, &createdAt,
 			&sendRate, &replyRate, &emailsPerDay, &autoReply,
 			&imapTLSMode, &smtpTLSMode,
-			&totalSent, &totalReceived, &totalInbox, &totalSpam, &totalMoved, &totalReplied)
+			&totalSent, &totalReceived, &totalInbox, &totalSpam, &totalMoved, &totalReplied,
+			&proxyEnabled, &proxyHost, &proxyPort, &proxyUsername, &proxyPassword)
 		if err != nil {
 			log.Printf("[Warmup API] listWarmupSeeds scan error: %v", err)
 			continue
@@ -1176,6 +1190,11 @@ func (s *Server) listWarmupSeeds(c *fiber.Ctx) error {
 			"total_spam":     totalSpam,
 			"total_moved":    totalMoved,
 			"total_replied":  totalReplied,
+			"proxy_enabled":  proxyEnabled,
+			"proxy_host":     proxyHost,
+			"proxy_port":     proxyPort,
+			"proxy_username": proxyUsername,
+			"proxy_password": proxyPassword,
 		}
 
 		if lastCheck.Valid {
@@ -1214,6 +1233,12 @@ func (s *Server) createWarmupSeed(c *fiber.Ctx) error {
 		AutoReply     *bool  `json:"auto_reply"`
 		OAuthToken    string `json:"oauth_token"`     // Microsoft OAuth2 refresh token
 		OAuthClientID string `json:"oauth_client_id"` // Microsoft OAuth2 client_id
+		// SOAX Proxy settings
+		ProxyEnabled  bool   `json:"proxy_enabled"`
+		ProxyHost     string `json:"proxy_host"`
+		ProxyPort     int    `json:"proxy_port"`
+		ProxyUsername string `json:"proxy_username"`
+		ProxyPassword string `json:"proxy_password"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -1278,12 +1303,22 @@ func (s *Server) createWarmupSeed(c *fiber.Ctx) error {
 		oauthClientID = req.OAuthClientID
 	}
 
+	// Set proxy defaults
+	if req.ProxyHost == "" {
+		req.ProxyHost = "proxy.soax.com"
+	}
+	if req.ProxyPort == 0 {
+		req.ProxyPort = 9000
+	}
+
 	_, err := s.db.Exec(`
 		INSERT INTO warmup_seeds (id, user_id, email, password, provider, imap_host, imap_port, imap_tls_mode,
-			smtp_host, smtp_port, smtp_tls_mode, send_rate, reply_rate, emails_per_day, auto_reply, oauth_token, oauth_client_id, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'active')
+			smtp_host, smtp_port, smtp_tls_mode, send_rate, reply_rate, emails_per_day, auto_reply, oauth_token, oauth_client_id,
+			proxy_enabled, proxy_host, proxy_port, proxy_username, proxy_password, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, 'active')
 	`, id, userID, req.Email, req.Password, req.Provider, req.IMAPHost, req.IMAPPort, req.IMAPTLSMode,
-		req.SMTPHost, req.SMTPPort, req.SMTPTLSMode, req.SendRate, req.ReplyRate, req.EmailsPerDay, autoReply, oauthToken, oauthClientID)
+		req.SMTPHost, req.SMTPPort, req.SMTPTLSMode, req.SendRate, req.ReplyRate, req.EmailsPerDay, autoReply, oauthToken, oauthClientID,
+		req.ProxyEnabled, req.ProxyHost, req.ProxyPort, req.ProxyUsername, req.ProxyPassword)
 
 	if err != nil {
 		if strings.Contains(err.Error(), "unique") {
@@ -1304,17 +1339,22 @@ func (s *Server) updateWarmupSeed(c *fiber.Ctx) error {
 	id := c.Params("id")
 
 	var req struct {
-		Password     string `json:"password"`
-		IMAPHost     string `json:"imap_host"`
-		IMAPPort     int    `json:"imap_port"`
-		IMAPTLSMode  string `json:"imap_tls_mode"`
-		SMTPHost     string `json:"smtp_host"`
-		SMTPPort     int    `json:"smtp_port"`
-		SMTPTLSMode  string `json:"smtp_tls_mode"`
-		SendRate     *int   `json:"send_rate"`
-		ReplyRate    *int   `json:"reply_rate"`
-		EmailsPerDay *int   `json:"emails_per_day"`
-		AutoReply    *bool  `json:"auto_reply"`
+		Password      string  `json:"password"`
+		IMAPHost      string  `json:"imap_host"`
+		IMAPPort      int     `json:"imap_port"`
+		IMAPTLSMode   string  `json:"imap_tls_mode"`
+		SMTPHost      string  `json:"smtp_host"`
+		SMTPPort      int     `json:"smtp_port"`
+		SMTPTLSMode   string  `json:"smtp_tls_mode"`
+		SendRate      *int    `json:"send_rate"`
+		ReplyRate     *int    `json:"reply_rate"`
+		EmailsPerDay  *int    `json:"emails_per_day"`
+		AutoReply     *bool   `json:"auto_reply"`
+		ProxyEnabled  *bool   `json:"proxy_enabled"`
+		ProxyHost     string  `json:"proxy_host"`
+		ProxyPort     *int    `json:"proxy_port"`
+		ProxyUsername *string `json:"proxy_username"`
+		ProxyPassword *string `json:"proxy_password"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -1379,6 +1419,32 @@ func (s *Server) updateWarmupSeed(c *fiber.Ctx) error {
 	if req.AutoReply != nil {
 		query += fmt.Sprintf(", auto_reply = $%d", paramIdx)
 		params = append(params, *req.AutoReply)
+		paramIdx++
+	}
+	// Proxy settings
+	if req.ProxyEnabled != nil {
+		query += fmt.Sprintf(", proxy_enabled = $%d", paramIdx)
+		params = append(params, *req.ProxyEnabled)
+		paramIdx++
+	}
+	if req.ProxyHost != "" {
+		query += fmt.Sprintf(", proxy_host = $%d", paramIdx)
+		params = append(params, req.ProxyHost)
+		paramIdx++
+	}
+	if req.ProxyPort != nil {
+		query += fmt.Sprintf(", proxy_port = $%d", paramIdx)
+		params = append(params, *req.ProxyPort)
+		paramIdx++
+	}
+	if req.ProxyUsername != nil {
+		query += fmt.Sprintf(", proxy_username = $%d", paramIdx)
+		params = append(params, *req.ProxyUsername)
+		paramIdx++
+	}
+	if req.ProxyPassword != nil {
+		query += fmt.Sprintf(", proxy_password = $%d", paramIdx)
+		params = append(params, *req.ProxyPassword)
 		paramIdx++
 	}
 
@@ -3108,6 +3174,154 @@ func (s *Server) sendSMTPEmailWithOAuth(host string, port int, username, passwor
 	}
 }
 
+// sendSMTPEmailWithProxy sends email through a SOCKS5 proxy (for SOAX integration)
+func (s *Server) sendSMTPEmailWithProxy(smtpHost string, smtpPort int, username, password, tlsMode, from, to, subject, body, messageID string,
+	proxyHost string, proxyPort int, proxyUsername, proxyPassword string) error {
+
+	// Extract email from "Name <email>" format if present
+	fromEmail := from
+	fromHeader := from
+	if strings.Contains(from, "<") && strings.Contains(from, ">") {
+		start := strings.Index(from, "<") + 1
+		end := strings.Index(from, ">")
+		if start > 0 && end > start {
+			fromEmail = from[start:end]
+		}
+		nameEnd := strings.Index(from, "<")
+		if nameEnd > 0 {
+			name := strings.TrimSpace(from[:nameEnd])
+			if needsEncoding(name) {
+				fromHeader = mimeEncode(name) + " <" + fromEmail + ">"
+			}
+		}
+	}
+
+	encodedSubject := subject
+	if needsEncoding(subject) {
+		encodedSubject = mimeEncode(subject)
+	}
+
+	msg := fmt.Sprintf("From: %s\r\n"+
+		"To: %s\r\n"+
+		"Subject: %s\r\n"+
+		"Message-ID: %s\r\n"+
+		"Date: %s\r\n"+
+		"MIME-Version: 1.0\r\n"+
+		"Content-Type: text/plain; charset=UTF-8\r\n"+
+		"Content-Transfer-Encoding: base64\r\n"+
+		"\r\n"+
+		"%s", fromHeader, to, encodedSubject, messageID, time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 -0700"), encodeBase64WithLineBreaks([]byte(body)))
+
+	// Create SOCKS5 dialer with authentication
+	proxyAddr := fmt.Sprintf("%s:%d", proxyHost, proxyPort)
+	var auth *proxy.Auth
+	if proxyUsername != "" {
+		auth = &proxy.Auth{
+			User:     proxyUsername,
+			Password: proxyPassword,
+		}
+	}
+
+	dialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, proxy.Direct)
+	if err != nil {
+		return fmt.Errorf("failed to create SOCKS5 dialer: %v", err)
+	}
+
+	smtpAddr := fmt.Sprintf("%s:%d", smtpHost, smtpPort)
+
+	// Connect through proxy based on TLS mode
+	switch tlsMode {
+	case "tls":
+		// Implicit TLS (port 465)
+		conn, err := dialer.Dial("tcp", smtpAddr)
+		if err != nil {
+			return fmt.Errorf("proxy connection failed: %v", err)
+		}
+		tlsConn := tls.Client(conn, &tls.Config{
+			ServerName:         smtpHost,
+			InsecureSkipVerify: true,
+		})
+		if err := tlsConn.Handshake(); err != nil {
+			conn.Close()
+			return fmt.Errorf("TLS handshake failed: %v", err)
+		}
+		c, err := smtp.NewClient(tlsConn, smtpHost)
+		if err != nil {
+			tlsConn.Close()
+			return fmt.Errorf("SMTP client creation failed: %v", err)
+		}
+		defer c.Close()
+		return s.sendEmailViaClient(c, smtpHost, username, password, fromEmail, to, []byte(msg))
+
+	case "starttls":
+		// STARTTLS (port 587)
+		conn, err := dialer.Dial("tcp", smtpAddr)
+		if err != nil {
+			return fmt.Errorf("proxy connection failed: %v", err)
+		}
+		c, err := smtp.NewClient(conn, smtpHost)
+		if err != nil {
+			conn.Close()
+			return fmt.Errorf("SMTP client creation failed: %v", err)
+		}
+		defer c.Close()
+		if err := c.StartTLS(&tls.Config{
+			ServerName:         smtpHost,
+			InsecureSkipVerify: true,
+		}); err != nil {
+			return fmt.Errorf("STARTTLS failed: %v", err)
+		}
+		return s.sendEmailViaClient(c, smtpHost, username, password, fromEmail, to, []byte(msg))
+
+	default:
+		// Plain (no TLS)
+		conn, err := dialer.Dial("tcp", smtpAddr)
+		if err != nil {
+			return fmt.Errorf("proxy connection failed: %v", err)
+		}
+		c, err := smtp.NewClient(conn, smtpHost)
+		if err != nil {
+			conn.Close()
+			return fmt.Errorf("SMTP client creation failed: %v", err)
+		}
+		defer c.Close()
+		return s.sendEmailViaClient(c, smtpHost, username, password, fromEmail, to, []byte(msg))
+	}
+}
+
+// sendEmailViaClient sends email using an established SMTP client connection
+func (s *Server) sendEmailViaClient(c *smtp.Client, host, username, password, from, to string, msg []byte) error {
+	// Authenticate
+	auth := smtp.PlainAuth("", username, password, host)
+	if err := c.Auth(auth); err != nil {
+		return fmt.Errorf("authentication failed: %v", err)
+	}
+
+	// Set sender
+	if err := c.Mail(from); err != nil {
+		return fmt.Errorf("MAIL FROM failed: %v", err)
+	}
+
+	// Set recipient
+	if err := c.Rcpt(to); err != nil {
+		return fmt.Errorf("RCPT TO failed: %v", err)
+	}
+
+	// Send message body
+	w, err := c.Data()
+	if err != nil {
+		return fmt.Errorf("DATA command failed: %v", err)
+	}
+	if _, err := w.Write(msg); err != nil {
+		return fmt.Errorf("writing message failed: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("closing message failed: %v", err)
+	}
+
+	return c.Quit()
+}
+
 func (s *Server) sendSMTPEmail(host string, port int, username, password, tlsMode, from, to, subject, body, messageID string) error {
 	// Extract email from "Name <email>" format if present
 	fromEmail := from
@@ -3610,11 +3824,13 @@ func (s *Server) processSeedToSMTPEmails() {
 	log.Printf("[Warmup Seed→SMTP] Processing batch %d/%d (seeds %d-%d of %d total, hour: %d)",
 		batchNumber, totalBatches, currentOffset+1, min(currentOffset+maxSeedsPerCycle, totalSeeds), totalSeeds, currentHour)
 
-	// Get only this batch of seeds (with LIMIT and OFFSET) - includes user_id for isolation
+	// Get only this batch of seeds (with LIMIT and OFFSET) - includes user_id for isolation and proxy settings
 	seedRows, err := s.db.Query(`
 		SELECT id, user_id, email, password, smtp_host, smtp_port, use_tls,
 		       COALESCE(send_rate, 50), COALESCE(emails_per_day, 20),
-		       COALESCE(oauth_token, ''), COALESCE(oauth_client_id, '')
+		       COALESCE(oauth_token, ''), COALESCE(oauth_client_id, ''),
+		       COALESCE(proxy_enabled, false), COALESCE(proxy_host, 'proxy.soax.com'),
+		       COALESCE(proxy_port, 9000), COALESCE(proxy_username, ''), COALESCE(proxy_password, '')
 		FROM warmup_seeds
 		WHERE status = 'active' AND smtp_host IS NOT NULL AND smtp_host != ''
 		ORDER BY id
@@ -3638,13 +3854,20 @@ func (s *Server) processSeedToSMTPEmails() {
 		EmailsPerDay  int
 		OAuthToken    string
 		OAuthClientID string
+		// Proxy settings (SOAX)
+		ProxyEnabled  bool
+		ProxyHost     string
+		ProxyPort     int
+		ProxyUsername string
+		ProxyPassword string
 	}
 
 	var seeds []seedInfo
 	for seedRows.Next() {
 		var seed seedInfo
 		seedRows.Scan(&seed.ID, &seed.UserID, &seed.Email, &seed.Password, &seed.SMTPHost, &seed.SMTPPort, &seed.UseTLS,
-			&seed.SendRate, &seed.EmailsPerDay, &seed.OAuthToken, &seed.OAuthClientID)
+			&seed.SendRate, &seed.EmailsPerDay, &seed.OAuthToken, &seed.OAuthClientID,
+			&seed.ProxyEnabled, &seed.ProxyHost, &seed.ProxyPort, &seed.ProxyUsername, &seed.ProxyPassword)
 		seeds = append(seeds, seed)
 	}
 
@@ -3790,9 +4013,18 @@ func (s *Server) processSeedToSMTPEmails() {
 				tlsMode = "tls"
 			}
 
-			// Send email from seed to SMTP sender (with OAuth2 support for Outlook)
-			err = s.sendSMTPEmailWithOAuth(seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
-				seed.Email, target.SenderEmail, subject, body, messageID, seed.OAuthToken, seed.OAuthClientID)
+			// Send email from seed to SMTP sender
+			// Use proxy if enabled, otherwise use direct connection with OAuth support
+			if seed.ProxyEnabled && seed.ProxyUsername != "" {
+				log.Printf("[Warmup Seed→SMTP] Sending via SOCKS5 proxy %s:%d", seed.ProxyHost, seed.ProxyPort)
+				err = s.sendSMTPEmailWithProxy(seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
+					seed.Email, target.SenderEmail, subject, body, messageID,
+					seed.ProxyHost, seed.ProxyPort, seed.ProxyUsername, seed.ProxyPassword)
+			} else {
+				// Direct connection with OAuth2 support for Outlook
+				err = s.sendSMTPEmailWithOAuth(seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
+					seed.Email, target.SenderEmail, subject, body, messageID, seed.OAuthToken, seed.OAuthClientID)
+			}
 
 			if err != nil {
 				log.Printf("[Warmup Seed→SMTP] Failed to send from %s to %s: %v", seed.Email, target.SenderEmail, err)
