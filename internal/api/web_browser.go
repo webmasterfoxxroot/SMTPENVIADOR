@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -16,6 +17,31 @@ type BrowserResult struct {
 	Success bool   `json:"success"`
 	IP      string `json:"ip,omitempty"`
 	Message string `json:"message,omitempty"`
+}
+
+// getChromePath returns the path to Chrome/Chromium executable
+func getChromePath() string {
+	// Check environment variable first
+	if path := os.Getenv("CHROME_PATH"); path != "" {
+		return path
+	}
+
+	// Common paths to check
+	paths := []string{
+		"/usr/bin/chromium-browser",  // Alpine Linux
+		"/usr/bin/chromium",          // Some Linux distros
+		"/usr/bin/google-chrome",     // Google Chrome
+		"/usr/bin/google-chrome-stable",
+	}
+
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+
+	// Default fallback
+	return "google-chrome"
 }
 
 // OutlookWebAutomation handles Outlook web interface automation
@@ -45,6 +71,7 @@ func NewOutlookWebAutomation(email, password string, proxy *ProxyConfig) *Outloo
 // createBrowserContext creates a chromedp context with optional proxy
 func (o *OutlookWebAutomation) createBrowserContext(parentCtx context.Context) (context.Context, context.CancelFunc) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ExecPath(getChromePath()),
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
