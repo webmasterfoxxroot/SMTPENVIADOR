@@ -396,6 +396,9 @@ func (s *Server) setupRoutes() {
 	// Warmup Settings
 	warmup.Get("/settings", s.getWarmupSettings)
 	warmup.Put("/settings", s.updateWarmupSettings)
+
+	// Web Warmup (browser automation)
+	s.registerWebWarmupRoutes(protected)
 }
 
 // Start starts the API server
