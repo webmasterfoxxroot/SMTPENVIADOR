@@ -7,9 +7,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/chromedp"
 )
+
+// BrowserResult holds the result of a browser automation operation
+type BrowserResult struct {
+	Success bool   `json:"success"`
+	IP      string `json:"ip,omitempty"`
+	Message string `json:"message,omitempty"`
+}
 
 // OutlookWebAutomation handles Outlook web interface automation
 type OutlookWebAutomation struct {
@@ -59,18 +66,26 @@ func (o *OutlookWebAutomation) createBrowserContext(parentCtx context.Context) (
 	// Set up proxy authentication if needed
 	if o.Proxy != nil && o.Proxy.Username != "" && o.Proxy.Password != "" {
 		chromedp.ListenTarget(ctx, func(ev interface{}) {
-			if _, ok := ev.(*network.EventAuthRequired); ok {
+			switch e := ev.(type) {
+			case *fetch.EventAuthRequired:
 				go func() {
 					chromedp.Run(ctx,
-						network.ContinueInterceptedRequest(network.AuthChallengeResponse{
-							Response: network.AuthChallengeResponseResponseProvideCredentials,
+						fetch.ContinueWithAuth(e.RequestID, &fetch.AuthChallengeResponse{
+							Response: fetch.AuthChallengeResponseResponseProvideCredentials,
 							Username: o.Proxy.Username,
 							Password: o.Proxy.Password,
 						}),
 					)
 				}()
+			case *fetch.EventRequestPaused:
+				go func() {
+					chromedp.Run(ctx, fetch.ContinueRequest(e.RequestID))
+				}()
 			}
 		})
+
+		// Enable fetch domain to intercept auth challenges
+		chromedp.Run(ctx, fetch.Enable().WithHandleAuthRequests(true))
 	}
 
 	return ctx, func() {
