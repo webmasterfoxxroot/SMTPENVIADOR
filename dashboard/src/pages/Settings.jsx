@@ -79,8 +79,8 @@ function Settings() {
   }
 
   const handleTestProxy = async () => {
-    if (!settings.proxy_api_key || !settings.proxy_password) {
-      toast.error('Preencha username e password primeiro')
+    if (!settings.proxy_host || !settings.proxy_port || !settings.proxy_user || !settings.proxy_pass) {
+      toast.error('Preencha todos os campos do proxy')
       return
     }
 
@@ -88,9 +88,10 @@ function Settings() {
       setTestingProxy(true)
       setProxyTestResult(null)
       const response = await api.post('/settings/test-proxy', {
-        username: settings.proxy_api_key,
-        password: settings.proxy_password,
-        country: settings.proxy_country || 'br'
+        host: settings.proxy_host,
+        port: settings.proxy_port,
+        username: settings.proxy_user,
+        password: settings.proxy_pass
       })
       setProxyTestResult({
         success: true,
@@ -268,14 +269,14 @@ function Settings() {
         </div>
       </div>
 
-      {/* SOAX Proxy Settings for Warmup Seeds */}
+      {/* Proxy Settings for Warmup Seeds */}
       <div className="card">
         <div className="flex items-center gap-2 mb-4">
           <Shield className="w-5 h-5 text-cyan-500" />
-          <h2 className="text-lg font-semibold">Proxy SOAX (Seed→SMTP)</h2>
+          <h2 className="text-lg font-semibold">Proxy Residencial (Seed→SMTP)</h2>
         </div>
         <p className="text-gray-400 text-sm mb-4">
-          Configure proxy residencial SOAX para envios Seed→SMTP. Cada envio usa um IP diferente automaticamente.
+          Configure proxy residencial para envios Seed→SMTP. Cada envio usa um IP diferente automaticamente.
         </p>
 
         {/* Enable/Disable Toggle */}
@@ -293,7 +294,7 @@ function Settings() {
                 </p>
               </div>
             </div>
-            {settings.proxy_enabled === 'true' && settings.proxy_api_key && (
+            {settings.proxy_enabled === 'true' && settings.proxy_host && settings.proxy_user && (
               <div className="text-cyan-400 text-sm">
                 ✓ Configurado
               </div>
@@ -301,61 +302,57 @@ function Settings() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           <div>
             <label className="block text-sm font-medium mb-1">
-              Username SOAX
+              Host
             </label>
             <input
               type="text"
-              value={settings.proxy_api_key || ''}
-              onChange={(e) => handleChange('proxy_api_key', e.target.value)}
-              placeholder="package-XXXXX"
+              value={settings.proxy_host || ''}
+              onChange={(e) => handleChange('proxy_host', e.target.value)}
+              placeholder="prem.digiproxy.cc"
               className="input w-full font-mono"
             />
-            <p className="text-gray-500 text-xs mt-1">
-              SOAX Dashboard → Credentials → Username
-            </p>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">
-              Password SOAX
+              Porta
             </label>
             <input
               type="text"
-              value={settings.proxy_password || ''}
-              onChange={(e) => handleChange('proxy_password', e.target.value)}
+              value={settings.proxy_port || ''}
+              onChange={(e) => handleChange('proxy_port', e.target.value)}
+              placeholder="8000"
+              className="input w-full font-mono"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              Usuário
+            </label>
+            <input
+              type="text"
+              value={settings.proxy_user || ''}
+              onChange={(e) => handleChange('proxy_user', e.target.value)}
+              placeholder="seu_usuario"
+              className="input w-full font-mono"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              Senha
+            </label>
+            <input
+              type="text"
+              value={settings.proxy_pass || ''}
+              onChange={(e) => handleChange('proxy_pass', e.target.value)}
               placeholder="sua_senha"
               className="input w-full font-mono"
             />
-            <p className="text-gray-500 text-xs mt-1">
-              SOAX Dashboard → Credentials → Password
-            </p>
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">
-              País do Proxy
-            </label>
-            <select
-              value={settings.proxy_country || 'br'}
-              onChange={(e) => handleChange('proxy_country', e.target.value)}
-              className="input w-full"
-            >
-              <option value="random">🌍 Random (Global)</option>
-              <option value="br">🇧🇷 Brasil</option>
-              <option value="us">🇺🇸 Estados Unidos</option>
-              <option value="pt">🇵🇹 Portugal</option>
-              <option value="es">🇪🇸 Espanha</option>
-              <option value="uk">🇬🇧 Reino Unido</option>
-              <option value="de">🇩🇪 Alemanha</option>
-              <option value="fr">🇫🇷 França</option>
-              <option value="it">🇮🇹 Itália</option>
-              <option value="mx">🇲🇽 México</option>
-              <option value="ar">🇦🇷 Argentina</option>
-            </select>
-            <p className="text-gray-500 text-xs mt-1">
-              País dos IPs residenciais
-            </p>
           </div>
         </div>
 
@@ -363,7 +360,7 @@ function Settings() {
         <div className="mb-4">
           <button
             onClick={handleTestProxy}
-            disabled={testingProxy || !settings.proxy_api_key || !settings.proxy_password}
+            disabled={testingProxy || !settings.proxy_host || !settings.proxy_port || !settings.proxy_user || !settings.proxy_pass}
             className="bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
           >
             {testingProxy ? (
@@ -401,8 +398,7 @@ function Settings() {
           <div className="flex items-start gap-2">
             <AlertCircle className="w-4 h-4 text-cyan-400 mt-0.5" />
             <div className="text-gray-300">
-              <strong>Como funciona:</strong> Cada email enviado por Seed→SMTP usa um IP diferente (rotativo).
-              O IP e região são mostrados na Atividade Recente do Warmup.
+              <strong>Formato:</strong> user:pass@host:port — Cada email Seed→SMTP usa um IP diferente (rotativo).
             </div>
           </div>
         </div>

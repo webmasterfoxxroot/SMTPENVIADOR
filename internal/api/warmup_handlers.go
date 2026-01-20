@@ -390,12 +390,12 @@ func (s *Server) insertDefaultWarmupSettings() {
 		{"max_emails_per_smtp_per_day", "50", "Máximo de emails por SMTP por dia"},
 		{"imap_check_interval", "5", "Intervalo de verificação IMAP em minutos"},
 
-		// SOAX Proxy settings (for Seed→SMTP)
-		{"proxy_enabled", "false", "Ativar proxy SOAX para Seed→SMTP"},
-		{"proxy_api_key", "", "Username do SOAX (package ID)"},
-		{"proxy_password", "", "Password do SOAX"},
-		{"proxy_type", "residential", "Tipo de proxy (residential, mobile, wifi)"},
-		{"proxy_country", "br", "País do proxy (br, us, etc)"},
+		// Proxy settings (for Seed→SMTP)
+		{"proxy_enabled", "false", "Ativar proxy para Seed→SMTP"},
+		{"proxy_host", "", "Host do proxy (ex: prem.digiproxy.cc)"},
+		{"proxy_port", "", "Porta do proxy"},
+		{"proxy_user", "", "Usuário do proxy"},
+		{"proxy_pass", "", "Senha do proxy"},
 	}
 
 	for _, setting := range defaultSettings {
@@ -3362,22 +3362,22 @@ func (s *Server) sendSMTPEmailWithProxyAndGetIP(proxyHost string, proxyPort int,
 		return "", fmt.Errorf("failed to create SOCKS5 dialer: %v", err)
 	}
 
-	// First, get the IP we're using by connecting to SOAX's checker
+	// Get the IP we're using by connecting to ipinfo.io
 	var proxyIP string
-	ipConn, err := dialer.Dial("tcp", "checker.soax.com:80")
+	ipConn, err := dialer.Dial("tcp", "ipinfo.io:80")
 	if err == nil {
 		// Send HTTP request to get IP info
-		fmt.Fprintf(ipConn, "GET /api/ipinfo HTTP/1.1\r\nHost: checker.soax.com\r\nConnection: close\r\n\r\n")
-		response := make([]byte, 2048)
+		fmt.Fprintf(ipConn, "GET /ip HTTP/1.1\r\nHost: ipinfo.io\r\nConnection: close\r\n\r\n")
+		response := make([]byte, 1024)
 		n, _ := ipConn.Read(response)
 		ipConn.Close()
-		// Parse IP from JSON response - look for "ip" field
-		respStr := string(response[:n])
-		if idx := strings.Index(respStr, `"ip":"`); idx != -1 {
-			start := idx + 6
-			end := strings.Index(respStr[start:], `"`)
-			if end > 0 {
-				proxyIP = respStr[start : start+end]
+		// Parse IP from response (last line after headers)
+		lines := strings.Split(string(response[:n]), "\r\n")
+		for i := len(lines) - 1; i >= 0; i-- {
+			line := strings.TrimSpace(lines[i])
+			if line != "" && !strings.Contains(line, ":") {
+				proxyIP = line
+				break
 			}
 		}
 	}
@@ -3949,23 +3949,16 @@ func (s *Server) processSeedToSMTPEmails() {
 
 	// Get global proxy settings from main settings table
 	var proxyEnabled string
-	var proxyAPIKey, proxyPassword, proxyType, proxyCountry string
+	var proxyHost, proxyPort, proxyUser, proxyPass string
 	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_enabled'`).Scan(&proxyEnabled)
-	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_api_key'`).Scan(&proxyAPIKey)
-	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_password'`).Scan(&proxyPassword)
-	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_type'`).Scan(&proxyType)
-	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_country'`).Scan(&proxyCountry)
-	// Set defaults
-	if proxyType == "" {
-		proxyType = "residential"
-	}
-	if proxyCountry == "" {
-		proxyCountry = "br"
-	}
+	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_host'`).Scan(&proxyHost)
+	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_port'`).Scan(&proxyPort)
+	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_user'`).Scan(&proxyUser)
+	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_pass'`).Scan(&proxyPass)
 
-	useProxy := proxyEnabled == "true" && proxyAPIKey != "" && proxyPassword != ""
+	useProxy := proxyEnabled == "true" && proxyHost != "" && proxyPort != "" && proxyUser != "" && proxyPass != ""
 	if useProxy {
-		log.Printf("[Warmup Seed→SMTP] Proxy ENABLED - Type: %s, Country: %s", proxyType, proxyCountry)
+		log.Printf("[Warmup Seed→SMTP] Proxy ENABLED - Host: %s:%s", proxyHost, proxyPort)
 	}
 
 	now := time.Now()
@@ -4195,26 +4188,12 @@ func (s *Server) processSeedToSMTPEmails() {
 			// Send email from seed to SMTP sender
 			// Use GLOBAL proxy settings if enabled
 			if useProxy {
-				// Generate unique session for rotating IP (each send gets different IP)
-				sessionID := fmt.Sprintf("session-%s-%d", uuid.New().String()[:8], time.Now().UnixNano())
+				// Simple proxy format: user:pass@host:port
+				portNum, _ := strconv.Atoi(proxyPort)
+				proxyRegion = "Proxy"
 
-				// Handle "random" country option - pick a random country for each send
-				selectedCountry := proxyCountry
-				if proxyCountry == "random" {
-					countries := []string{"br", "us", "pt", "es", "uk", "de", "fr", "it", "mx", "ar"}
-					selectedCountry = countries[rand.Intn(len(countries))]
-				}
-
-				// SOAX SOCKS5 proxy format:
-				// Host: proxy.soax.com, Port: 22554
-				// Username: package-ID-country-XX-sessionid-XXXXX (geo params in username)
-				// Password: your SOAX password
-				proxyUsername := fmt.Sprintf("%s-country-%s-sessionid-%s", proxyAPIKey, selectedCountry, sessionID)
-				proxyPass := proxyPassword
-				proxyRegion = strings.ToUpper(selectedCountry)
-
-				log.Printf("[Warmup Seed→SMTP] Sending via SOAX proxy (session: %s, country: %s)", sessionID[:16], selectedCountry)
-				proxyIP, err = s.sendSMTPEmailWithProxyAndGetIP("proxy.soax.com", 22554, proxyUsername, proxyPass,
+				log.Printf("[Warmup Seed→SMTP] Sending via proxy %s:%s", proxyHost, proxyPort)
+				proxyIP, err = s.sendSMTPEmailWithProxyAndGetIP(proxyHost, portNum, proxyUser, proxyPass,
 					seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
 					seed.Email, target.SenderEmail, subject, body, messageID)
 			} else {
