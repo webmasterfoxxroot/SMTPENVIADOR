@@ -282,11 +282,11 @@ func (s *Server) testProxy(c *fiber.Ctx) error {
 	// Generate unique session ID for this test
 	sessionID := fmt.Sprintf("test_%d_%d", time.Now().UnixNano(), rand.Intn(1000000))
 
-	// SOAX proxy format (same as warmup_handlers.go):
-	// User: API_KEY
-	// Password: package-APIKEY-country-COUNTRY-sessionid-SESSION
-	proxyUser := req.APIKey
-	proxyPass := fmt.Sprintf("package-%s-country-%s-sessionid-%s", req.APIKey, selectedCountry, sessionID)
+	// SOAX residential proxy format:
+	// Username: package-APIKEY-country-XX-sessionid-XXXXX
+	// Password: wifi (fixed)
+	proxyUser := fmt.Sprintf("package-%s-country-%s-sessionid-%s", req.APIKey, selectedCountry, sessionID)
+	proxyPass := "wifi"
 	proxyHost := "proxy.soax.com"
 	proxyPort := "9000"
 
