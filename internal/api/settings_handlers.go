@@ -279,14 +279,14 @@ func (s *Server) testProxy(c *fiber.Ctx) error {
 		selectedCountry = countries[rand.Intn(len(countries))]
 	}
 
-	// Generate unique session ID for this test
-	sessionID := fmt.Sprintf("test_%d_%d", time.Now().UnixNano(), rand.Intn(1000000))
+	// Generate unique session ID for sticky IP during test
+	sessionID := fmt.Sprintf("%d", time.Now().UnixNano())
 
 	// SOAX residential proxy format:
-	// Username: package-APIKEY-country-XX-sessionid-XXXXX
-	// Password: wifi (fixed)
-	proxyUser := fmt.Sprintf("package-%s-country-%s-sessionid-%s", req.APIKey, selectedCountry, sessionID)
-	proxyPass := "wifi"
+	// Username: Package API Key
+	// Password: wifi;country;sessid-XXXXX; (GEO params separated by ;)
+	proxyUser := req.APIKey
+	proxyPass := fmt.Sprintf("wifi;%s;sessid-%s;", selectedCountry, sessionID)
 	proxyHost := "proxy.soax.com"
 	proxyPort := "9000"
 
@@ -310,8 +310,8 @@ func (s *Server) testProxy(c *fiber.Ctx) error {
 		Timeout:   15 * time.Second,
 	}
 
-	// Test connection by getting IP info
-	resp, err := client.Get("https://ipinfo.io/json")
+	// Use SOAX's own IP checker endpoint
+	resp, err := client.Get("http://checker.soax.com/api/ipinfo")
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("Failed to connect through proxy: %v", err)})
 	}
