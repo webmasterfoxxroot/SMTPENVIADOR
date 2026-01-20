@@ -124,12 +124,13 @@ func (o *OutlookWebAutomation) createBrowserContext(parentCtx context.Context) (
 // TestLogin tests if the credentials work for Outlook web login
 func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserResult, error) {
 	log.Printf("[Web Browser] Testing login for %s", o.Email)
+	log.Printf("[Web Browser] Chrome path: %s", getChromePath())
 
 	ctx, cancel := o.createBrowserContext(parentCtx)
 	defer cancel()
 
 	// Set timeout
-	ctx, cancelTimeout := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancelTimeout := context.WithTimeout(ctx, 90*time.Second)
 	defer cancelTimeout()
 
 	var currentURL string
@@ -137,9 +138,10 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 
 	// First, get the proxy IP by visiting a simple IP check service
 	if o.Proxy != nil && o.Proxy.Host != "" {
+		log.Printf("[Web Browser] Getting proxy IP...")
 		err := chromedp.Run(ctx,
 			chromedp.Navigate("https://api.ipify.org"),
-			chromedp.Sleep(2*time.Second),
+			chromedp.Sleep(3*time.Second),
 			chromedp.Text("body", &proxyIP, chromedp.NodeVisible),
 		)
 		if err != nil {
@@ -151,35 +153,96 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 	}
 
 	// Navigate to Outlook login
+	log.Printf("[Web Browser] Navigating to login.live.com...")
 	err := chromedp.Run(ctx,
 		chromedp.Navigate("https://login.live.com/"),
-		chromedp.WaitVisible(`input[type="email"]`, chromedp.ByQuery),
+		chromedp.Sleep(3*time.Second),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load login page: %v", err)
+		return nil, fmt.Errorf("failed to navigate to login page: %v", err)
+	}
+
+	// Wait for email field - try multiple selectors
+	log.Printf("[Web Browser] Waiting for email field...")
+	err = chromedp.Run(ctx,
+		chromedp.WaitVisible(`#i0116`, chromedp.ByID),
+	)
+	if err != nil {
+		// Try alternative selector
+		err = chromedp.Run(ctx,
+			chromedp.WaitVisible(`input[type="email"]`, chromedp.ByQuery),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to find email field: %v", err)
+		}
 	}
 
 	// Enter email
+	log.Printf("[Web Browser] Entering email: %s", o.Email)
 	err = chromedp.Run(ctx,
-		chromedp.SendKeys(`input[type="email"]`, o.Email, chromedp.ByQuery),
-		chromedp.Sleep(500*time.Millisecond),
-		chromedp.Click(`input[type="submit"]`, chromedp.ByQuery),
-		chromedp.Sleep(3*time.Second),
+		chromedp.Clear(`#i0116`, chromedp.ByID),
+		chromedp.SendKeys(`#i0116`, o.Email, chromedp.ByID),
+		chromedp.Sleep(1*time.Second),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to enter email: %v", err)
 	}
 
-	// Wait for password field and enter password
+	// Click Next button
+	log.Printf("[Web Browser] Clicking Next button...")
 	err = chromedp.Run(ctx,
-		chromedp.WaitVisible(`input[type="password"]`, chromedp.ByQuery),
-		chromedp.SendKeys(`input[type="password"]`, o.Password, chromedp.ByQuery),
-		chromedp.Sleep(500*time.Millisecond),
-		chromedp.Click(`input[type="submit"]`, chromedp.ByQuery),
-		chromedp.Sleep(5*time.Second),
+		chromedp.Click(`#idSIButton9`, chromedp.ByID),
+		chromedp.Sleep(4*time.Second),
+	)
+	if err != nil {
+		// Try alternative selector
+		err = chromedp.Run(ctx,
+			chromedp.Click(`input[type="submit"]`, chromedp.ByQuery),
+			chromedp.Sleep(4*time.Second),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to click next button: %v", err)
+		}
+	}
+
+	// Check current URL
+	chromedp.Run(ctx, chromedp.Location(&currentURL))
+	log.Printf("[Web Browser] URL after email: %s", currentURL)
+
+	// Wait for password field
+	log.Printf("[Web Browser] Waiting for password field...")
+	err = chromedp.Run(ctx,
+		chromedp.WaitVisible(`#i0118`, chromedp.ByID),
+	)
+	if err != nil {
+		// Try alternative selector
+		err = chromedp.Run(ctx,
+			chromedp.WaitVisible(`input[type="password"]`, chromedp.ByQuery),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to find password field: %v", err)
+		}
+	}
+
+	// Enter password
+	log.Printf("[Web Browser] Entering password...")
+	err = chromedp.Run(ctx,
+		chromedp.Clear(`#i0118`, chromedp.ByID),
+		chromedp.SendKeys(`#i0118`, o.Password, chromedp.ByID),
+		chromedp.Sleep(1*time.Second),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to enter password: %v", err)
+	}
+
+	// Click Sign in button
+	log.Printf("[Web Browser] Clicking Sign in button...")
+	err = chromedp.Run(ctx,
+		chromedp.Click(`#idSIButton9`, chromedp.ByID),
+		chromedp.Sleep(5*time.Second),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to click sign in button: %v", err)
 	}
 
 	// Check if we're logged in or if there's an error
@@ -192,14 +255,28 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 
 	log.Printf("[Web Browser] Current URL after login: %s", currentURL)
 
+	// Handle "Stay signed in?" prompt if present
+	if strings.Contains(currentURL, "kmsi") {
+		log.Printf("[Web Browser] Found 'Stay signed in' prompt, clicking No...")
+		chromedp.Run(ctx,
+			chromedp.Click(`#idBtn_Back`, chromedp.ByID), // "No" button
+			chromedp.Sleep(3*time.Second),
+		)
+		chromedp.Run(ctx, chromedp.Location(&currentURL))
+		log.Printf("[Web Browser] URL after KMSI: %s", currentURL)
+	}
+
 	// Check for successful login indicators
 	if strings.Contains(currentURL, "outlook.live.com") ||
 		strings.Contains(currentURL, "outlook.office.com") ||
 		strings.Contains(currentURL, "mail.live.com") ||
-		strings.Contains(currentURL, "kmsi") { // "Keep me signed in" page
+		strings.Contains(currentURL, "office.com") ||
+		strings.Contains(currentURL, "microsoftonline.com") {
+		log.Printf("[Web Browser] Login successful!")
 		return &BrowserResult{
 			Success: true,
 			IP:      proxyIP,
+			Message: "Login successful",
 		}, nil
 	}
 
@@ -207,18 +284,38 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 	if strings.Contains(currentURL, "login.live.com") {
 		// Still on login page, check for error message
 		var errorText string
-		chromedp.Run(ctx,
-			chromedp.Text(`#usernameError, #passwordError, .alert`, &errorText, chromedp.ByQuery),
-		)
+
+		// Try multiple error selectors
+		selectors := []string{
+			"#usernameError",
+			"#passwordError",
+			"#errorText",
+			".alert-error",
+			"#error",
+		}
+
+		for _, sel := range selectors {
+			chromedp.Run(ctx, chromedp.Text(sel, &errorText, chromedp.ByQuery))
+			if errorText != "" {
+				break
+			}
+		}
+
 		if errorText != "" {
+			log.Printf("[Web Browser] Login error: %s", errorText)
 			return nil, fmt.Errorf("login failed: %s", errorText)
 		}
-		return nil, fmt.Errorf("login failed: still on login page")
+
+		log.Printf("[Web Browser] Still on login page, no specific error found")
+		return nil, fmt.Errorf("login failed: still on login page after password entry")
 	}
 
+	// If we got here with an unknown URL, consider it a success
+	log.Printf("[Web Browser] Login completed, final URL: %s", currentURL)
 	return &BrowserResult{
 		Success: true,
 		IP:      proxyIP,
+		Message: fmt.Sprintf("Login completed, redirected to: %s", currentURL),
 	}, nil
 }
 
