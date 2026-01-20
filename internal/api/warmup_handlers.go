@@ -3197,7 +3197,7 @@ func (s *Server) sendSMTPEmailWithOAuth(host string, port int, username, passwor
 	}
 }
 
-// sendSMTPEmailWithProxy sends email through a SOCKS5 proxy (for SOAX integration)
+// sendSMTPEmailWithProxy sends email through an HTTP CONNECT proxy
 func (s *Server) sendSMTPEmailWithProxy(smtpHost string, smtpPort int, username, password, tlsMode, from, to, subject, body, messageID string,
 	proxyHost string, proxyPort int, proxyUsername, proxyPassword string) error {
 
@@ -3235,28 +3235,11 @@ func (s *Server) sendSMTPEmailWithProxy(smtpHost string, smtpPort int, username,
 		"\r\n"+
 		"%s", fromHeader, to, encodedSubject, messageID, time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 -0700"), encodeBase64WithLineBreaks([]byte(body)))
 
-	// Create SOCKS5 dialer with authentication
-	proxyAddr := fmt.Sprintf("%s:%d", proxyHost, proxyPort)
-	var auth *proxy.Auth
-	if proxyUsername != "" {
-		auth = &proxy.Auth{
-			User:     proxyUsername,
-			Password: proxyPassword,
-		}
-	}
-
-	dialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, proxy.Direct)
-	if err != nil {
-		return fmt.Errorf("failed to create SOCKS5 dialer: %v", err)
-	}
-
-	smtpAddr := fmt.Sprintf("%s:%d", smtpHost, smtpPort)
-
-	// Connect through proxy based on TLS mode
+	// Connect through HTTP CONNECT proxy based on TLS mode
 	switch tlsMode {
 	case "tls":
 		// Implicit TLS (port 465)
-		conn, err := dialer.Dial("tcp", smtpAddr)
+		conn, err := dialHTTPProxy(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
 		if err != nil {
 			return fmt.Errorf("proxy connection failed: %v", err)
 		}
@@ -3278,7 +3261,7 @@ func (s *Server) sendSMTPEmailWithProxy(smtpHost string, smtpPort int, username,
 
 	case "starttls":
 		// STARTTLS (port 587)
-		conn, err := dialer.Dial("tcp", smtpAddr)
+		conn, err := dialHTTPProxy(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
 		if err != nil {
 			return fmt.Errorf("proxy connection failed: %v", err)
 		}
@@ -3298,7 +3281,7 @@ func (s *Server) sendSMTPEmailWithProxy(smtpHost string, smtpPort int, username,
 
 	default:
 		// Plain (no TLS)
-		conn, err := dialer.Dial("tcp", smtpAddr)
+		conn, err := dialHTTPProxy(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
 		if err != nil {
 			return fmt.Errorf("proxy connection failed: %v", err)
 		}
