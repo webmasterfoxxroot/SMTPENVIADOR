@@ -3361,19 +3361,23 @@ func (s *Server) sendSMTPEmailWithProxyAndGetIP(proxyHost string, proxyPort int,
 		return "", fmt.Errorf("failed to create SOCKS5 dialer: %v", err)
 	}
 
-	// First, get the IP we're using by connecting to a check service
+	// First, get the IP we're using by connecting to SOAX's checker
 	var proxyIP string
-	ipConn, err := dialer.Dial("tcp", "api.ipify.org:80")
+	ipConn, err := dialer.Dial("tcp", "checker.soax.com:80")
 	if err == nil {
-		// Send HTTP request to get IP
-		fmt.Fprintf(ipConn, "GET / HTTP/1.1\r\nHost: api.ipify.org\r\nConnection: close\r\n\r\n")
-		response := make([]byte, 1024)
+		// Send HTTP request to get IP info
+		fmt.Fprintf(ipConn, "GET /api/ipinfo HTTP/1.1\r\nHost: checker.soax.com\r\nConnection: close\r\n\r\n")
+		response := make([]byte, 2048)
 		n, _ := ipConn.Read(response)
 		ipConn.Close()
-		// Parse IP from response (last line after headers)
-		lines := strings.Split(string(response[:n]), "\r\n")
-		if len(lines) > 0 {
-			proxyIP = strings.TrimSpace(lines[len(lines)-1])
+		// Parse IP from JSON response - look for "ip" field
+		respStr := string(response[:n])
+		if idx := strings.Index(respStr, `"ip":"`); idx != -1 {
+			start := idx + 6
+			end := strings.Index(respStr[start:], `"`)
+			if end > 0 {
+				proxyIP = respStr[start : start+end]
+			}
 		}
 	}
 
@@ -4200,10 +4204,10 @@ func (s *Server) processSeedToSMTPEmails() {
 				}
 
 				// SOAX residential proxy format:
-				// Username: package-APIKEY-country-XX-sessionid-XXXXX
-				// Password: wifi (fixed)
-				proxyUsername := fmt.Sprintf("package-%s-country-%s-sessionid-%s", proxyAPIKey, selectedCountry, sessionID)
-				proxyPassword := "wifi"
+				// Username: Package API Key
+				// Password: wifi;country;sessid-XXXXX; (GEO params separated by ;)
+				proxyUsername := proxyAPIKey
+				proxyPassword := fmt.Sprintf("wifi;%s;sessid-%s;", selectedCountry, sessionID)
 				proxyRegion = strings.ToUpper(selectedCountry)
 
 				log.Printf("[Warmup Seed→SMTP] Sending via SOAX proxy (session: %s, country: %s)", sessionID[:16], selectedCountry)
