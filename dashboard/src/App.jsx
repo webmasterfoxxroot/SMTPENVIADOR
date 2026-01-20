@@ -5,6 +5,7 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import SMTPServers from './pages/SMTPServers'
 import Warmup from './pages/Warmup'
+import WebWarmup from './pages/WebWarmup'
 import EmailLists from './pages/EmailLists'
 import Campaigns from './pages/Campaigns'
 import CampaignEdit from './pages/CampaignEdit'
@@ -43,6 +44,7 @@ function App() {
         <Route index element={<Dashboard />} />
         <Route path="smtp" element={<SMTPServers />} />
         <Route path="warmup" element={<Warmup />} />
+        <Route path="web-warmup" element={<WebWarmup />} />
         <Route path="lists" element={<EmailLists />} />
         <Route path="campaigns" element={<Campaigns />} />
         <Route path="campaigns/new" element={<CampaignEdit />} />
