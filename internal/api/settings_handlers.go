@@ -2,13 +2,18 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"io"
+	"math/rand"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"golang.org/x/net/proxy"
 )
 
 // getSettingValue returns a setting value by key with a default fallback
@@ -244,5 +249,102 @@ func (s *Server) restartServer(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"message": "Server restarted successfully",
+	})
+}
+
+// testProxy tests the SOAX proxy connection (admin only)
+func (s *Server) testProxy(c *fiber.Ctx) error {
+	// Check if user is admin
+	if !isAdmin(c) {
+		return c.Status(403).JSON(fiber.Map{"error": "Admin access required"})
+	}
+
+	var req struct {
+		APIKey  string `json:"api_key"`
+		Country string `json:"country"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	if req.APIKey == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "API key is required"})
+	}
+
+	// Handle random country selection
+	selectedCountry := req.Country
+	if selectedCountry == "" || selectedCountry == "random" {
+		countries := []string{"br", "us", "pt", "es", "uk", "de", "fr", "it", "mx", "ar"}
+		selectedCountry = countries[rand.Intn(len(countries))]
+	}
+
+	// Generate unique session ID for this test
+	sessionID := fmt.Sprintf("test_%d_%d", time.Now().UnixNano(), rand.Intn(1000000))
+
+	// SOAX proxy format (same as warmup_handlers.go):
+	// User: API_KEY
+	// Password: package-APIKEY-country-COUNTRY-sessionid-SESSION
+	proxyUser := req.APIKey
+	proxyPass := fmt.Sprintf("package-%s-country-%s-sessionid-%s", req.APIKey, selectedCountry, sessionID)
+	proxyHost := "proxy.soax.com"
+	proxyPort := "9000"
+
+	// Create SOCKS5 proxy dialer
+	auth := proxy.Auth{
+		User:     proxyUser,
+		Password: proxyPass,
+	}
+
+	dialer, err := proxy.SOCKS5("tcp", net.JoinHostPort(proxyHost, proxyPort), &auth, proxy.Direct)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("Failed to create proxy dialer: %v", err)})
+	}
+
+	// Create HTTP client with proxy
+	transport := &http.Transport{
+		Dial: dialer.Dial,
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   15 * time.Second,
+	}
+
+	// Test connection by getting IP info
+	resp, err := client.Get("https://ipinfo.io/json")
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("Failed to connect through proxy: %v", err)})
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("Failed to read response: %v", err)})
+	}
+
+	// Parse IP info
+	var ipInfo struct {
+		IP      string `json:"ip"`
+		City    string `json:"city"`
+		Region  string `json:"region"`
+		Country string `json:"country"`
+	}
+
+	if err := json.Unmarshal(body, &ipInfo); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("Failed to parse IP info: %v", err)})
+	}
+
+	// Build region string
+	region := ipInfo.Country
+	if ipInfo.City != "" {
+		region = ipInfo.City + ", " + ipInfo.Country
+	} else if ipInfo.Region != "" {
+		region = ipInfo.Region + ", " + ipInfo.Country
+	}
+
+	return c.JSON(fiber.Map{
+		"ip":      ipInfo.IP,
+		"region":  region,
+		"country": ipInfo.Country,
 	})
 }

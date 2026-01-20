@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings as SettingsIcon, Save, RefreshCw, Globe, RotateCcw, AlertCircle, Server, Power, Upload, Database, Shield } from 'lucide-react'
+import { Settings as SettingsIcon, Save, RefreshCw, Globe, RotateCcw, AlertCircle, Server, Power, Upload, Database, Shield, Zap } from 'lucide-react'
 import api from '../services/api'
 import toast from 'react-hot-toast'
 
@@ -9,6 +9,8 @@ function Settings() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [restarting, setRestarting] = useState(false)
+  const [testingProxy, setTestingProxy] = useState(false)
+  const [proxyTestResult, setProxyTestResult] = useState(null)
 
   useEffect(() => {
     fetchSettings()
@@ -73,6 +75,36 @@ function Settings() {
       toast.error('Erro ao reiniciar servidor')
     } finally {
       setRestarting(false)
+    }
+  }
+
+  const handleTestProxy = async () => {
+    if (!settings.proxy_api_key) {
+      toast.error('Preencha a chave API primeiro')
+      return
+    }
+
+    try {
+      setTestingProxy(true)
+      setProxyTestResult(null)
+      const response = await api.post('/settings/test-proxy', {
+        api_key: settings.proxy_api_key,
+        country: settings.proxy_country || 'br'
+      })
+      setProxyTestResult({
+        success: true,
+        ip: response.data.ip,
+        region: response.data.region
+      })
+      toast.success('Proxy funcionando! IP: ' + response.data.ip)
+    } catch (error) {
+      setProxyTestResult({
+        success: false,
+        error: error.response?.data?.error || 'Erro ao testar proxy'
+      })
+      toast.error('Erro ao testar proxy: ' + (error.response?.data?.error || 'Falha na conexao'))
+    } finally {
+      setTestingProxy(false)
     }
   }
 
@@ -274,11 +306,11 @@ function Settings() {
               Chave API SOAX
             </label>
             <input
-              type="password"
+              type="text"
               value={settings.proxy_api_key || ''}
               onChange={(e) => handleChange('proxy_api_key', e.target.value)}
               placeholder="Sua chave API do SOAX"
-              className="input w-full"
+              className="input w-full font-mono"
             />
             <p className="text-gray-500 text-xs mt-1">
               Encontre em: SOAX Dashboard → Package → Key
@@ -309,6 +341,44 @@ function Settings() {
               {settings.proxy_country === 'random' ? 'Usa IPs de países diferentes a cada envio' : 'País de origem dos IPs residenciais'}
             </p>
           </div>
+        </div>
+
+        {/* Test Proxy Button */}
+        <div className="mb-4">
+          <button
+            onClick={handleTestProxy}
+            disabled={testingProxy || !settings.proxy_api_key}
+            className="bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+          >
+            {testingProxy ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : (
+              <Zap className="w-4 h-4" />
+            )}
+            {testingProxy ? 'Testando...' : 'Testar Conexão'}
+          </button>
+
+          {proxyTestResult && (
+            <div className={`mt-3 p-3 rounded-lg ${proxyTestResult.success ? 'bg-green-900/50 border border-green-700' : 'bg-red-900/50 border border-red-700'}`}>
+              {proxyTestResult.success ? (
+                <div className="flex items-center gap-2 text-green-400">
+                  <span className="text-lg">✓</span>
+                  <div>
+                    <p className="font-medium">Proxy funcionando!</p>
+                    <p className="text-sm text-green-300">IP: <span className="font-mono">{proxyTestResult.ip}</span> | Região: {proxyTestResult.region}</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-red-400">
+                  <span className="text-lg">✕</span>
+                  <div>
+                    <p className="font-medium">Erro no proxy</p>
+                    <p className="text-sm text-red-300">{proxyTestResult.error}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="bg-gray-700/50 rounded-lg p-3 text-sm">

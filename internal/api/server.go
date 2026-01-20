@@ -343,6 +343,7 @@ func (s *Server) setupRoutes() {
 	settings.Get("/", s.getSettings)
 	settings.Get("/server-info", s.getServerInfo)
 	settings.Post("/restart", s.restartServer)
+	settings.Post("/test-proxy", s.testProxy)
 	settings.Get("/:key", s.getSetting)
 	settings.Put("/:key", s.updateSetting)
 	settings.Put("/", s.updateSettings)
