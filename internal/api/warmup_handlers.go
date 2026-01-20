@@ -392,7 +392,8 @@ func (s *Server) insertDefaultWarmupSettings() {
 
 		// SOAX Proxy settings (for Seed→SMTP)
 		{"proxy_enabled", "false", "Ativar proxy SOAX para Seed→SMTP"},
-		{"proxy_api_key", "", "Chave API do SOAX (package key)"},
+		{"proxy_api_key", "", "Username do SOAX (package ID)"},
+		{"proxy_password", "", "Password do SOAX"},
 		{"proxy_type", "residential", "Tipo de proxy (residential, mobile, wifi)"},
 		{"proxy_country", "br", "País do proxy (br, us, etc)"},
 	}
@@ -3948,9 +3949,10 @@ func (s *Server) processSeedToSMTPEmails() {
 
 	// Get global proxy settings from main settings table
 	var proxyEnabled string
-	var proxyAPIKey, proxyType, proxyCountry string
+	var proxyAPIKey, proxyPassword, proxyType, proxyCountry string
 	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_enabled'`).Scan(&proxyEnabled)
 	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_api_key'`).Scan(&proxyAPIKey)
+	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_password'`).Scan(&proxyPassword)
 	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_type'`).Scan(&proxyType)
 	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_country'`).Scan(&proxyCountry)
 	// Set defaults
@@ -3961,7 +3963,7 @@ func (s *Server) processSeedToSMTPEmails() {
 		proxyCountry = "br"
 	}
 
-	useProxy := proxyEnabled == "true" && proxyAPIKey != ""
+	useProxy := proxyEnabled == "true" && proxyAPIKey != "" && proxyPassword != ""
 	if useProxy {
 		log.Printf("[Warmup Seed→SMTP] Proxy ENABLED - Type: %s, Country: %s", proxyType, proxyCountry)
 	}
@@ -4203,15 +4205,16 @@ func (s *Server) processSeedToSMTPEmails() {
 					selectedCountry = countries[rand.Intn(len(countries))]
 				}
 
-				// SOAX residential proxy format:
-				// Username: Package login (like 0YFEkZzfrwBX4Wfp)
-				// Password: wifi;country;session_id;; (GEO params separated by ;)
-				proxyUsername := proxyAPIKey
-				proxyPassword := fmt.Sprintf("wifi;%s;%s;;", selectedCountry, sessionID)
+				// SOAX SOCKS5 proxy format:
+				// Host: proxy.soax.com, Port: 22554
+				// Username: package-ID-country-XX-sessionid-XXXXX (geo params in username)
+				// Password: your SOAX password
+				proxyUsername := fmt.Sprintf("%s-country-%s-sessionid-%s", proxyAPIKey, selectedCountry, sessionID)
+				proxyPass := proxyPassword
 				proxyRegion = strings.ToUpper(selectedCountry)
 
 				log.Printf("[Warmup Seed→SMTP] Sending via SOAX proxy (session: %s, country: %s)", sessionID[:16], selectedCountry)
-				proxyIP, err = s.sendSMTPEmailWithProxyAndGetIP("proxy.soax.com", 9000, proxyUsername, proxyPassword,
+				proxyIP, err = s.sendSMTPEmailWithProxyAndGetIP("proxy.soax.com", 22554, proxyUsername, proxyPass,
 					seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
 					seed.Email, target.SenderEmail, subject, body, messageID)
 			} else {

@@ -260,16 +260,17 @@ func (s *Server) testProxy(c *fiber.Ctx) error {
 	}
 
 	var req struct {
-		APIKey  string `json:"api_key"`
-		Country string `json:"country"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Country  string `json:"country"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
-	if req.APIKey == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "API key is required"})
+	if req.Username == "" || req.Password == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Username and password are required"})
 	}
 
 	// Handle random country selection
@@ -282,13 +283,15 @@ func (s *Server) testProxy(c *fiber.Ctx) error {
 	// Generate unique session ID for sticky IP during test
 	sessionID := fmt.Sprintf("%d", time.Now().UnixNano())
 
-	// SOAX residential proxy format:
-	// Username: Package login (like 0YFEkZzfrwBX4Wfp)
-	// Password: wifi;country;session_id;; (GEO params separated by ;)
-	proxyUser := req.APIKey
-	proxyPass := fmt.Sprintf("wifi;%s;%s;;", selectedCountry, sessionID)
+	// SOAX SOCKS5 proxy format:
+	// Host: proxy.soax.com
+	// Port: 22554 (SOCKS5)
+	// Username: package-ID-country-XX-sessionid-XXXXX (with geo parameters)
+	// Password: your SOAX password
+	proxyUser := fmt.Sprintf("%s-country-%s-sessionid-%s", req.Username, selectedCountry, sessionID)
+	proxyPass := req.Password
 	proxyHost := "proxy.soax.com"
-	proxyPort := "9000"
+	proxyPort := "22554"
 
 	// Create SOCKS5 proxy dialer
 	auth := proxy.Auth{

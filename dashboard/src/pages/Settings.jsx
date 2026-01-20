@@ -79,8 +79,8 @@ function Settings() {
   }
 
   const handleTestProxy = async () => {
-    if (!settings.proxy_api_key) {
-      toast.error('Preencha a chave API primeiro')
+    if (!settings.proxy_api_key || !settings.proxy_password) {
+      toast.error('Preencha username e password primeiro')
       return
     }
 
@@ -88,7 +88,8 @@ function Settings() {
       setTestingProxy(true)
       setProxyTestResult(null)
       const response = await api.post('/settings/test-proxy', {
-        api_key: settings.proxy_api_key,
+        username: settings.proxy_api_key,
+        password: settings.proxy_password,
         country: settings.proxy_country || 'br'
       })
       setProxyTestResult({
@@ -300,20 +301,35 @@ function Settings() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
           <div>
             <label className="block text-sm font-medium mb-1">
-              Chave API SOAX
+              Username SOAX
             </label>
             <input
               type="text"
               value={settings.proxy_api_key || ''}
               onChange={(e) => handleChange('proxy_api_key', e.target.value)}
-              placeholder="Sua chave API do SOAX"
+              placeholder="package-XXXXX"
               className="input w-full font-mono"
             />
             <p className="text-gray-500 text-xs mt-1">
-              Encontre em: SOAX Dashboard → Package → Key
+              SOAX Dashboard → Credentials → Username
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              Password SOAX
+            </label>
+            <input
+              type="text"
+              value={settings.proxy_password || ''}
+              onChange={(e) => handleChange('proxy_password', e.target.value)}
+              placeholder="sua_senha"
+              className="input w-full font-mono"
+            />
+            <p className="text-gray-500 text-xs mt-1">
+              SOAX Dashboard → Credentials → Password
             </p>
           </div>
           <div>
@@ -325,7 +341,7 @@ function Settings() {
               onChange={(e) => handleChange('proxy_country', e.target.value)}
               className="input w-full"
             >
-              <option value="random">🌍 Random (Global) - Vários países</option>
+              <option value="random">🌍 Random (Global)</option>
               <option value="br">🇧🇷 Brasil</option>
               <option value="us">🇺🇸 Estados Unidos</option>
               <option value="pt">🇵🇹 Portugal</option>
@@ -338,7 +354,7 @@ function Settings() {
               <option value="ar">🇦🇷 Argentina</option>
             </select>
             <p className="text-gray-500 text-xs mt-1">
-              {settings.proxy_country === 'random' ? 'Usa IPs de países diferentes a cada envio' : 'País de origem dos IPs residenciais'}
+              País dos IPs residenciais
             </p>
           </div>
         </div>
@@ -347,7 +363,7 @@ function Settings() {
         <div className="mb-4">
           <button
             onClick={handleTestProxy}
-            disabled={testingProxy || !settings.proxy_api_key}
+            disabled={testingProxy || !settings.proxy_api_key || !settings.proxy_password}
             className="bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
           >
             {testingProxy ? (
