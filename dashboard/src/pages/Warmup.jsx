@@ -2349,11 +2349,14 @@ function Warmup() {
                     {item.warmup_type === 'moved_to_inbox' && (
                       <span className="px-1.5 py-0.5 text-xs font-medium bg-green-100 text-green-700 rounded">Movido p/ Entrada</span>
                     )}
-                    {item.proxy_ip && (
+                    {item.warmup_type === 'seed_to_smtp' && item.proxy_ip && (
                       <span className="px-1.5 py-0.5 text-xs font-medium bg-orange-100 text-orange-700 rounded flex items-center gap-1">
                         <Globe className="w-3 h-3" />
                         {item.proxy_ip}
                       </span>
+                    )}
+                    {item.warmup_type === 'seed_to_smtp' && !item.proxy_ip && (
+                      <span className="px-1.5 py-0.5 text-xs font-medium bg-gray-100 text-gray-600 rounded">Direto</span>
                     )}
                   </div>
                   <p className="text-xs text-gray-500 dark:text-gray-400 truncate">

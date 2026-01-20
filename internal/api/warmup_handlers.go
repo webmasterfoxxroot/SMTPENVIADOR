@@ -4088,7 +4088,10 @@ func (s *Server) processSeedToSMTPEmails() {
 
 	useProxy := proxyEnabled == "true" && proxyHost != "" && proxyPort != "" && proxyUser != "" && proxyPass != ""
 	if useProxy {
-		log.Printf("[Warmup Seed→SMTP] Proxy ENABLED - Host: %s:%s", proxyHost, proxyPort)
+		log.Printf("[Warmup Seed→SMTP] 🌐 Proxy ATIVADO - Host: %s:%s User: %s", proxyHost, proxyPort, proxyUser)
+	} else {
+		log.Printf("[Warmup Seed→SMTP] ⚡ Proxy DESATIVADO (enabled=%s, host=%s, port=%s, user=%s, pass=%v)",
+			proxyEnabled, proxyHost, proxyPort, proxyUser, proxyPass != "")
 	}
 
 	now := time.Now()
@@ -4314,26 +4317,38 @@ func (s *Server) processSeedToSMTPEmails() {
 
 			// Variables for proxy tracking
 			var proxyIP, proxyRegion string
+			var usedProxy bool
 
 			// Send email from seed to SMTP sender
 			// Use GLOBAL proxy settings if enabled
 			if useProxy {
 				// Simple proxy format: user:pass@host:port
 				portNum, _ := strconv.Atoi(proxyPort)
-				proxyRegion = "Proxy"
 
-				log.Printf("[Warmup Seed→SMTP] Sending via proxy %s:%s", proxyHost, proxyPort)
+				log.Printf("[Warmup Seed→SMTP] 🌐 Tentando via proxy %s:%s", proxyHost, proxyPort)
 				proxyIP, err = s.sendSMTPEmailWithProxyAndGetIP(proxyHost, portNum, proxyUser, proxyPass,
 					seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
 					seed.Email, target.SenderEmail, subject, body, messageID)
+
+				if err != nil {
+					log.Printf("[Warmup Seed→SMTP] ⚠️ Proxy falhou: %v - tentando conexão direta...", err)
+					// Fallback to direct connection
+					err = s.sendSMTPEmailWithOAuth(seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
+						seed.Email, target.SenderEmail, subject, body, messageID, seed.OAuthToken, seed.OAuthClientID)
+					proxyIP = "" // Clear proxy IP since we used direct
+				} else {
+					usedProxy = true
+					proxyRegion = "Proxy"
+				}
 			} else {
 				// Direct connection with OAuth2 support for Outlook
 				err = s.sendSMTPEmailWithOAuth(seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
 					seed.Email, target.SenderEmail, subject, body, messageID, seed.OAuthToken, seed.OAuthClientID)
 			}
+			_ = usedProxy // silence unused warning
 
 			if err != nil {
-				log.Printf("[Warmup Seed→SMTP] Failed to send from %s to %s: %v", seed.Email, target.SenderEmail, err)
+				log.Printf("[Warmup Seed→SMTP] ❌ Failed to send from %s to %s: %v", seed.Email, target.SenderEmail, err)
 
 				// Check if this is a quota/spam block error - if so, deactivate the seed
 				if isQuotaOrSpamBlockError(err) {
@@ -4354,7 +4369,11 @@ func (s *Server) processSeedToSMTPEmails() {
 			// Update seed's sent counter
 			s.db.Exec(`UPDATE warmup_seeds SET total_sent = total_sent + 1 WHERE id = $1`, seed.ID)
 
-			log.Printf("[Warmup Seed→SMTP] ✉️ Sent from %s to %s: %s", seed.Email, target.SenderEmail, subject)
+			if proxyIP != "" {
+				log.Printf("[Warmup Seed→SMTP] ✉️ Sent from %s to %s: %s [Proxy: %s]", seed.Email, target.SenderEmail, subject, proxyIP)
+			} else {
+				log.Printf("[Warmup Seed→SMTP] ✉️ Sent from %s to %s: %s [Direto]", seed.Email, target.SenderEmail, subject)
+			}
 			totalSent++
 
 			// Small delay between sends from same seed
