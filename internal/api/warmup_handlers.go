@@ -3529,15 +3529,22 @@ func (s *Server) sendSMTPEmailWithProxyAndGetIP(proxyHost string, proxyPort int,
 
 	case "starttls":
 		// STARTTLS (port 587)
+		log.Printf("[Proxy Debug] Connecting to %s:%d via proxy...", smtpHost, smtpPort)
 		conn, err := dialProxyWithFallback(proxyHost, proxyPort, proxyUsername, proxyPassword, smtpHost, smtpPort)
 		if err != nil {
 			return proxyIP, fmt.Errorf("proxy connection failed: %v", err)
 		}
+		log.Printf("[Proxy Debug] Tunnel established, creating SMTP client...")
+
+		// Try to read initial banner with timeout
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 		c, err := smtp.NewClient(conn, smtpHost)
+		conn.SetReadDeadline(time.Time{}) // Clear deadline
 		if err != nil {
 			conn.Close()
 			return proxyIP, fmt.Errorf("SMTP client creation failed: %v", err)
 		}
+		log.Printf("[Proxy Debug] SMTP client created, starting TLS...")
 		defer c.Close()
 		if err := c.StartTLS(&tls.Config{
 			ServerName:         smtpHost,
@@ -3545,6 +3552,7 @@ func (s *Server) sendSMTPEmailWithProxyAndGetIP(proxyHost string, proxyPort int,
 		}); err != nil {
 			return proxyIP, fmt.Errorf("STARTTLS failed: %v", err)
 		}
+		log.Printf("[Proxy Debug] TLS established, sending email...")
 		return proxyIP, s.sendEmailViaClient(c, smtpHost, username, password, fromEmail, to, []byte(msg))
 
 	default:
