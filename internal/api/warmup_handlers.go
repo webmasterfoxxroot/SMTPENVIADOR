@@ -4199,12 +4199,15 @@ func (s *Server) processSeedToSMTPEmails() {
 					selectedCountry = countries[rand.Intn(len(countries))]
 				}
 
-				// SOAX residential proxy format: package-APIKEY-country-XX-sessionid-XXXXX
-				proxyPassword := fmt.Sprintf("package-%s-country-%s-sessionid-%s", proxyAPIKey, selectedCountry, sessionID)
+				// SOAX residential proxy format:
+				// Username: package-APIKEY-country-XX-sessionid-XXXXX
+				// Password: wifi (fixed)
+				proxyUsername := fmt.Sprintf("package-%s-country-%s-sessionid-%s", proxyAPIKey, selectedCountry, sessionID)
+				proxyPassword := "wifi"
 				proxyRegion = strings.ToUpper(selectedCountry)
 
 				log.Printf("[Warmup Seed→SMTP] Sending via SOAX proxy (session: %s, country: %s)", sessionID[:16], selectedCountry)
-				proxyIP, err = s.sendSMTPEmailWithProxyAndGetIP("proxy.soax.com", 9000, proxyAPIKey, proxyPassword,
+				proxyIP, err = s.sendSMTPEmailWithProxyAndGetIP("proxy.soax.com", 9000, proxyUsername, proxyPassword,
 					seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
 					seed.Email, target.SenderEmail, subject, body, messageID)
 			} else {
