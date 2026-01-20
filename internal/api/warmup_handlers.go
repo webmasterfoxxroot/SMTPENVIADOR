@@ -4191,11 +4191,19 @@ func (s *Server) processSeedToSMTPEmails() {
 			if useProxy {
 				// Generate unique session for rotating IP (each send gets different IP)
 				sessionID := fmt.Sprintf("session-%s-%d", uuid.New().String()[:8], time.Now().UnixNano())
-				// SOAX residential proxy format: package-APIKEY-country-XX-sessionid-XXXXX
-				proxyPassword := fmt.Sprintf("package-%s-country-%s-sessionid-%s", proxyAPIKey, proxyCountry, sessionID)
-				proxyRegion = strings.ToUpper(proxyCountry)
 
-				log.Printf("[Warmup Seed→SMTP] Sending via SOAX proxy (session: %s, country: %s)", sessionID[:16], proxyCountry)
+				// Handle "random" country option - pick a random country for each send
+				selectedCountry := proxyCountry
+				if proxyCountry == "random" {
+					countries := []string{"br", "us", "pt", "es", "uk", "de", "fr", "it", "mx", "ar"}
+					selectedCountry = countries[rand.Intn(len(countries))]
+				}
+
+				// SOAX residential proxy format: package-APIKEY-country-XX-sessionid-XXXXX
+				proxyPassword := fmt.Sprintf("package-%s-country-%s-sessionid-%s", proxyAPIKey, selectedCountry, sessionID)
+				proxyRegion = strings.ToUpper(selectedCountry)
+
+				log.Printf("[Warmup Seed→SMTP] Sending via SOAX proxy (session: %s, country: %s)", sessionID[:16], selectedCountry)
 				proxyIP, err = s.sendSMTPEmailWithProxyAndGetIP("proxy.soax.com", 9000, proxyAPIKey, proxyPassword,
 					seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
 					seed.Email, target.SenderEmail, subject, body, messageID)

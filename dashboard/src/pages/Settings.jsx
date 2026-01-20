@@ -293,6 +293,7 @@ function Settings() {
               onChange={(e) => handleChange('proxy_country', e.target.value)}
               className="input w-full"
             >
+              <option value="random">🌍 Random (Global) - Vários países</option>
               <option value="br">🇧🇷 Brasil</option>
               <option value="us">🇺🇸 Estados Unidos</option>
               <option value="pt">🇵🇹 Portugal</option>
@@ -305,7 +306,7 @@ function Settings() {
               <option value="ar">🇦🇷 Argentina</option>
             </select>
             <p className="text-gray-500 text-xs mt-1">
-              País de origem dos IPs residenciais
+              {settings.proxy_country === 'random' ? 'Usa IPs de países diferentes a cada envio' : 'País de origem dos IPs residenciais'}
             </p>
           </div>
         </div>
