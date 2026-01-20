@@ -3426,24 +3426,13 @@ func dialSOCKS5Proxy(proxyHost string, proxyPort int, proxyUser, proxyPass, targ
 	return conn, nil
 }
 
-// dialProxyWithFallback tries HTTP CONNECT first, then falls back to SOCKS5
+// dialProxyWithFallback uses HTTP CONNECT proxy only (SOCKS5 has different credentials)
 func dialProxyWithFallback(proxyHost string, proxyPort int, proxyUser, proxyPass, targetHost string, targetPort int) (net.Conn, error) {
-	// Try HTTP CONNECT first
 	conn, err := dialHTTPProxy(proxyHost, proxyPort, proxyUser, proxyPass, targetHost, targetPort)
-	if err == nil {
-		return conn, nil
+	if err != nil {
+		return nil, fmt.Errorf("HTTP proxy failed: %v", err)
 	}
-	httpErr := err
-
-	// If HTTP CONNECT failed (e.g., 403), try SOCKS5
-	log.Printf("[Proxy] HTTP CONNECT failed: %v, trying SOCKS5...", httpErr)
-	conn, err = dialSOCKS5Proxy(proxyHost, proxyPort, proxyUser, proxyPass, targetHost, targetPort)
-	if err == nil {
-		return conn, nil
-	}
-
-	// Both failed
-	return nil, fmt.Errorf("proxy connection failed - HTTP: %v, SOCKS5: %v", httpErr, err)
+	return conn, nil
 }
 
 // sendSMTPEmailWithProxyAndGetIP sends email through HTTP CONNECT proxy and returns the IP used
