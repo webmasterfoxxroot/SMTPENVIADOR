@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings as SettingsIcon, Save, RefreshCw, Globe, RotateCcw, AlertCircle, Server, Power, Upload, Database } from 'lucide-react'
+import { Settings as SettingsIcon, Save, RefreshCw, Globe, RotateCcw, AlertCircle, Server, Power, Upload, Database, Shield } from 'lucide-react'
 import api from '../services/api'
 import toast from 'react-hot-toast'
 
@@ -231,6 +231,93 @@ function Settings() {
             <p className="text-gray-500 text-xs mt-1">
               Segundos entre tentativas (10-3600)
             </p>
+          </div>
+        </div>
+      </div>
+
+      {/* SOAX Proxy Settings for Warmup Seeds */}
+      <div className="card">
+        <div className="flex items-center gap-2 mb-4">
+          <Shield className="w-5 h-5 text-cyan-500" />
+          <h2 className="text-lg font-semibold">Proxy SOAX (Seed→SMTP)</h2>
+        </div>
+        <p className="text-gray-400 text-sm mb-4">
+          Configure proxy residencial SOAX para envios Seed→SMTP. Cada envio usa um IP diferente automaticamente.
+        </p>
+
+        {/* Enable/Disable Toggle */}
+        <div className="bg-gray-700 rounded-lg p-4 mb-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className={`w-12 h-6 rounded-full p-1 cursor-pointer transition-colors ${settings.proxy_enabled === 'true' ? 'bg-cyan-500' : 'bg-gray-600'}`}
+                onClick={() => handleChange('proxy_enabled', settings.proxy_enabled === 'true' ? 'false' : 'true')}>
+                <div className={`w-4 h-4 rounded-full bg-white transition-transform ${settings.proxy_enabled === 'true' ? 'translate-x-6' : 'translate-x-0'}`} />
+              </div>
+              <div>
+                <span className="font-medium">Proxy {settings.proxy_enabled === 'true' ? 'Ativado' : 'Desativado'}</span>
+                <p className="text-gray-400 text-xs">
+                  {settings.proxy_enabled === 'true' ? 'Seeds usam proxy residencial para enviar' : 'Seeds enviam diretamente sem proxy'}
+                </p>
+              </div>
+            </div>
+            {settings.proxy_enabled === 'true' && settings.proxy_api_key && (
+              <div className="text-cyan-400 text-sm">
+                ✓ Configurado
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              Chave API SOAX
+            </label>
+            <input
+              type="password"
+              value={settings.proxy_api_key || ''}
+              onChange={(e) => handleChange('proxy_api_key', e.target.value)}
+              placeholder="Sua chave API do SOAX"
+              className="input w-full"
+            />
+            <p className="text-gray-500 text-xs mt-1">
+              Encontre em: SOAX Dashboard → Package → Key
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              País do Proxy
+            </label>
+            <select
+              value={settings.proxy_country || 'br'}
+              onChange={(e) => handleChange('proxy_country', e.target.value)}
+              className="input w-full"
+            >
+              <option value="random">🌍 Random (Global) - Vários países</option>
+              <option value="br">🇧🇷 Brasil</option>
+              <option value="us">🇺🇸 Estados Unidos</option>
+              <option value="pt">🇵🇹 Portugal</option>
+              <option value="es">🇪🇸 Espanha</option>
+              <option value="uk">🇬🇧 Reino Unido</option>
+              <option value="de">🇩🇪 Alemanha</option>
+              <option value="fr">🇫🇷 França</option>
+              <option value="it">🇮🇹 Itália</option>
+              <option value="mx">🇲🇽 México</option>
+              <option value="ar">🇦🇷 Argentina</option>
+            </select>
+            <p className="text-gray-500 text-xs mt-1">
+              {settings.proxy_country === 'random' ? 'Usa IPs de países diferentes a cada envio' : 'País de origem dos IPs residenciais'}
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-gray-700/50 rounded-lg p-3 text-sm">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 text-cyan-400 mt-0.5" />
+            <div className="text-gray-300">
+              <strong>Como funciona:</strong> Cada email enviado por Seed→SMTP usa um IP diferente (rotativo).
+              O IP e região são mostrados na Atividade Recente do Warmup.
+            </div>
           </div>
         </div>
       </div>
