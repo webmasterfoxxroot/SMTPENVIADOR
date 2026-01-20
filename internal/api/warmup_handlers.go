@@ -2823,9 +2823,9 @@ func (s *Server) processWarmupEmails() {
 		return
 	}
 
-	// Get active warmup SMTPs that should send now
+	// Get active warmup SMTPs that should send now (includes user_id for isolation)
 	rows, err := s.db.Query(`
-		SELECT w.id, w.smtp_id, w.start_date, w.min_emails_per_day, w.max_emails_per_day,
+		SELECT w.id, w.smtp_id, w.user_id, w.start_date, w.min_emails_per_day, w.max_emails_per_day,
 			   w.recipe_type, w.custom_schedule, w.reply_rate, w.start_hour, w.end_hour,
 			   s.host, s.port, s.username, s.password, s.tls_mode
 		FROM warmup_smtps w
@@ -2842,14 +2842,14 @@ func (s *Server) processWarmupEmails() {
 	smtpCount := 0
 	for rows.Next() {
 		smtpCount++
-		var warmupID, smtpID, recipeType string
+		var warmupID, smtpID, userID, recipeType string
 		var startDate time.Time
 		var minEmails, maxEmails, replyRate, startHour, endHour int
 		var customSchedule sql.NullString
 		var host, username, password, tlsMode string
 		var port int
 
-		rows.Scan(&warmupID, &smtpID, &startDate, &minEmails, &maxEmails,
+		rows.Scan(&warmupID, &smtpID, &userID, &startDate, &minEmails, &maxEmails,
 			&recipeType, &customSchedule, &replyRate, &startHour, &endHour,
 			&host, &port, &username, &password, &tlsMode)
 
@@ -2928,7 +2928,7 @@ func (s *Server) processWarmupEmails() {
 				log.Printf("[Warmup Engine] SMTP %s paused mid-cycle - stopping", warmupID[:8])
 				break
 			}
-			s.sendWarmupEmail(warmupID, smtpID, host, port, username, password, tlsMode, replyRate)
+			s.sendWarmupEmail(warmupID, smtpID, userID, host, port, username, password, tlsMode, replyRate)
 		}
 	}
 
@@ -2965,7 +2965,7 @@ func (s *Server) calculateDailyLimit(recipeType string, currentDay, minEmails, m
 	}
 }
 
-func (s *Server) sendWarmupEmail(warmupID, smtpID, host string, port int, username, password, tlsMode string, replyRate int) {
+func (s *Server) sendWarmupEmail(warmupID, smtpID, userID, host string, port int, username, password, tlsMode string, replyRate int) {
 	// Check if this specific warmup SMTP is still active (allows immediate stop)
 	var status string
 	s.db.QueryRow(`SELECT status FROM warmup_smtps WHERE id = $1`, warmupID).Scan(&status)
@@ -2974,14 +2974,14 @@ func (s *Server) sendWarmupEmail(warmupID, smtpID, host string, port int, userna
 		return
 	}
 
-	// Get a random active seed
+	// Get a random active seed FROM THE SAME USER (isolation)
 	var seedID, seedEmail string
 	err := s.db.QueryRow(`
 		SELECT id, email FROM warmup_seeds
-		WHERE status = 'active'
+		WHERE status = 'active' AND user_id = $1
 		ORDER BY RANDOM()
 		LIMIT 1
-	`).Scan(&seedID, &seedEmail)
+	`, userID).Scan(&seedID, &seedEmail)
 
 	if err != nil {
 		log.Printf("[Warmup] No active seeds available")
@@ -3610,9 +3610,9 @@ func (s *Server) processSeedToSMTPEmails() {
 	log.Printf("[Warmup Seed→SMTP] Processing batch %d/%d (seeds %d-%d of %d total, hour: %d)",
 		batchNumber, totalBatches, currentOffset+1, min(currentOffset+maxSeedsPerCycle, totalSeeds), totalSeeds, currentHour)
 
-	// Get only this batch of seeds (with LIMIT and OFFSET)
+	// Get only this batch of seeds (with LIMIT and OFFSET) - includes user_id for isolation
 	seedRows, err := s.db.Query(`
-		SELECT id, email, password, smtp_host, smtp_port, use_tls,
+		SELECT id, user_id, email, password, smtp_host, smtp_port, use_tls,
 		       COALESCE(send_rate, 50), COALESCE(emails_per_day, 20),
 		       COALESCE(oauth_token, ''), COALESCE(oauth_client_id, '')
 		FROM warmup_seeds
@@ -3628,6 +3628,7 @@ func (s *Server) processSeedToSMTPEmails() {
 
 	type seedInfo struct {
 		ID            string
+		UserID        string // For user isolation
 		Email         string
 		Password      string
 		SMTPHost      string
@@ -3642,7 +3643,7 @@ func (s *Server) processSeedToSMTPEmails() {
 	var seeds []seedInfo
 	for seedRows.Next() {
 		var seed seedInfo
-		seedRows.Scan(&seed.ID, &seed.Email, &seed.Password, &seed.SMTPHost, &seed.SMTPPort, &seed.UseTLS,
+		seedRows.Scan(&seed.ID, &seed.UserID, &seed.Email, &seed.Password, &seed.SMTPHost, &seed.SMTPPort, &seed.UseTLS,
 			&seed.SendRate, &seed.EmailsPerDay, &seed.OAuthToken, &seed.OAuthClientID)
 		seeds = append(seeds, seed)
 	}
@@ -3654,66 +3655,64 @@ func (s *Server) processSeedToSMTPEmails() {
 
 	log.Printf("[Warmup Seed→SMTP] Batch has %d seeds to process", len(seeds))
 
-	// Get active warmup SMTPs and their senders (only those within their configured hours)
-	// Also get start_hour and end_hour to calculate sending window
-	smtpRows, err := s.db.Query(`
-		SELECT w.id, w.smtp_id, ss.email as sender_email, w.start_hour, w.end_hour
-		FROM warmup_smtps w
-		JOIN smtp_senders ss ON ss.smtp_id = w.smtp_id
-		WHERE w.status = 'active' AND ss.active = true
-		AND $1 >= w.start_hour AND $1 < w.end_hour
-	`, currentHour)
-	if err != nil {
-		log.Printf("[Warmup Seed→SMTP] Error getting SMTP senders: %v", err)
-		return
-	}
-	defer smtpRows.Close()
+	// Process each seed - targets are fetched per-seed for user isolation
+	totalSent := 0
+	for _, seed := range seeds {
+		// Get active warmup SMTPs and their senders FOR THIS USER ONLY (user isolation)
+		// Only those within their configured hours
+		smtpRows, err := s.db.Query(`
+			SELECT w.id, w.smtp_id, ss.email as sender_email, w.start_hour, w.end_hour
+			FROM warmup_smtps w
+			JOIN smtp_senders ss ON ss.smtp_id = w.smtp_id
+			WHERE w.status = 'active' AND ss.active = true
+			AND w.user_id = $1
+			AND $2 >= w.start_hour AND $2 < w.end_hour
+		`, seed.UserID, currentHour)
+		if err != nil {
+			log.Printf("[Warmup Seed→SMTP] Error getting SMTP senders for user %s: %v", seed.UserID, err)
+			continue
+		}
 
-	var targets []struct {
-		WarmupID    string
-		SMTPID      string
-		SenderEmail string
-	}
-
-	// Track min/max hours from the SMTPs we're actually using
-	minStartHour := 24
-	maxEndHour := 0
-
-	for smtpRows.Next() {
-		var target struct {
+		var targets []struct {
 			WarmupID    string
 			SMTPID      string
 			SenderEmail string
 		}
-		var startHour, endHour int
-		smtpRows.Scan(&target.WarmupID, &target.SMTPID, &target.SenderEmail, &startHour, &endHour)
-		targets = append(targets, target)
 
-		// Track the actual hours from configured SMTPs
-		if startHour < minStartHour {
-			minStartHour = startHour
+		// Track min/max hours from the SMTPs we're actually using
+		minStartHour := 24
+		maxEndHour := 0
+
+		for smtpRows.Next() {
+			var target struct {
+				WarmupID    string
+				SMTPID      string
+				SenderEmail string
+			}
+			var startHour, endHour int
+			smtpRows.Scan(&target.WarmupID, &target.SMTPID, &target.SenderEmail, &startHour, &endHour)
+			targets = append(targets, target)
+
+			// Track the actual hours from configured SMTPs
+			if startHour < minStartHour {
+				minStartHour = startHour
+			}
+			if endHour > maxEndHour {
+				maxEndHour = endHour
+			}
 		}
-		if endHour > maxEndHour {
-			maxEndHour = endHour
+		smtpRows.Close()
+
+		if len(targets) == 0 {
+			log.Printf("[Warmup Seed→SMTP] Seed %s (user %s): No SMTP targets within configured hours (hour: %d)", seed.Email, seed.UserID, currentHour)
+			continue
 		}
-	}
 
-	if len(targets) == 0 {
-		log.Printf("[Warmup Seed→SMTP] No active SMTP senders within configured hours (current hour: %d)", currentHour)
-		return
-	}
-
-	// Calculate sending hours from the configured SMTP hours
-	sendingHours := maxEndHour - minStartHour
-	if sendingHours <= 0 {
-		sendingHours = 1 // minimum 1 hour to avoid division by zero
-	}
-
-	log.Printf("[Warmup Seed→SMTP] Found %d SMTP senders as targets (sending hours: %d-%d = %dh)", len(targets), minStartHour, maxEndHour, sendingHours)
-
-	// Process each seed
-	totalSent := 0
-	for _, seed := range seeds {
+		// Calculate sending hours from the configured SMTP hours
+		sendingHours := maxEndHour - minStartHour
+		if sendingHours <= 0 {
+			sendingHours = 1 // minimum 1 hour to avoid division by zero
+		}
 		// Check if warmup was paused (allows immediate stop when user clicks pause)
 		var activeCount int
 		s.db.QueryRow(`SELECT COUNT(*) FROM warmup_smtps WHERE status = 'active'`).Scan(&activeCount)
