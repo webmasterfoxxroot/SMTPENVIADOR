@@ -3942,13 +3942,20 @@ func (s *Server) processSeedToSMTPEmails() {
 		return
 	}
 
-	// Get global proxy settings
+	// Get global proxy settings from main settings table
 	var proxyEnabled string
 	var proxyAPIKey, proxyType, proxyCountry string
-	s.db.QueryRow(`SELECT setting_value FROM warmup_settings WHERE setting_key = 'proxy_enabled' AND user_id IS NULL`).Scan(&proxyEnabled)
-	s.db.QueryRow(`SELECT setting_value FROM warmup_settings WHERE setting_key = 'proxy_api_key' AND user_id IS NULL`).Scan(&proxyAPIKey)
-	s.db.QueryRow(`SELECT setting_value FROM warmup_settings WHERE setting_key = 'proxy_type' AND user_id IS NULL`).Scan(&proxyType)
-	s.db.QueryRow(`SELECT setting_value FROM warmup_settings WHERE setting_key = 'proxy_country' AND user_id IS NULL`).Scan(&proxyCountry)
+	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_enabled'`).Scan(&proxyEnabled)
+	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_api_key'`).Scan(&proxyAPIKey)
+	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_type'`).Scan(&proxyType)
+	s.db.QueryRow(`SELECT value FROM settings WHERE key = 'proxy_country'`).Scan(&proxyCountry)
+	// Set defaults
+	if proxyType == "" {
+		proxyType = "residential"
+	}
+	if proxyCountry == "" {
+		proxyCountry = "br"
+	}
 
 	useProxy := proxyEnabled == "true" && proxyAPIKey != ""
 	if useProxy {
