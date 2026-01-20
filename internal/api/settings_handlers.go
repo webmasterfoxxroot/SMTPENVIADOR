@@ -252,7 +252,7 @@ func (s *Server) restartServer(c *fiber.Ctx) error {
 	})
 }
 
-// testProxy tests the SOAX proxy connection (admin only)
+// testProxy tests the proxy connection (admin only)
 func (s *Server) testProxy(c *fiber.Ctx) error {
 	// Check if user is admin
 	if !isAdmin(c) {
@@ -260,35 +260,25 @@ func (s *Server) testProxy(c *fiber.Ctx) error {
 	}
 
 	var req struct {
-		APIKey  string `json:"api_key"`
-		Country string `json:"country"`
+		Host     string `json:"host"`
+		Port     string `json:"port"`
+		Username string `json:"username"`
+		Password string `json:"password"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
-	if req.APIKey == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "API key is required"})
+	if req.Host == "" || req.Port == "" || req.Username == "" || req.Password == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Host, port, username and password are required"})
 	}
 
-	// Handle random country selection
-	selectedCountry := req.Country
-	if selectedCountry == "" || selectedCountry == "random" {
-		countries := []string{"br", "us", "pt", "es", "uk", "de", "fr", "it", "mx", "ar"}
-		selectedCountry = countries[rand.Intn(len(countries))]
-	}
-
-	// Generate unique session ID for sticky IP during test
-	sessionID := fmt.Sprintf("%d", time.Now().UnixNano())
-
-	// SOAX residential proxy format:
-	// Username: Package login (like 0YFEkZzfrwBX4Wfp)
-	// Password: wifi;country;session_id;; (GEO params separated by ;)
-	proxyUser := req.APIKey
-	proxyPass := fmt.Sprintf("wifi;%s;%s;;", selectedCountry, sessionID)
-	proxyHost := "proxy.soax.com"
-	proxyPort := "9000"
+	// Simple SOCKS5 proxy format: user:pass@host:port
+	proxyUser := req.Username
+	proxyPass := req.Password
+	proxyHost := req.Host
+	proxyPort := req.Port
 
 	// Create SOCKS5 proxy dialer
 	auth := proxy.Auth{
@@ -310,8 +300,8 @@ func (s *Server) testProxy(c *fiber.Ctx) error {
 		Timeout:   15 * time.Second,
 	}
 
-	// Use SOAX's own IP checker endpoint
-	resp, err := client.Get("http://checker.soax.com/api/ipinfo")
+	// Use ipinfo.io to get IP details
+	resp, err := client.Get("http://ipinfo.io/json")
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("Failed to connect through proxy: %v", err)})
 	}
