@@ -308,6 +308,9 @@ func (s *Server) initWarmupTables() {
 	if err != nil {
 		log.Printf("[Warmup] Error creating warmup_seed_emails table: %v", err)
 	}
+	// Add proxy tracking columns to warmup_seed_emails (for showing IP/region in activity)
+	s.db.Exec(`ALTER TABLE warmup_seed_emails ADD COLUMN IF NOT EXISTS proxy_ip VARCHAR(50)`)
+	s.db.Exec(`ALTER TABLE warmup_seed_emails ADD COLUMN IF NOT EXISTS proxy_region VARCHAR(100)`)
 
 	// Create warmup_activity table for tracking events (moved to inbox, etc.)
 	_, err = s.db.Exec(`
@@ -386,6 +389,12 @@ func (s *Server) insertDefaultWarmupSettings() {
 		{"warmup_enabled", "true", "Ativar/desativar todo o sistema de warmup"},
 		{"max_emails_per_smtp_per_day", "50", "Máximo de emails por SMTP por dia"},
 		{"imap_check_interval", "5", "Intervalo de verificação IMAP em minutos"},
+
+		// SOAX Proxy settings (for Seed→SMTP)
+		{"proxy_enabled", "false", "Ativar proxy SOAX para Seed→SMTP"},
+		{"proxy_api_key", "", "Chave API do SOAX (package key)"},
+		{"proxy_type", "residential", "Tipo de proxy (residential, mobile, wifi)"},
+		{"proxy_country", "br", "País do proxy (br, us, etc)"},
 	}
 
 	for _, setting := range defaultSettings {
@@ -2008,7 +2017,7 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 	// 1. SMTP → Seed emails (warmup_emails)
 	// 2. Replies (warmup_emails with replied_at)
 	// 3. Internal SMTP → SMTP (warmup_internal_emails)
-	// 4. Seed → SMTP emails (warmup_seed_emails)
+	// 4. Seed → SMTP emails (warmup_seed_emails) - includes proxy IP/region
 	// 5. Activity events like "moved to inbox" (warmup_activity)
 	rows, err := s.db.Query(`
 		(
@@ -2019,7 +2028,8 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 				       ''
 				   ) as from_email,
 				   COALESCE(s.email, '') as to_email,
-				   'smtp_to_seed' as warmup_type
+				   'smtp_to_seed' as warmup_type,
+				   '' as proxy_ip, '' as proxy_region
 			FROM warmup_emails e
 			JOIN warmup_seeds s ON e.seed_id = s.id
 			JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
@@ -2031,7 +2041,8 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 			SELECT e.id::text || '-reply' as id, 'Re: ' || COALESCE(e.subject, '') as subject, 'replied' as status, e.replied_at as sent_at,
 				   COALESCE(e.reply_from, s.email, '') as from_email,
 				   COALESCE(e.reply_to, '') as to_email,
-				   'reply' as warmup_type
+				   'reply' as warmup_type,
+				   '' as proxy_ip, '' as proxy_region
 			FROM warmup_emails e
 			JOIN warmup_seeds s ON e.seed_id = s.id
 			JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
@@ -2042,7 +2053,8 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 			SELECT ie.id::text, COALESCE(ie.subject, ''), COALESCE(ie.status, 'sent'), ie.sent_at,
 				   COALESCE(ie.from_sender_email, '') as from_email,
 				   COALESCE(ss.email, '') as to_email,
-				   'internal' as warmup_type
+				   'internal' as warmup_type,
+				   '' as proxy_ip, '' as proxy_region
 			FROM warmup_internal_emails ie
 			LEFT JOIN smtp_senders ss ON ie.to_sender_id = ss.id
 			JOIN smtp_servers sm ON ie.from_smtp_id = sm.id
@@ -2053,7 +2065,8 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 			SELECT se.id::text, COALESCE(se.subject, ''), COALESCE(se.status, 'sent'), se.sent_at,
 				   COALESCE(s.email, '') as from_email,
 				   COALESCE(se.to_email, '') as to_email,
-				   'seed_to_smtp' as warmup_type
+				   'seed_to_smtp' as warmup_type,
+				   COALESCE(se.proxy_ip, '') as proxy_ip, COALESCE(se.proxy_region, '') as proxy_region
 			FROM warmup_seed_emails se
 			JOIN warmup_seeds s ON se.seed_id = s.id
 			WHERE s.user_id = $1
@@ -2063,7 +2076,8 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 			SELECT a.id::text, COALESCE(a.subject, a.activity_type, ''), a.activity_type as status, a.created_at as sent_at,
 				   COALESCE(a.from_email, '') as from_email,
 				   COALESCE(a.to_email, '') as to_email,
-				   a.activity_type as warmup_type
+				   a.activity_type as warmup_type,
+				   '' as proxy_ip, '' as proxy_region
 			FROM warmup_activity a
 			WHERE a.user_id = $1
 		)
@@ -2082,7 +2096,8 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 					       ''
 					   ) as from_email,
 					   COALESCE(s.email, '') as to_email,
-					   'smtp_to_seed' as warmup_type
+					   'smtp_to_seed' as warmup_type,
+					   '' as proxy_ip, '' as proxy_region
 				FROM warmup_emails e
 				JOIN warmup_seeds s ON e.seed_id = s.id
 				JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
@@ -2094,7 +2109,8 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 				SELECT e.id::text || '-reply' as id, 'Re: ' || COALESCE(e.subject, '') as subject, 'replied' as status, e.replied_at as sent_at,
 					   COALESCE(e.reply_from, s.email, '') as from_email,
 					   COALESCE(e.reply_to, '') as to_email,
-					   'reply' as warmup_type
+					   'reply' as warmup_type,
+					   '' as proxy_ip, '' as proxy_region
 				FROM warmup_emails e
 				JOIN warmup_seeds s ON e.seed_id = s.id
 				JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
@@ -2112,12 +2128,12 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 
 	var activities []fiber.Map
 	for rows.Next() {
-		var id, subject, status, fromEmail, toEmail, warmupType string
+		var id, subject, status, fromEmail, toEmail, warmupType, proxyIP, proxyRegion string
 		var sentAt time.Time
 
-		rows.Scan(&id, &subject, &status, &sentAt, &fromEmail, &toEmail, &warmupType)
+		rows.Scan(&id, &subject, &status, &sentAt, &fromEmail, &toEmail, &warmupType, &proxyIP, &proxyRegion)
 
-		activities = append(activities, fiber.Map{
+		activity := fiber.Map{
 			"id":          id,
 			"subject":     subject,
 			"status":      status,
@@ -2125,7 +2141,13 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 			"from_email":  fromEmail,
 			"to_email":    toEmail,
 			"warmup_type": warmupType,
-		})
+		}
+		// Add proxy info only for seed_to_smtp type when available
+		if warmupType == "seed_to_smtp" && proxyIP != "" {
+			activity["proxy_ip"] = proxyIP
+			activity["proxy_region"] = proxyRegion
+		}
+		activities = append(activities, activity)
 	}
 
 	if activities == nil {
@@ -3289,6 +3311,134 @@ func (s *Server) sendSMTPEmailWithProxy(smtpHost string, smtpPort int, username,
 	}
 }
 
+// sendSMTPEmailWithProxyAndGetIP sends email through SOAX proxy and returns the IP used
+func (s *Server) sendSMTPEmailWithProxyAndGetIP(proxyHost string, proxyPort int, proxyUsername, proxyPassword string,
+	smtpHost string, smtpPort int, username, password, tlsMode, from, to, subject, body, messageID string) (string, error) {
+
+	// Extract email from "Name <email>" format if present
+	fromEmail := from
+	fromHeader := from
+	if strings.Contains(from, "<") && strings.Contains(from, ">") {
+		start := strings.Index(from, "<") + 1
+		end := strings.Index(from, ">")
+		if start > 0 && end > start {
+			fromEmail = from[start:end]
+		}
+		nameEnd := strings.Index(from, "<")
+		if nameEnd > 0 {
+			name := strings.TrimSpace(from[:nameEnd])
+			if needsEncoding(name) {
+				fromHeader = mimeEncode(name) + " <" + fromEmail + ">"
+			}
+		}
+	}
+
+	encodedSubject := subject
+	if needsEncoding(subject) {
+		encodedSubject = mimeEncode(subject)
+	}
+
+	msg := fmt.Sprintf("From: %s\r\n"+
+		"To: %s\r\n"+
+		"Subject: %s\r\n"+
+		"Message-ID: %s\r\n"+
+		"Date: %s\r\n"+
+		"MIME-Version: 1.0\r\n"+
+		"Content-Type: text/plain; charset=UTF-8\r\n"+
+		"Content-Transfer-Encoding: base64\r\n"+
+		"\r\n"+
+		"%s", fromHeader, to, encodedSubject, messageID, time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 -0700"), encodeBase64WithLineBreaks([]byte(body)))
+
+	// Create SOCKS5 dialer with SOAX authentication
+	proxyAddr := fmt.Sprintf("%s:%d", proxyHost, proxyPort)
+	auth := &proxy.Auth{
+		User:     proxyUsername,
+		Password: proxyPassword,
+	}
+
+	dialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, proxy.Direct)
+	if err != nil {
+		return "", fmt.Errorf("failed to create SOCKS5 dialer: %v", err)
+	}
+
+	// First, get the IP we're using by connecting to a check service
+	var proxyIP string
+	ipConn, err := dialer.Dial("tcp", "api.ipify.org:80")
+	if err == nil {
+		// Send HTTP request to get IP
+		fmt.Fprintf(ipConn, "GET / HTTP/1.1\r\nHost: api.ipify.org\r\nConnection: close\r\n\r\n")
+		response := make([]byte, 1024)
+		n, _ := ipConn.Read(response)
+		ipConn.Close()
+		// Parse IP from response (last line after headers)
+		lines := strings.Split(string(response[:n]), "\r\n")
+		if len(lines) > 0 {
+			proxyIP = strings.TrimSpace(lines[len(lines)-1])
+		}
+	}
+
+	smtpAddr := fmt.Sprintf("%s:%d", smtpHost, smtpPort)
+
+	// Connect through proxy based on TLS mode
+	switch tlsMode {
+	case "tls":
+		// Implicit TLS (port 465)
+		conn, err := dialer.Dial("tcp", smtpAddr)
+		if err != nil {
+			return proxyIP, fmt.Errorf("proxy connection failed: %v", err)
+		}
+		tlsConn := tls.Client(conn, &tls.Config{
+			ServerName:         smtpHost,
+			InsecureSkipVerify: true,
+		})
+		if err := tlsConn.Handshake(); err != nil {
+			conn.Close()
+			return proxyIP, fmt.Errorf("TLS handshake failed: %v", err)
+		}
+		c, err := smtp.NewClient(tlsConn, smtpHost)
+		if err != nil {
+			tlsConn.Close()
+			return proxyIP, fmt.Errorf("SMTP client creation failed: %v", err)
+		}
+		defer c.Close()
+		return proxyIP, s.sendEmailViaClient(c, smtpHost, username, password, fromEmail, to, []byte(msg))
+
+	case "starttls":
+		// STARTTLS (port 587)
+		conn, err := dialer.Dial("tcp", smtpAddr)
+		if err != nil {
+			return proxyIP, fmt.Errorf("proxy connection failed: %v", err)
+		}
+		c, err := smtp.NewClient(conn, smtpHost)
+		if err != nil {
+			conn.Close()
+			return proxyIP, fmt.Errorf("SMTP client creation failed: %v", err)
+		}
+		defer c.Close()
+		if err := c.StartTLS(&tls.Config{
+			ServerName:         smtpHost,
+			InsecureSkipVerify: true,
+		}); err != nil {
+			return proxyIP, fmt.Errorf("STARTTLS failed: %v", err)
+		}
+		return proxyIP, s.sendEmailViaClient(c, smtpHost, username, password, fromEmail, to, []byte(msg))
+
+	default:
+		// Plain (no TLS)
+		conn, err := dialer.Dial("tcp", smtpAddr)
+		if err != nil {
+			return proxyIP, fmt.Errorf("proxy connection failed: %v", err)
+		}
+		c, err := smtp.NewClient(conn, smtpHost)
+		if err != nil {
+			conn.Close()
+			return proxyIP, fmt.Errorf("SMTP client creation failed: %v", err)
+		}
+		defer c.Close()
+		return proxyIP, s.sendEmailViaClient(c, smtpHost, username, password, fromEmail, to, []byte(msg))
+	}
+}
+
 // sendEmailViaClient sends email using an established SMTP client connection
 func (s *Server) sendEmailViaClient(c *smtp.Client, host, username, password, from, to string, msg []byte) error {
 	// Authenticate
@@ -3792,6 +3942,19 @@ func (s *Server) processSeedToSMTPEmails() {
 		return
 	}
 
+	// Get global proxy settings
+	var proxyEnabled string
+	var proxyAPIKey, proxyType, proxyCountry string
+	s.db.QueryRow(`SELECT setting_value FROM warmup_settings WHERE setting_key = 'proxy_enabled' AND user_id IS NULL`).Scan(&proxyEnabled)
+	s.db.QueryRow(`SELECT setting_value FROM warmup_settings WHERE setting_key = 'proxy_api_key' AND user_id IS NULL`).Scan(&proxyAPIKey)
+	s.db.QueryRow(`SELECT setting_value FROM warmup_settings WHERE setting_key = 'proxy_type' AND user_id IS NULL`).Scan(&proxyType)
+	s.db.QueryRow(`SELECT setting_value FROM warmup_settings WHERE setting_key = 'proxy_country' AND user_id IS NULL`).Scan(&proxyCountry)
+
+	useProxy := proxyEnabled == "true" && proxyAPIKey != ""
+	if useProxy {
+		log.Printf("[Warmup Seed→SMTP] Proxy ENABLED - Type: %s, Country: %s", proxyType, proxyCountry)
+	}
+
 	now := time.Now()
 	currentHour := now.Hour()
 
@@ -4013,13 +4176,22 @@ func (s *Server) processSeedToSMTPEmails() {
 				tlsMode = "tls"
 			}
 
+			// Variables for proxy tracking
+			var proxyIP, proxyRegion string
+
 			// Send email from seed to SMTP sender
-			// Use proxy if enabled, otherwise use direct connection with OAuth support
-			if seed.ProxyEnabled && seed.ProxyUsername != "" {
-				log.Printf("[Warmup Seed→SMTP] Sending via SOCKS5 proxy %s:%d", seed.ProxyHost, seed.ProxyPort)
-				err = s.sendSMTPEmailWithProxy(seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
-					seed.Email, target.SenderEmail, subject, body, messageID,
-					seed.ProxyHost, seed.ProxyPort, seed.ProxyUsername, seed.ProxyPassword)
+			// Use GLOBAL proxy settings if enabled
+			if useProxy {
+				// Generate unique session for rotating IP (each send gets different IP)
+				sessionID := fmt.Sprintf("session-%s-%d", uuid.New().String()[:8], time.Now().UnixNano())
+				// SOAX residential proxy format: package-APIKEY-country-XX-sessionid-XXXXX
+				proxyPassword := fmt.Sprintf("package-%s-country-%s-sessionid-%s", proxyAPIKey, proxyCountry, sessionID)
+				proxyRegion = strings.ToUpper(proxyCountry)
+
+				log.Printf("[Warmup Seed→SMTP] Sending via SOAX proxy (session: %s, country: %s)", sessionID[:16], proxyCountry)
+				proxyIP, err = s.sendSMTPEmailWithProxyAndGetIP("proxy.soax.com", 9000, proxyAPIKey, proxyPassword,
+					seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
+					seed.Email, target.SenderEmail, subject, body, messageID)
 			} else {
 				// Direct connection with OAuth2 support for Outlook
 				err = s.sendSMTPEmailWithOAuth(seed.SMTPHost, seed.SMTPPort, seed.Email, seed.Password, tlsMode,
@@ -4039,11 +4211,11 @@ func (s *Server) processSeedToSMTPEmails() {
 				continue
 			}
 
-			// Save to warmup_seed_emails table for activity tracking
+			// Save to warmup_seed_emails table for activity tracking (with proxy info)
 			s.db.Exec(`
-				INSERT INTO warmup_seed_emails (seed_id, to_email, to_warmup_smtp_id, subject, message_id, status, sent_at)
-				VALUES ($1, $2, $3, $4, $5, 'sent', NOW())
-			`, seed.ID, target.SenderEmail, target.WarmupID, subject, messageID)
+				INSERT INTO warmup_seed_emails (seed_id, to_email, to_warmup_smtp_id, subject, message_id, status, sent_at, proxy_ip, proxy_region)
+				VALUES ($1, $2, $3, $4, $5, 'sent', NOW(), $6, $7)
+			`, seed.ID, target.SenderEmail, target.WarmupID, subject, messageID, proxyIP, proxyRegion)
 
 			// Update seed's sent counter
 			s.db.Exec(`UPDATE warmup_seeds SET total_sent = total_sent + 1 WHERE id = $1`, seed.ID)
