@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"golang.org/x/net/proxy"
 )
 
 // getSettingValue returns a setting value by key with a default fallback
@@ -273,26 +272,16 @@ func (s *Server) testProxy(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Host, port, username and password are required"})
 	}
 
-	// Simple SOCKS5 proxy format: user:pass@host:port
-	proxyUser := req.Username
-	proxyPass := req.Password
-	proxyHost := req.Host
-	proxyPort := req.Port
-
-	// Create SOCKS5 proxy dialer
-	auth := proxy.Auth{
-		User:     proxyUser,
-		Password: proxyPass,
-	}
-
-	dialer, err := proxy.SOCKS5("tcp", net.JoinHostPort(proxyHost, proxyPort), &auth, proxy.Direct)
+	// HTTP proxy format: http://user:pass@host:port
+	proxyURL := fmt.Sprintf("http://%s:%s@%s:%s", req.Username, req.Password, req.Host, req.Port)
+	proxyParsed, err := url.Parse(proxyURL)
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("Failed to create proxy dialer: %v", err)})
+		return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("Invalid proxy URL: %v", err)})
 	}
 
-	// Create HTTP client with proxy
+	// Create HTTP client with HTTP proxy
 	transport := &http.Transport{
-		Dial: dialer.Dial,
+		Proxy: http.ProxyURL(proxyParsed),
 	}
 	client := &http.Client{
 		Transport: transport,
