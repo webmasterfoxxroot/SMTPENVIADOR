@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/fetch"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
@@ -17,6 +19,35 @@ type BrowserResult struct {
 	Success bool   `json:"success"`
 	IP      string `json:"ip,omitempty"`
 	Message string `json:"message,omitempty"`
+}
+
+// captureDebugInfo captures screenshot and page info for debugging
+func captureDebugInfo(ctx context.Context, step string) {
+	var buf []byte
+	var html string
+
+	// Try to get page HTML
+	chromedp.Run(ctx, chromedp.OuterHTML("html", &html))
+	if len(html) > 500 {
+		html = html[:500] + "..."
+	}
+	log.Printf("[Web Browser Debug] %s - Page HTML (truncated): %s", step, html)
+
+	// Try to take screenshot
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		var err error
+		buf, err = page.CaptureScreenshot().Do(ctx)
+		return err
+	}))
+	if err == nil && len(buf) > 0 {
+		// Log base64 encoded screenshot (first 100 chars for reference)
+		encoded := base64.StdEncoding.EncodeToString(buf)
+		log.Printf("[Web Browser Debug] %s - Screenshot captured (%d bytes)", step, len(buf))
+		// Save screenshot to file for debugging
+		os.WriteFile(fmt.Sprintf("/tmp/screenshot_%s_%d.png", step, time.Now().Unix()), buf, 0644)
+		log.Printf("[Web Browser Debug] Screenshot saved to /tmp/screenshot_%s_%d.png", step, time.Now().Unix())
+		_ = encoded // prevent unused variable warning
+	}
 }
 
 // getChromePath returns the path to Chrome/Chromium executable
@@ -156,24 +187,48 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 	log.Printf("[Web Browser] Navigating to login.live.com...")
 	err := chromedp.Run(ctx,
 		chromedp.Navigate("https://login.live.com/"),
-		chromedp.Sleep(3*time.Second),
+		chromedp.Sleep(5*time.Second),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to navigate to login page: %v", err)
 	}
 
-	// Wait for email field - try multiple selectors
+	// Capture debug info after navigation
+	captureDebugInfo(ctx, "after_navigation")
+
+	// Wait for email field - try multiple selectors with shorter timeout
 	log.Printf("[Web Browser] Waiting for email field...")
-	err = chromedp.Run(ctx,
+
+	// Create shorter timeout context for element wait
+	waitCtx, waitCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer waitCancel()
+
+	err = chromedp.Run(waitCtx,
 		chromedp.WaitVisible(`#i0116`, chromedp.ByID),
 	)
 	if err != nil {
+		log.Printf("[Web Browser] Email field #i0116 not found, trying alternative selectors...")
+		captureDebugInfo(ctx, "email_field_not_found")
+
 		// Try alternative selector
-		err = chromedp.Run(ctx,
+		waitCtx2, waitCancel2 := context.WithTimeout(ctx, 10*time.Second)
+		defer waitCancel2()
+
+		err = chromedp.Run(waitCtx2,
 			chromedp.WaitVisible(`input[type="email"]`, chromedp.ByQuery),
 		)
 		if err != nil {
-			return nil, fmt.Errorf("failed to find email field: %v", err)
+			// Try name attribute
+			waitCtx3, waitCancel3 := context.WithTimeout(ctx, 10*time.Second)
+			defer waitCancel3()
+
+			err = chromedp.Run(waitCtx3,
+				chromedp.WaitVisible(`input[name="loginfmt"]`, chromedp.ByQuery),
+			)
+			if err != nil {
+				captureDebugInfo(ctx, "all_email_selectors_failed")
+				return nil, fmt.Errorf("failed to find email field: %v", err)
+			}
 		}
 	}
 
@@ -249,34 +304,67 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 	chromedp.Run(ctx, chromedp.Location(&currentURL))
 	log.Printf("[Web Browser] URL after sign in: %s", currentURL)
 
-	// Handle FIDO/Passkey setup prompt (login.microsoft.com/consumers/fido)
-	if strings.Contains(currentURL, "fido") || strings.Contains(currentURL, "passkey") {
-		log.Printf("[Web Browser] Found Passkey/FIDO prompt, clicking Cancel...")
-		// Try to click "Cancelar" button
-		chromedp.Run(ctx,
-			chromedp.Click(`button:contains("Cancelar")`, chromedp.ByQuery),
-			chromedp.Sleep(2*time.Second),
-		)
-		// Try alternative selectors
-		chromedp.Run(ctx,
-			chromedp.Click(`button.secondary`, chromedp.ByQuery),
-			chromedp.Sleep(2*time.Second),
-		)
-		chromedp.Run(ctx,
-			chromedp.Click(`#cancelBtn`, chromedp.ByID),
-			chromedp.Sleep(2*time.Second),
-		)
-		// Click any "Cancel" or "Cancelar" text
-		chromedp.Run(ctx,
-			chromedp.Click(`//button[contains(text(), 'Cancelar')]`, chromedp.BySearch),
-			chromedp.Sleep(2*time.Second),
-		)
-		chromedp.Run(ctx,
-			chromedp.Click(`//button[contains(text(), 'Cancel')]`, chromedp.BySearch),
-			chromedp.Sleep(2*time.Second),
-		)
+	// Handle multiple Microsoft prompts after login
+	for i := 0; i < 5; i++ {
 		chromedp.Run(ctx, chromedp.Location(&currentURL))
-		log.Printf("[Web Browser] URL after FIDO cancel: %s", currentURL)
+		log.Printf("[Web Browser] Post-login check %d, URL: %s", i+1, currentURL)
+
+		// Check if we're already logged in
+		if strings.Contains(currentURL, "outlook.live.com") ||
+			strings.Contains(currentURL, "outlook.office.com") ||
+			strings.Contains(currentURL, "mail.live.com") {
+			log.Printf("[Web Browser] Already logged in!")
+			break
+		}
+
+		// Handle FIDO/Passkey setup prompt
+		if strings.Contains(currentURL, "fido") || strings.Contains(currentURL, "passkey") {
+			log.Printf("[Web Browser] Found Passkey/FIDO prompt, clicking Cancel...")
+			// Try multiple cancel buttons
+			chromedp.Run(ctx, chromedp.Click(`//button[contains(text(), 'Cancelar')]`, chromedp.BySearch))
+			chromedp.Run(ctx, chromedp.Sleep(2*time.Second))
+			chromedp.Run(ctx, chromedp.Click(`//button[contains(text(), 'Cancel')]`, chromedp.BySearch))
+			chromedp.Run(ctx, chromedp.Sleep(2*time.Second))
+			continue
+		}
+
+		// Handle "Stay signed in?" / "Continuar conectado?" prompt
+		if strings.Contains(currentURL, "kmsi") || strings.Contains(currentURL, "login.srf") {
+			log.Printf("[Web Browser] Found 'Stay signed in' prompt, clicking No...")
+			chromedp.Run(ctx, chromedp.Click(`//button[contains(text(), 'Não')]`, chromedp.BySearch))
+			chromedp.Run(ctx, chromedp.Sleep(2*time.Second))
+			chromedp.Run(ctx, chromedp.Click(`#idBtn_Back`, chromedp.ByID))
+			chromedp.Run(ctx, chromedp.Sleep(2*time.Second))
+			continue
+		}
+
+		// Handle "Protect your account" / "Proteger sua conta" prompt
+		if strings.Contains(currentURL, "proofs") || strings.Contains(currentURL, "security") {
+			log.Printf("[Web Browser] Found security prompt, clicking Skip...")
+			chromedp.Run(ctx, chromedp.Click(`//a[contains(text(), 'Ignorar')]`, chromedp.BySearch))
+			chromedp.Run(ctx, chromedp.Sleep(2*time.Second))
+			chromedp.Run(ctx, chromedp.Click(`//button[contains(text(), 'Ignorar')]`, chromedp.BySearch))
+			chromedp.Run(ctx, chromedp.Sleep(2*time.Second))
+			chromedp.Run(ctx, chromedp.Click(`#iCancel`, chromedp.ByID))
+			chromedp.Run(ctx, chromedp.Sleep(2*time.Second))
+			continue
+		}
+
+		// Generic: try clicking any skip/cancel/no buttons
+		log.Printf("[Web Browser] Trying generic skip/cancel buttons...")
+		chromedp.Run(ctx, chromedp.Click(`//a[contains(text(), 'Ignorar por enquanto')]`, chromedp.BySearch))
+		chromedp.Run(ctx, chromedp.Sleep(1*time.Second))
+		chromedp.Run(ctx, chromedp.Click(`//button[contains(text(), 'Não')]`, chromedp.BySearch))
+		chromedp.Run(ctx, chromedp.Sleep(1*time.Second))
+		chromedp.Run(ctx, chromedp.Click(`//button[contains(text(), 'Cancelar')]`, chromedp.BySearch))
+		chromedp.Run(ctx, chromedp.Sleep(1*time.Second))
+
+		// Check if still on login page
+		if strings.Contains(currentURL, "login.live.com") || strings.Contains(currentURL, "login.microsoft.com") {
+			chromedp.Run(ctx, chromedp.Sleep(2*time.Second))
+		} else {
+			break
+		}
 	}
 
 	// Check if we're logged in or if there's an error
@@ -288,17 +376,6 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 	}
 
 	log.Printf("[Web Browser] Current URL after login: %s", currentURL)
-
-	// Handle "Stay signed in?" prompt if present
-	if strings.Contains(currentURL, "kmsi") {
-		log.Printf("[Web Browser] Found 'Stay signed in' prompt, clicking No...")
-		chromedp.Run(ctx,
-			chromedp.Click(`#idBtn_Back`, chromedp.ByID), // "No" button
-			chromedp.Sleep(3*time.Second),
-		)
-		chromedp.Run(ctx, chromedp.Location(&currentURL))
-		log.Printf("[Web Browser] URL after KMSI: %s", currentURL)
-	}
 
 	// Check for successful login indicators
 	if strings.Contains(currentURL, "outlook.live.com") ||
