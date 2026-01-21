@@ -1801,6 +1801,7 @@ function Warmup() {
   const [editingWarmup, setEditingWarmup] = useState(null)
   const [activeTab, setActiveTab] = useState('dashboard')
   const [templates, setTemplates] = useState([])
+  const [isTemplateAdmin, setIsTemplateAdmin] = useState(false)
   const [showAddTemplate, setShowAddTemplate] = useState(false)
   const [newTemplate, setNewTemplate] = useState({ subject: '', body: '', category: 'business', template_type: 'send' })
   const [showDiagnostic, setShowDiagnostic] = useState(false)
@@ -1829,7 +1830,10 @@ function Warmup() {
       api.get('/warmup/smtps').then(r => setWarmupSMTPs(r.data || [])).catch(() => {})
       api.get('/warmup/seeds').then(r => setSeeds(r.data || [])).catch(() => {})
       api.get('/warmup/activity').then(r => setActivity(r.data || [])).catch(() => {})
-      api.get('/warmup/templates').then(r => setTemplates(r.data || [])).catch(() => {})
+      api.get('/warmup/templates').then(r => {
+        setTemplates(r.data?.templates || [])
+        setIsTemplateAdmin(r.data?.is_admin || false)
+      }).catch(() => {})
     } catch (error) {
       // Silent fail for auto-refresh
     }
@@ -1865,7 +1869,8 @@ function Warmup() {
 
       try {
         const templatesRes = await api.get('/warmup/templates')
-        setTemplates(templatesRes.data || [])
+        setTemplates(templatesRes.data?.templates || [])
+        setIsTemplateAdmin(templatesRes.data?.is_admin || false)
       } catch (e) { console.log('Templates error:', e) }
 
     } catch (error) {
@@ -2105,7 +2110,7 @@ function Warmup() {
               </button>
             </>
           )}
-          {activeTab === 'templates' && (
+          {activeTab === 'templates' && isTemplateAdmin && (
             <button
               onClick={() => setShowAddTemplate(true)}
               className="btn btn-primary flex items-center gap-2"
@@ -2613,12 +2618,14 @@ function Warmup() {
                       }`}>
                         {template.category}
                       </span>
-                      <button
-                        onClick={() => deleteTemplate(template.id)}
-                        className="p-1 hover:bg-red-50 dark:hover:bg-red-900/30 rounded"
-                      >
-                        <Trash2 className="w-4 h-4 text-red-400" />
-                      </button>
+                      {isTemplateAdmin && (
+                        <button
+                          onClick={() => deleteTemplate(template.id)}
+                          className="p-1 hover:bg-red-50 dark:hover:bg-red-900/30 rounded"
+                        >
+                          <Trash2 className="w-4 h-4 text-red-400" />
+                        </button>
+                      )}
                     </div>
                     <h4 className="font-medium text-gray-900 dark:text-white mb-2">{template.subject}</h4>
                     <p className="text-sm text-gray-500 dark:text-gray-400 line-clamp-3">{template.body}</p>
@@ -2657,12 +2664,14 @@ function Warmup() {
                       <span className="px-2 py-1 text-xs font-medium rounded bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400">
                         resposta
                       </span>
-                      <button
-                        onClick={() => deleteTemplate(template.id)}
-                        className="p-1 hover:bg-red-50 dark:hover:bg-red-900/30 rounded"
-                      >
-                        <Trash2 className="w-4 h-4 text-red-400" />
-                      </button>
+                      {isTemplateAdmin && (
+                        <button
+                          onClick={() => deleteTemplate(template.id)}
+                          className="p-1 hover:bg-red-50 dark:hover:bg-red-900/30 rounded"
+                        >
+                          <Trash2 className="w-4 h-4 text-red-400" />
+                        </button>
+                      )}
                     </div>
                     <h4 className="font-medium text-gray-900 dark:text-white mb-2">{template.subject}</h4>
                     <p className="text-sm text-gray-500 dark:text-gray-400 line-clamp-3">{template.body}</p>

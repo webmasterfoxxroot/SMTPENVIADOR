@@ -2164,15 +2164,15 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 
 // listWarmupTemplates returns all warmup templates
 func (s *Server) listWarmupTemplates(c *fiber.Ctx) error {
-	userID := getUserID(c)
+	// List all global templates (user_id IS NULL) - available to all users
 	rows, err := s.db.Query(`
 		SELECT id, COALESCE(subject, ''), COALESCE(body, ''),
 		       COALESCE(category, 'business'), COALESCE(template_type, 'send'),
 		       COALESCE(active, true), COALESCE(created_at, NOW())
 		FROM warmup_templates
-		WHERE user_id = $1 OR user_id IS NULL
+		WHERE user_id IS NULL
 		ORDER BY template_type, category, created_at
-	`, userID)
+	`)
 	if err != nil {
 		log.Printf("[Warmup API] listWarmupTemplates query error: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -2206,12 +2206,20 @@ func (s *Server) listWarmupTemplates(c *fiber.Ctx) error {
 		templates = []fiber.Map{}
 	}
 
-	return c.JSON(templates)
+	// Return templates with admin flag so frontend knows if user can edit/delete
+	return c.JSON(fiber.Map{
+		"templates": templates,
+		"is_admin":  isAdmin(c),
+	})
 }
 
-// createWarmupTemplate creates a new warmup template
+// createWarmupTemplate creates a new warmup template (admin only)
 func (s *Server) createWarmupTemplate(c *fiber.Ctx) error {
-	userID := getUserID(c)
+	// Only admin can create warmup templates
+	if !isAdmin(c) {
+		return c.Status(403).JSON(fiber.Map{"error": "Apenas administradores podem criar templates de warmup"})
+	}
+
 	var req struct {
 		Subject      string `json:"subject"`
 		Body         string `json:"body"`
@@ -2232,10 +2240,11 @@ func (s *Server) createWarmupTemplate(c *fiber.Ctx) error {
 
 	id := uuid.New().String()
 
+	// Create global template (user_id = NULL) so all users can use it
 	_, err := s.db.Exec(`
 		INSERT INTO warmup_templates (id, user_id, subject, body, category, template_type, active)
-		VALUES ($1, $2, $3, $4, $5, $6, true)
-	`, id, userID, req.Subject, req.Body, req.Category, req.TemplateType)
+		VALUES ($1, NULL, $2, $3, $4, $5, true)
+	`, id, req.Subject, req.Body, req.Category, req.TemplateType)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -2244,13 +2253,17 @@ func (s *Server) createWarmupTemplate(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"id": id, "message": "Template created"})
 }
 
-// deleteWarmupTemplate deletes a warmup template
+// deleteWarmupTemplate deletes a warmup template (admin only)
 func (s *Server) deleteWarmupTemplate(c *fiber.Ctx) error {
-	userID := getUserID(c)
+	// Only admin can delete warmup templates
+	if !isAdmin(c) {
+		return c.Status(403).JSON(fiber.Map{"error": "Apenas administradores podem deletar templates de warmup"})
+	}
+
 	id := c.Params("id")
 
-	// Only allow deleting user's own templates (not system templates where user_id IS NULL)
-	_, err := s.db.Exec(`DELETE FROM warmup_templates WHERE id = $1 AND user_id = $2`, id, userID)
+	// Admin can delete any template
+	_, err := s.db.Exec(`DELETE FROM warmup_templates WHERE id = $1`, id)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}

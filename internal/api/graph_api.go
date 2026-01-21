@@ -171,7 +171,7 @@ func (g *GraphAPIClient) RefreshAccessToken(ctx context.Context) error {
 	// Microsoft OAuth2 token endpoint (common for all account types)
 	tokenURL := "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 
-	// Build the form data using .default scope as per seller's example
+	// Build the form data with .default scope to get valid JWT
 	data := url.Values{}
 	data.Set("client_id", g.ClientID)
 	data.Set("grant_type", "refresh_token")
@@ -219,6 +219,13 @@ func (g *GraphAPIClient) RefreshAccessToken(ctx context.Context) error {
 	}
 
 	log.Printf("[Graph API] Access token obtained, expires at %s", g.ExpiresAt.Format(time.RFC3339))
+	log.Printf("[Graph API] Token scopes: %s", tokenResp.Scope)
+	// Log token format for debugging (first 50 chars)
+	tokenPreview := g.AccessToken
+	if len(tokenPreview) > 50 {
+		tokenPreview = tokenPreview[:50] + "..."
+	}
+	log.Printf("[Graph API] Token format: %s", tokenPreview)
 	return nil
 }
 
@@ -393,7 +400,6 @@ func (g *GraphAPIClient) TestConnection(ctx context.Context) (*GraphAPIResult, e
 		}, err
 	}
 
-	// Try to get user profile to verify the token works
 	client, err := g.createHTTPClient()
 	if err != nil {
 		return &GraphAPIResult{
@@ -403,7 +409,9 @@ func (g *GraphAPIClient) TestConnection(ctx context.Context) (*GraphAPIResult, e
 		}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://graph.microsoft.com/v1.0/me", nil)
+	// First try to read inbox messages (more likely to work with READ-only tokens)
+	log.Printf("[Graph API] Testing inbox read access for %s", g.Email)
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://graph.microsoft.com/v1.0/me/messages?$top=1", nil)
 	if err != nil {
 		return &GraphAPIResult{
 			Success: false,
@@ -425,26 +433,28 @@ func (g *GraphAPIClient) TestConnection(ctx context.Context) (*GraphAPIResult, e
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		var profile map[string]interface{}
-		json.Unmarshal(body, &profile)
+	body, _ := io.ReadAll(resp.Body)
 
-		displayName := ""
-		if name, ok := profile["displayName"].(string); ok {
-			displayName = name
+	if resp.StatusCode == http.StatusOK {
+		var messages map[string]interface{}
+		json.Unmarshal(body, &messages)
+
+		msgCount := 0
+		if value, ok := messages["value"].([]interface{}); ok {
+			msgCount = len(value)
 		}
 
-		log.Printf("[Graph API] Connection successful for %s (Display: %s)", g.Email, displayName)
+		log.Printf("[Graph API] Inbox read successful for %s (%d messages)", g.Email, msgCount)
 		return &GraphAPIResult{
 			Success: true,
 			IP:      proxyIP,
-			Message: fmt.Sprintf("Connected as %s (%s)", g.Email, displayName),
+			Message: fmt.Sprintf("Token works! Read %d inbox messages. Note: This token may only have READ permission.", msgCount),
 		}, nil
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	// If inbox read fails, the token probably doesn't have Mail.Read either
 	errMsg := fmt.Sprintf("Graph API error: status %d - %s", resp.StatusCode, string(body))
+	log.Printf("[Graph API] %s", errMsg)
 	return &GraphAPIResult{
 		Success: false,
 		IP:      proxyIP,
