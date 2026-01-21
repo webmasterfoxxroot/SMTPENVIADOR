@@ -220,6 +220,12 @@ func (g *GraphAPIClient) RefreshAccessToken(ctx context.Context) error {
 
 	log.Printf("[Graph API] Access token obtained, expires at %s", g.ExpiresAt.Format(time.RFC3339))
 	log.Printf("[Graph API] Token scopes: %s", tokenResp.Scope)
+	// Log token format for debugging (first 50 chars)
+	tokenPreview := g.AccessToken
+	if len(tokenPreview) > 50 {
+		tokenPreview = tokenPreview[:50] + "..."
+	}
+	log.Printf("[Graph API] Token format: %s", tokenPreview)
 	return nil
 }
 
