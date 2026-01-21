@@ -361,14 +361,31 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 			break
 		}
 
-		// Handle FIDO/Passkey setup prompt
-		if strings.Contains(currentURL, "fido") || strings.Contains(currentURL, "passkey") {
-			log.Printf("[Web Browser] Found Passkey/FIDO prompt, clicking Cancel...")
-			// Try multiple cancel buttons
+		// Handle FIDO/Passkey setup prompt (can appear as modal on ppsecure page too)
+		if strings.Contains(currentURL, "fido") || strings.Contains(currentURL, "passkey") || strings.Contains(currentURL, "ppsecure") {
+			log.Printf("[Web Browser] Found Passkey/FIDO/ppsecure page, trying to dismiss modal...")
+
+			// The FIDO modal has "Cancelar" button - try multiple ways to click it
+			// Try by button text
 			chromedp.Run(ctx, chromedp.Click(`//button[contains(text(), 'Cancelar')]`, chromedp.BySearch))
-			chromedp.Run(ctx, chromedp.Sleep(2*time.Second))
+			chromedp.Run(ctx, chromedp.Sleep(1*time.Second))
 			chromedp.Run(ctx, chromedp.Click(`//button[contains(text(), 'Cancel')]`, chromedp.BySearch))
-			chromedp.Run(ctx, chromedp.Sleep(2*time.Second))
+			chromedp.Run(ctx, chromedp.Sleep(1*time.Second))
+
+			// Try by common button classes/attributes
+			chromedp.Run(ctx, chromedp.Click(`button[data-testid="secondaryButton"]`, chromedp.ByQuery))
+			chromedp.Run(ctx, chromedp.Sleep(1*time.Second))
+			chromedp.Run(ctx, chromedp.Click(`button.secondary`, chromedp.ByQuery))
+			chromedp.Run(ctx, chromedp.Sleep(1*time.Second))
+
+			// Try clicking any cancel/back button
+			chromedp.Run(ctx, chromedp.Click(`#CancelNo`, chromedp.ByID))
+			chromedp.Run(ctx, chromedp.Sleep(1*time.Second))
+			chromedp.Run(ctx, chromedp.Click(`#idBtn_Back`, chromedp.ByID))
+			chromedp.Run(ctx, chromedp.Sleep(1*time.Second))
+
+			// Wait for page to process
+			chromedp.Run(ctx, chromedp.Sleep(3*time.Second))
 			continue
 		}
 
