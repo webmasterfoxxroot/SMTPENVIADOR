@@ -259,6 +259,7 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 
 	// Click Next button - try multiple approaches
 	log.Printf("[Web Browser] Clicking Next button...")
+	buttonSelectors := []string{`#idSIButton9`, `input[type="submit"]`, `button[type="submit"]`}
 
 	// First try: Press Enter key (most reliable)
 	err = chromedp.Run(ctx,
@@ -268,7 +269,6 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 		log.Printf("[Web Browser] Enter key failed: %v, trying click...", err)
 
 		// Second try: Click with short timeout
-		buttonSelectors := []string{`#idSIButton9`, `input[type="submit"]`, `button[type="submit"]`}
 		for _, sel := range buttonSelectors {
 			clickCtx, clickCancel := context.WithTimeout(ctx, 3*time.Second)
 			err = chromedp.Run(clickCtx, chromedp.Click(sel, chromedp.ByQuery))
