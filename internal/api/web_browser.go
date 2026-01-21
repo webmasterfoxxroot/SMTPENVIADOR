@@ -365,38 +365,29 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 		if strings.Contains(currentURL, "fido") || strings.Contains(currentURL, "passkey") || strings.Contains(currentURL, "ppsecure") {
 			log.Printf("[Web Browser] Found Passkey/FIDO/ppsecure page, trying to dismiss modal...")
 
-			// Try pressing ESC via JavaScript (more reliable)
+			// Capture debug screenshot to see what's on screen
+			captureDebugInfo(ctx, "fido_modal")
+
+			// Try pressing ESC via JavaScript
 			chromedp.Run(ctx, chromedp.Evaluate(`
 				document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true}));
-				document.dispatchEvent(new KeyboardEvent('keyup', {key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true}));
 			`, nil))
-			chromedp.Run(ctx, chromedp.Sleep(2*time.Second))
+			chromedp.Run(ctx, chromedp.Sleep(1*time.Second))
 
-			// Also try chromedp.KeyEvent
-			chromedp.Run(ctx, chromedp.KeyEvent("\x1b")) // ESC key
-			chromedp.Run(ctx, chromedp.Sleep(2*time.Second))
+			// Try navigating directly to Outlook (bypass FIDO setup)
+			log.Printf("[Web Browser] Trying to navigate directly to Outlook...")
+			chromedp.Run(ctx,
+				chromedp.Navigate("https://outlook.live.com/mail/0/"),
+				chromedp.Sleep(5*time.Second),
+			)
 
-			// Check if modal closed
+			// Check if we made it to Outlook
 			chromedp.Run(ctx, chromedp.Location(&currentURL))
-			log.Printf("[Web Browser] URL after ESC attempts: %s", currentURL)
-			if !strings.Contains(currentURL, "ppsecure") && !strings.Contains(currentURL, "fido") {
-				log.Printf("[Web Browser] ESC key worked, modal closed")
-				continue
+			log.Printf("[Web Browser] URL after direct navigation: %s", currentURL)
+			if strings.Contains(currentURL, "outlook.live.com") || strings.Contains(currentURL, "mail.live.com") {
+				log.Printf("[Web Browser] Successfully navigated to Outlook!")
+				break
 			}
-
-			// Try clicking cancel buttons with short timeouts
-			clickWithTimeout := func(sel string) {
-				clickCtx, clickCancel := context.WithTimeout(ctx, 2*time.Second)
-				chromedp.Run(clickCtx, chromedp.Click(sel, chromedp.ByQuery))
-				clickCancel()
-			}
-
-			log.Printf("[Web Browser] Trying to click Cancelar buttons...")
-			clickWithTimeout(`button:has-text("Cancelar")`)
-			clickWithTimeout(`//button[contains(text(), 'Cancelar')]`)
-			clickWithTimeout(`#CancelNo`)
-			clickWithTimeout(`#idBtn_Back`)
-			chromedp.Run(ctx, chromedp.Sleep(2*time.Second))
 			continue
 		}
 
