@@ -168,10 +168,10 @@ func (g *GraphAPIClient) RefreshAccessToken(ctx context.Context) error {
 		return fmt.Errorf("failed to create HTTP client: %v", err)
 	}
 
-	// Microsoft OAuth2 token endpoint (works for both consumer and business accounts)
-	tokenURL := "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
+	// Microsoft OAuth2 token endpoint (common for all account types)
+	tokenURL := "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 
-	// Build the form data with Graph API scope
+	// Build the form data using .default scope as per seller's example
 	data := url.Values{}
 	data.Set("client_id", g.ClientID)
 	data.Set("grant_type", "refresh_token")
