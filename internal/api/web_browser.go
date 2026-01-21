@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/fetch"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
@@ -17,6 +19,35 @@ type BrowserResult struct {
 	Success bool   `json:"success"`
 	IP      string `json:"ip,omitempty"`
 	Message string `json:"message,omitempty"`
+}
+
+// captureDebugInfo captures screenshot and page info for debugging
+func captureDebugInfo(ctx context.Context, step string) {
+	var buf []byte
+	var html string
+
+	// Try to get page HTML
+	chromedp.Run(ctx, chromedp.OuterHTML("html", &html))
+	if len(html) > 500 {
+		html = html[:500] + "..."
+	}
+	log.Printf("[Web Browser Debug] %s - Page HTML (truncated): %s", step, html)
+
+	// Try to take screenshot
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		var err error
+		buf, err = page.CaptureScreenshot().Do(ctx)
+		return err
+	}))
+	if err == nil && len(buf) > 0 {
+		// Log base64 encoded screenshot (first 100 chars for reference)
+		encoded := base64.StdEncoding.EncodeToString(buf)
+		log.Printf("[Web Browser Debug] %s - Screenshot captured (%d bytes)", step, len(buf))
+		// Save screenshot to file for debugging
+		os.WriteFile(fmt.Sprintf("/tmp/screenshot_%s_%d.png", step, time.Now().Unix()), buf, 0644)
+		log.Printf("[Web Browser Debug] Screenshot saved to /tmp/screenshot_%s_%d.png", step, time.Now().Unix())
+		_ = encoded // prevent unused variable warning
+	}
 }
 
 // getChromePath returns the path to Chrome/Chromium executable
@@ -156,24 +187,48 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 	log.Printf("[Web Browser] Navigating to login.live.com...")
 	err := chromedp.Run(ctx,
 		chromedp.Navigate("https://login.live.com/"),
-		chromedp.Sleep(3*time.Second),
+		chromedp.Sleep(5*time.Second),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to navigate to login page: %v", err)
 	}
 
-	// Wait for email field - try multiple selectors
+	// Capture debug info after navigation
+	captureDebugInfo(ctx, "after_navigation")
+
+	// Wait for email field - try multiple selectors with shorter timeout
 	log.Printf("[Web Browser] Waiting for email field...")
-	err = chromedp.Run(ctx,
+
+	// Create shorter timeout context for element wait
+	waitCtx, waitCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer waitCancel()
+
+	err = chromedp.Run(waitCtx,
 		chromedp.WaitVisible(`#i0116`, chromedp.ByID),
 	)
 	if err != nil {
+		log.Printf("[Web Browser] Email field #i0116 not found, trying alternative selectors...")
+		captureDebugInfo(ctx, "email_field_not_found")
+
 		// Try alternative selector
-		err = chromedp.Run(ctx,
+		waitCtx2, waitCancel2 := context.WithTimeout(ctx, 10*time.Second)
+		defer waitCancel2()
+
+		err = chromedp.Run(waitCtx2,
 			chromedp.WaitVisible(`input[type="email"]`, chromedp.ByQuery),
 		)
 		if err != nil {
-			return nil, fmt.Errorf("failed to find email field: %v", err)
+			// Try name attribute
+			waitCtx3, waitCancel3 := context.WithTimeout(ctx, 10*time.Second)
+			defer waitCancel3()
+
+			err = chromedp.Run(waitCtx3,
+				chromedp.WaitVisible(`input[name="loginfmt"]`, chromedp.ByQuery),
+			)
+			if err != nil {
+				captureDebugInfo(ctx, "all_email_selectors_failed")
+				return nil, fmt.Errorf("failed to find email field: %v", err)
+			}
 		}
 	}
 
