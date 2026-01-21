@@ -171,12 +171,12 @@ func (g *GraphAPIClient) RefreshAccessToken(ctx context.Context) error {
 	// Microsoft OAuth2 token endpoint (common for all account types)
 	tokenURL := "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 
-	// Build the form data - don't specify scope to use the original token's scopes
+	// Build the form data with .default scope to get valid JWT
 	data := url.Values{}
 	data.Set("client_id", g.ClientID)
 	data.Set("grant_type", "refresh_token")
 	data.Set("refresh_token", g.RefreshToken)
-	// No scope specified - uses original scopes from token
+	data.Set("scope", "https://graph.microsoft.com/.default offline_access")
 
 	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
