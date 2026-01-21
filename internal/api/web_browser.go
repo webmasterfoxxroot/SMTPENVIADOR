@@ -44,7 +44,7 @@ func captureDebugInfo(ctx context.Context, step string) {
 	log.Printf("[Web Browser Debug] %s - Current URL: %s", step, currentURL)
 
 	// Try to take screenshot
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+	err = chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
 		var err error
 		buf, err = page.CaptureScreenshot().Do(ctx)
 		return err
