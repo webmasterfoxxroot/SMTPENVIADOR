@@ -24,14 +24,24 @@ type BrowserResult struct {
 // captureDebugInfo captures screenshot and page info for debugging
 func captureDebugInfo(ctx context.Context, step string) {
 	var buf []byte
-	var html string
+	var bodyHTML string
 
-	// Try to get page HTML
-	chromedp.Run(ctx, chromedp.OuterHTML("html", &html))
-	if len(html) > 500 {
-		html = html[:500] + "..."
+	// Try to get body HTML (more useful than full HTML)
+	err := chromedp.Run(ctx, chromedp.OuterHTML("body", &bodyHTML, chromedp.ByQuery))
+	if err != nil {
+		log.Printf("[Web Browser Debug] %s - Could not get body HTML: %v", step, err)
+	} else {
+		// Log first 1000 chars of body
+		if len(bodyHTML) > 1000 {
+			bodyHTML = bodyHTML[:1000] + "..."
+		}
+		log.Printf("[Web Browser Debug] %s - Body HTML: %s", step, bodyHTML)
 	}
-	log.Printf("[Web Browser Debug] %s - Page HTML (truncated): %s", step, html)
+
+	// Also log current URL
+	var currentURL string
+	chromedp.Run(ctx, chromedp.Location(&currentURL))
+	log.Printf("[Web Browser Debug] %s - Current URL: %s", step, currentURL)
 
 	// Try to take screenshot
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
@@ -187,10 +197,19 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 	log.Printf("[Web Browser] Navigating to login.live.com...")
 	err := chromedp.Run(ctx,
 		chromedp.Navigate("https://login.live.com/"),
-		chromedp.Sleep(5*time.Second),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to navigate to login page: %v", err)
+	}
+
+	// Wait for page to fully load
+	log.Printf("[Web Browser] Waiting for page to load...")
+	err = chromedp.Run(ctx,
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		chromedp.Sleep(8*time.Second),
+	)
+	if err != nil {
+		log.Printf("[Web Browser] Warning: WaitReady failed: %v", err)
 	}
 
 	// Capture debug info after navigation
