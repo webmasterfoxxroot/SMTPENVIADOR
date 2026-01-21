@@ -1758,19 +1758,22 @@ func (s *Server) getWarmupStats(c *fiber.Ctx) error {
 
 	// Add internal warmup email counts (filter by user's SMTPs)
 	var internalSent, internalReceived, internalReplies int
+	// Emails SENT by user's SMTPs
 	s.db.QueryRow(`
 		SELECT COUNT(*) FROM warmup_internal_emails ie
 		JOIN smtp_servers s ON ie.from_smtp_id = s.id
 		WHERE s.user_id = $1
 	`, userID).Scan(&internalSent)
+	// Emails RECEIVED by user's SMTPs (to_smtp_id belongs to user)
 	s.db.QueryRow(`
 		SELECT COUNT(*) FROM warmup_internal_emails ie
-		JOIN smtp_servers s ON ie.from_smtp_id = s.id
+		JOIN smtp_servers s ON ie.to_smtp_id = s.id
 		WHERE s.user_id = $1 AND ie.received = true
 	`, userID).Scan(&internalReceived)
+	// Replies RECEIVED by user's SMTPs (to_smtp_id belongs to user)
 	s.db.QueryRow(`
 		SELECT COUNT(*) FROM warmup_internal_emails ie
-		JOIN smtp_servers s ON ie.from_smtp_id = s.id
+		JOIN smtp_servers s ON ie.to_smtp_id = s.id
 		WHERE s.user_id = $1 AND ie.replied = true
 	`, userID).Scan(&internalReplies)
 	totalSent += internalSent
