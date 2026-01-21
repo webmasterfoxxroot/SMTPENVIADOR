@@ -171,12 +171,12 @@ func (g *GraphAPIClient) RefreshAccessToken(ctx context.Context) error {
 	// Microsoft OAuth2 token endpoint for consumers
 	tokenURL := "https://login.live.com/oauth20_token.srf"
 
-	// Build the form data - request outlook.office.com scopes (same as SMTP/IMAP tokens)
+	// Build the form data - don't specify scope to use original token scopes
 	data := url.Values{}
 	data.Set("client_id", g.ClientID)
 	data.Set("grant_type", "refresh_token")
 	data.Set("refresh_token", g.RefreshToken)
-	data.Set("scope", "https://outlook.office.com/mail.send https://outlook.office.com/mail.readwrite offline_access")
+	// Don't set scope - use whatever scopes the token was originally issued with
 
 	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
