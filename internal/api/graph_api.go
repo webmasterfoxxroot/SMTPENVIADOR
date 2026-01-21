@@ -168,15 +168,14 @@ func (g *GraphAPIClient) RefreshAccessToken(ctx context.Context) error {
 		return fmt.Errorf("failed to create HTTP client: %v", err)
 	}
 
-	// Microsoft OAuth2 token endpoint
-	tokenURL := "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+	// Microsoft OAuth2 token endpoint for consumers
+	tokenURL := "https://login.live.com/oauth20_token.srf"
 
-	// Build the form data
+	// Build the form data - don't specify scope to use the original scopes
 	data := url.Values{}
 	data.Set("client_id", g.ClientID)
 	data.Set("grant_type", "refresh_token")
 	data.Set("refresh_token", g.RefreshToken)
-	data.Set("scope", "https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/Mail.ReadWrite offline_access")
 
 	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
