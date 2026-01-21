@@ -193,14 +193,19 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 		}
 	}
 
-	// Navigate to Outlook login
-	log.Printf("[Web Browser] Navigating to login.live.com...")
+	// Navigate to Outlook first - it will redirect to proper login
+	log.Printf("[Web Browser] Navigating to outlook.live.com...")
 	err := chromedp.Run(ctx,
-		chromedp.Navigate("https://login.live.com/"),
+		chromedp.Navigate("https://outlook.live.com/mail/0/"),
+		chromedp.Sleep(5*time.Second),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to navigate to login page: %v", err)
+		return nil, fmt.Errorf("failed to navigate to Outlook: %v", err)
 	}
+
+	// Check current URL - should be redirected to login
+	chromedp.Run(ctx, chromedp.Location(&currentURL))
+	log.Printf("[Web Browser] Redirected to: %s", currentURL)
 
 	// Wait for page to fully load
 	log.Printf("[Web Browser] Waiting for page to load...")
