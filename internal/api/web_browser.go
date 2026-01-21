@@ -245,6 +245,40 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 		return nil, fmt.Errorf("failed to click sign in button: %v", err)
 	}
 
+	// Check current URL for FIDO/Passkey prompt
+	chromedp.Run(ctx, chromedp.Location(&currentURL))
+	log.Printf("[Web Browser] URL after sign in: %s", currentURL)
+
+	// Handle FIDO/Passkey setup prompt (login.microsoft.com/consumers/fido)
+	if strings.Contains(currentURL, "fido") || strings.Contains(currentURL, "passkey") {
+		log.Printf("[Web Browser] Found Passkey/FIDO prompt, clicking Cancel...")
+		// Try to click "Cancelar" button
+		chromedp.Run(ctx,
+			chromedp.Click(`button:contains("Cancelar")`, chromedp.ByQuery),
+			chromedp.Sleep(2*time.Second),
+		)
+		// Try alternative selectors
+		chromedp.Run(ctx,
+			chromedp.Click(`button.secondary`, chromedp.ByQuery),
+			chromedp.Sleep(2*time.Second),
+		)
+		chromedp.Run(ctx,
+			chromedp.Click(`#cancelBtn`, chromedp.ByID),
+			chromedp.Sleep(2*time.Second),
+		)
+		// Click any "Cancel" or "Cancelar" text
+		chromedp.Run(ctx,
+			chromedp.Click(`//button[contains(text(), 'Cancelar')]`, chromedp.BySearch),
+			chromedp.Sleep(2*time.Second),
+		)
+		chromedp.Run(ctx,
+			chromedp.Click(`//button[contains(text(), 'Cancel')]`, chromedp.BySearch),
+			chromedp.Sleep(2*time.Second),
+		)
+		chromedp.Run(ctx, chromedp.Location(&currentURL))
+		log.Printf("[Web Browser] URL after FIDO cancel: %s", currentURL)
+	}
+
 	// Check if we're logged in or if there's an error
 	err = chromedp.Run(ctx,
 		chromedp.Location(&currentURL),
