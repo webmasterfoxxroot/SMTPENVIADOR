@@ -203,8 +203,13 @@ func (s *Server) importWebWarmupAccounts(c *fiber.Ctx) error {
 			continue
 		}
 
-		// Parse tab-separated format: email TAB password TAB token TAB client_id
-		parts := strings.Split(line, "\t")
+		// Parse format: email:password:token:client_id (colon) or email TAB password TAB token TAB client_id (tab)
+		var parts []string
+		if strings.Contains(line, "\t") {
+			parts = strings.Split(line, "\t")
+		} else {
+			parts = strings.Split(line, ":")
+		}
 		if len(parts) < 2 {
 			errors = append(errors, "Invalid format: "+line[:min(30, len(line))])
 			continue
