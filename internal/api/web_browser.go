@@ -24,14 +24,24 @@ type BrowserResult struct {
 // captureDebugInfo captures screenshot and page info for debugging
 func captureDebugInfo(ctx context.Context, step string) {
 	var buf []byte
-	var html string
+	var bodyHTML string
 
-	// Try to get page HTML
-	chromedp.Run(ctx, chromedp.OuterHTML("html", &html))
-	if len(html) > 500 {
-		html = html[:500] + "..."
+	// Try to get body HTML (more useful than full HTML)
+	err := chromedp.Run(ctx, chromedp.OuterHTML("body", &bodyHTML, chromedp.ByQuery))
+	if err != nil {
+		log.Printf("[Web Browser Debug] %s - Could not get body HTML: %v", step, err)
+	} else {
+		// Log first 1000 chars of body
+		if len(bodyHTML) > 1000 {
+			bodyHTML = bodyHTML[:1000] + "..."
+		}
+		log.Printf("[Web Browser Debug] %s - Body HTML: %s", step, bodyHTML)
 	}
-	log.Printf("[Web Browser Debug] %s - Page HTML (truncated): %s", step, html)
+
+	// Also log current URL
+	var currentURL string
+	chromedp.Run(ctx, chromedp.Location(&currentURL))
+	log.Printf("[Web Browser Debug] %s - Current URL: %s", step, currentURL)
 
 	// Try to take screenshot
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
@@ -187,103 +197,108 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 	log.Printf("[Web Browser] Navigating to login.live.com...")
 	err := chromedp.Run(ctx,
 		chromedp.Navigate("https://login.live.com/"),
-		chromedp.Sleep(5*time.Second),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to navigate to login page: %v", err)
 	}
 
+	// Wait for page to fully load
+	log.Printf("[Web Browser] Waiting for page to load...")
+	err = chromedp.Run(ctx,
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		chromedp.Sleep(8*time.Second),
+	)
+	if err != nil {
+		log.Printf("[Web Browser] Warning: WaitReady failed: %v", err)
+	}
+
 	// Capture debug info after navigation
 	captureDebugInfo(ctx, "after_navigation")
 
-	// Wait for email field - try multiple selectors with shorter timeout
+	// Wait for email field - try multiple selectors
 	log.Printf("[Web Browser] Waiting for email field...")
 
-	// Create shorter timeout context for element wait
-	waitCtx, waitCancel := context.WithTimeout(ctx, 15*time.Second)
-	defer waitCancel()
-
-	err = chromedp.Run(waitCtx,
-		chromedp.WaitVisible(`#i0116`, chromedp.ByID),
-	)
-	if err != nil {
-		log.Printf("[Web Browser] Email field #i0116 not found, trying alternative selectors...")
-		captureDebugInfo(ctx, "email_field_not_found")
-
-		// Try alternative selector
-		waitCtx2, waitCancel2 := context.WithTimeout(ctx, 10*time.Second)
-		defer waitCancel2()
-
-		err = chromedp.Run(waitCtx2,
-			chromedp.WaitVisible(`input[type="email"]`, chromedp.ByQuery),
-		)
-		if err != nil {
-			// Try name attribute
-			waitCtx3, waitCancel3 := context.WithTimeout(ctx, 10*time.Second)
-			defer waitCancel3()
-
-			err = chromedp.Run(waitCtx3,
-				chromedp.WaitVisible(`input[name="loginfmt"]`, chromedp.ByQuery),
-			)
-			if err != nil {
-				captureDebugInfo(ctx, "all_email_selectors_failed")
-				return nil, fmt.Errorf("failed to find email field: %v", err)
-			}
-		}
+	// List of selectors to try for email field
+	emailSelectors := []string{
+		`input[name="loginfmt"]`,
+		`#i0116`,
+		`input[type="email"]`,
+		`input[type="text"]`,
 	}
 
-	// Enter email
+	var emailSelector string
+	for _, sel := range emailSelectors {
+		waitCtx, waitCancel := context.WithTimeout(ctx, 5*time.Second)
+		err = chromedp.Run(waitCtx,
+			chromedp.WaitVisible(sel, chromedp.ByQuery),
+		)
+		waitCancel()
+		if err == nil {
+			emailSelector = sel
+			log.Printf("[Web Browser] Found email field with selector: %s", sel)
+			break
+		}
+		log.Printf("[Web Browser] Selector %s not found, trying next...", sel)
+	}
+
+	if emailSelector == "" {
+		captureDebugInfo(ctx, "all_email_selectors_failed")
+		return nil, fmt.Errorf("failed to find email field with any selector")
+	}
+
+	// Enter email using the selector that worked
 	log.Printf("[Web Browser] Entering email: %s", o.Email)
 	err = chromedp.Run(ctx,
-		chromedp.Clear(`#i0116`, chromedp.ByID),
-		chromedp.SendKeys(`#i0116`, o.Email, chromedp.ByID),
+		chromedp.Clear(emailSelector, chromedp.ByQuery),
+		chromedp.SendKeys(emailSelector, o.Email, chromedp.ByQuery),
 		chromedp.Sleep(1*time.Second),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to enter email: %v", err)
 	}
 
-	// Click Next button
+	// Click Next button - try multiple selectors
 	log.Printf("[Web Browser] Clicking Next button...")
-	err = chromedp.Run(ctx,
-		chromedp.Click(`#idSIButton9`, chromedp.ByID),
-		chromedp.Sleep(4*time.Second),
-	)
-	if err != nil {
-		// Try alternative selector
-		err = chromedp.Run(ctx,
-			chromedp.Click(`input[type="submit"]`, chromedp.ByQuery),
-			chromedp.Sleep(4*time.Second),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to click next button: %v", err)
+	buttonSelectors := []string{`#idSIButton9`, `input[type="submit"]`, `button[type="submit"]`}
+	for _, sel := range buttonSelectors {
+		err = chromedp.Run(ctx, chromedp.Click(sel, chromedp.ByQuery))
+		if err == nil {
+			log.Printf("[Web Browser] Clicked button with selector: %s", sel)
+			break
 		}
 	}
+	chromedp.Run(ctx, chromedp.Sleep(4*time.Second))
 
 	// Check current URL
 	chromedp.Run(ctx, chromedp.Location(&currentURL))
 	log.Printf("[Web Browser] URL after email: %s", currentURL)
 
-	// Wait for password field
+	// Wait for password field - try multiple selectors
 	log.Printf("[Web Browser] Waiting for password field...")
-	err = chromedp.Run(ctx,
-		chromedp.WaitVisible(`#i0118`, chromedp.ByID),
-	)
-	if err != nil {
-		// Try alternative selector
-		err = chromedp.Run(ctx,
-			chromedp.WaitVisible(`input[type="password"]`, chromedp.ByQuery),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to find password field: %v", err)
+	passwordSelectors := []string{`input[name="passwd"]`, `#i0118`, `input[type="password"]`}
+	var passwordSelector string
+	for _, sel := range passwordSelectors {
+		waitCtx, waitCancel := context.WithTimeout(ctx, 5*time.Second)
+		err = chromedp.Run(waitCtx, chromedp.WaitVisible(sel, chromedp.ByQuery))
+		waitCancel()
+		if err == nil {
+			passwordSelector = sel
+			log.Printf("[Web Browser] Found password field with selector: %s", sel)
+			break
 		}
+		log.Printf("[Web Browser] Password selector %s not found, trying next...", sel)
 	}
 
-	// Enter password
+	if passwordSelector == "" {
+		captureDebugInfo(ctx, "password_field_not_found")
+		return nil, fmt.Errorf("failed to find password field with any selector")
+	}
+
+	// Enter password using the selector that worked
 	log.Printf("[Web Browser] Entering password...")
 	err = chromedp.Run(ctx,
-		chromedp.Clear(`#i0118`, chromedp.ByID),
-		chromedp.SendKeys(`#i0118`, o.Password, chromedp.ByID),
+		chromedp.Clear(passwordSelector, chromedp.ByQuery),
+		chromedp.SendKeys(passwordSelector, o.Password, chromedp.ByQuery),
 		chromedp.Sleep(1*time.Second),
 	)
 	if err != nil {
@@ -292,10 +307,14 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 
 	// Click Sign in button
 	log.Printf("[Web Browser] Clicking Sign in button...")
-	err = chromedp.Run(ctx,
-		chromedp.Click(`#idSIButton9`, chromedp.ByID),
-		chromedp.Sleep(5*time.Second),
-	)
+	for _, sel := range buttonSelectors {
+		err = chromedp.Run(ctx, chromedp.Click(sel, chromedp.ByQuery))
+		if err == nil {
+			log.Printf("[Web Browser] Clicked sign in with selector: %s", sel)
+			break
+		}
+	}
+	chromedp.Run(ctx, chromedp.Sleep(5*time.Second))
 	if err != nil {
 		return nil, fmt.Errorf("failed to click sign in button: %v", err)
 	}
