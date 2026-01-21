@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -11,16 +13,18 @@ import (
 
 // Web Warmup Account
 type WebWarmupAccount struct {
-	ID           string    `json:"id"`
-	UserID       string    `json:"user_id"`
-	Email        string    `json:"email"`
-	Password     string    `json:"password,omitempty"`
-	Provider     string    `json:"provider"` // outlook, gmail
-	Status       string    `json:"status"`   // active, paused, error
-	EmailsSent   int       `json:"emails_sent"`
+	ID           string     `json:"id"`
+	UserID       string     `json:"user_id"`
+	Email        string     `json:"email"`
+	Password     string     `json:"password,omitempty"`
+	RefreshToken string     `json:"refresh_token,omitempty"` // OAuth2 refresh token for Graph API
+	ClientID     string     `json:"client_id,omitempty"`     // OAuth2 client ID
+	Provider     string     `json:"provider"`                // outlook, gmail
+	Status       string     `json:"status"`                  // active, paused, error
+	EmailsSent   int        `json:"emails_sent"`
 	LastActivity *time.Time `json:"last_activity"`
-	ErrorMessage string    `json:"error_message,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	ErrorMessage string     `json:"error_message,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
 }
 
 // Web Warmup Settings
@@ -44,6 +48,8 @@ func (s *Server) initWebWarmupTables() {
 			user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			email VARCHAR(255) NOT NULL,
 			password VARCHAR(255) NOT NULL,
+			refresh_token TEXT,
+			client_id VARCHAR(255),
 			provider VARCHAR(50) DEFAULT 'outlook',
 			status VARCHAR(50) DEFAULT 'active',
 			emails_sent INT DEFAULT 0,
@@ -55,6 +61,10 @@ func (s *Server) initWebWarmupTables() {
 	if err != nil {
 		log.Printf("[Web Warmup] Error creating web_warmup_accounts table: %v", err)
 	}
+
+	// Add columns if they don't exist (for existing tables)
+	s.db.Exec(`ALTER TABLE web_warmup_accounts ADD COLUMN IF NOT EXISTS refresh_token TEXT`)
+	s.db.Exec(`ALTER TABLE web_warmup_accounts ADD COLUMN IF NOT EXISTS client_id VARCHAR(255)`)
 
 	// Create web_warmup_settings table
 	_, err = s.db.Exec(`
@@ -137,9 +147,11 @@ func (s *Server) addWebWarmupAccount(c *fiber.Ctx) error {
 	userID := getUserID(c)
 
 	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-		Provider string `json:"provider"`
+		Email        string `json:"email"`
+		Password     string `json:"password"`
+		RefreshToken string `json:"refresh_token"`
+		ClientID     string `json:"client_id"`
+		Provider     string `json:"provider"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
@@ -155,14 +167,83 @@ func (s *Server) addWebWarmupAccount(c *fiber.Ctx) error {
 
 	id := uuid.New().String()
 	_, err := s.db.Exec(`
-		INSERT INTO web_warmup_accounts (id, user_id, email, password, provider, status)
-		VALUES ($1, $2, $3, $4, $5, 'active')
-	`, id, userID, req.Email, req.Password, req.Provider)
+		INSERT INTO web_warmup_accounts (id, user_id, email, password, refresh_token, client_id, provider, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'active')
+	`, id, userID, req.Email, req.Password, req.RefreshToken, req.ClientID, req.Provider)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	return c.JSON(fiber.Map{"id": id, "message": "Account added"})
+}
+
+// Import web warmup accounts (bulk import with format: email TAB password TAB token TAB client_id)
+func (s *Server) importWebWarmupAccounts(c *fiber.Ctx) error {
+	userID := getUserID(c)
+
+	var req struct {
+		Accounts string `json:"accounts"` // Tab-separated accounts, one per line
+		Provider string `json:"provider"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	if req.Provider == "" {
+		req.Provider = "outlook"
+	}
+
+	lines := strings.Split(strings.TrimSpace(req.Accounts), "\n")
+	imported := 0
+	errors := []string{}
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// Parse tab-separated format: email TAB password TAB token TAB client_id
+		parts := strings.Split(line, "\t")
+		if len(parts) < 2 {
+			errors = append(errors, "Invalid format: "+line[:min(30, len(line))])
+			continue
+		}
+
+		email := strings.TrimSpace(parts[0])
+		password := strings.TrimSpace(parts[1])
+		refreshToken := ""
+		clientID := ""
+
+		if len(parts) >= 3 {
+			refreshToken = strings.TrimSpace(parts[2])
+		}
+		if len(parts) >= 4 {
+			clientID = strings.TrimSpace(parts[3])
+		}
+
+		if email == "" || password == "" {
+			errors = append(errors, "Missing email or password")
+			continue
+		}
+
+		id := uuid.New().String()
+		_, err := s.db.Exec(`
+			INSERT INTO web_warmup_accounts (id, user_id, email, password, refresh_token, client_id, provider, status)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, 'active')
+		`, id, userID, email, password, refreshToken, clientID, req.Provider)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("Error importing %s: %v", email, err))
+			continue
+		}
+		imported++
+	}
+
+	return c.JSON(fiber.Map{
+		"imported": imported,
+		"errors":   errors,
+		"message":  fmt.Sprintf("Imported %d accounts", imported),
+	})
 }
 
 // Update web warmup account
@@ -210,12 +291,13 @@ func (s *Server) testWebWarmupAccount(c *fiber.Ctx) error {
 	userID := getUserID(c)
 	accountID := c.Params("id")
 
-	// Get account details
+	// Get account details (including refresh_token and client_id)
 	var email, password, provider string
+	var refreshToken, clientID *string
 	err := s.db.QueryRow(`
-		SELECT email, password, provider FROM web_warmup_accounts
+		SELECT email, password, provider, refresh_token, client_id FROM web_warmup_accounts
 		WHERE id = $1 AND user_id = $2
-	`, accountID, userID).Scan(&email, &password, &provider)
+	`, accountID, userID).Scan(&email, &password, &provider, &refreshToken, &clientID)
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Account not found"})
 	}
@@ -228,22 +310,39 @@ func (s *Server) testWebWarmupAccount(c *fiber.Ctx) error {
 		FROM web_warmup_settings WHERE user_id = $1
 	`, userID).Scan(&settings.UseProxy, &settings.ProxyHost, &settings.ProxyPort, &settings.ProxyUser, &settings.ProxyPass)
 
-	// Test login using browser automation
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	// Use Graph API if refresh_token and client_id are available
+	if refreshToken != nil && clientID != nil && *refreshToken != "" && *clientID != "" {
+		log.Printf("[Web Warmup] Testing account %s using Graph API", email)
+		result, err := s.testGraphAPIConnection(ctx, email, *refreshToken, *clientID, &settings)
+		if err != nil {
+			// Update account status to error
+			s.db.Exec(`UPDATE web_warmup_accounts SET status = 'error', error_message = $1 WHERE id = $2`,
+				err.Error(), accountID)
+			return c.JSON(fiber.Map{"success": false, "error": err.Error(), "method": "graph_api"})
+		}
+
+		// Update account status to active
+		s.db.Exec(`UPDATE web_warmup_accounts SET status = 'active', error_message = NULL, last_activity = NOW() WHERE id = $1`, accountID)
+		return c.JSON(fiber.Map{"success": true, "ip": result.IP, "message": result.Message, "method": "graph_api"})
+	}
+
+	// Fall back to browser automation if no token
+	log.Printf("[Web Warmup] Testing account %s using browser automation (no token)", email)
 	result, err := s.testOutlookWebLogin(ctx, email, password, &settings)
 	if err != nil {
 		// Update account status to error
 		s.db.Exec(`UPDATE web_warmup_accounts SET status = 'error', error_message = $1 WHERE id = $2`,
 			err.Error(), accountID)
-		return c.JSON(fiber.Map{"success": false, "error": err.Error()})
+		return c.JSON(fiber.Map{"success": false, "error": err.Error(), "method": "browser"})
 	}
 
 	// Update account status to active
 	s.db.Exec(`UPDATE web_warmup_accounts SET status = 'active', error_message = NULL, last_activity = NOW() WHERE id = $1`, accountID)
 
-	return c.JSON(fiber.Map{"success": true, "ip": result.IP, "message": "Login successful"})
+	return c.JSON(fiber.Map{"success": true, "ip": result.IP, "message": "Login successful", "method": "browser"})
 }
 
 // Get web warmup stats
@@ -332,6 +431,84 @@ func (s *Server) updateWebWarmupSettings(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Settings updated"})
 }
 
+// Send test email from web warmup account
+func (s *Server) sendTestWebWarmupEmail(c *fiber.Ctx) error {
+	userID := getUserID(c)
+	accountID := c.Params("id")
+
+	var req struct {
+		ToEmail string `json:"to_email"`
+		Subject string `json:"subject"`
+		Body    string `json:"body"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	if req.ToEmail == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Recipient email required"})
+	}
+
+	if req.Subject == "" {
+		req.Subject = "Web Warmup Test Email"
+	}
+	if req.Body == "" {
+		req.Body = "<p>This is a test email from Web Warmup.</p><p>If you received this, your account is working correctly.</p>"
+	}
+
+	// Get account details (including refresh_token and client_id)
+	var email, password string
+	var refreshToken, clientID *string
+	err := s.db.QueryRow(`
+		SELECT email, password, refresh_token, client_id FROM web_warmup_accounts
+		WHERE id = $1 AND user_id = $2
+	`, accountID, userID).Scan(&email, &password, &refreshToken, &clientID)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Account not found"})
+	}
+
+	// Get proxy settings
+	var settings WebWarmupSettings
+	s.db.QueryRow(`
+		SELECT COALESCE(use_proxy, false), COALESCE(proxy_host, ''), COALESCE(proxy_port, ''),
+		       COALESCE(proxy_user, ''), COALESCE(proxy_pass, '')
+		FROM web_warmup_settings WHERE user_id = $1
+	`, userID).Scan(&settings.UseProxy, &settings.ProxyHost, &settings.ProxyPort, &settings.ProxyUser, &settings.ProxyPass)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Use Graph API if refresh_token and client_id are available
+	if refreshToken != nil && clientID != nil && *refreshToken != "" && *clientID != "" {
+		log.Printf("[Web Warmup] Sending test email from %s to %s using Graph API", email, req.ToEmail)
+		result, err := s.sendGraphAPIEmail(ctx, email, *refreshToken, *clientID, req.ToEmail, req.Subject, req.Body, &settings)
+		if err != nil {
+			return c.JSON(fiber.Map{"success": false, "error": err.Error(), "method": "graph_api"})
+		}
+
+		// Record the email
+		s.db.Exec(`INSERT INTO web_warmup_emails (account_id, to_email, subject, status, proxy_ip) VALUES ($1, $2, $3, 'sent', $4)`,
+			accountID, req.ToEmail, req.Subject, result.IP)
+		s.db.Exec(`UPDATE web_warmup_accounts SET emails_sent = emails_sent + 1, last_activity = NOW() WHERE id = $1`, accountID)
+
+		return c.JSON(fiber.Map{"success": true, "ip": result.IP, "message": "Email sent via Graph API", "method": "graph_api"})
+	}
+
+	// Fall back to browser automation if no token
+	log.Printf("[Web Warmup] Sending test email from %s to %s using browser automation", email, req.ToEmail)
+	result, err := s.sendOutlookWebEmail(ctx, email, password, req.ToEmail, req.Subject, req.Body, &settings)
+	if err != nil {
+		return c.JSON(fiber.Map{"success": false, "error": err.Error(), "method": "browser"})
+	}
+
+	// Record the email
+	s.db.Exec(`INSERT INTO web_warmup_emails (account_id, to_email, subject, status, proxy_ip) VALUES ($1, $2, $3, 'sent', $4)`,
+		accountID, req.ToEmail, req.Subject, result.IP)
+	s.db.Exec(`UPDATE web_warmup_accounts SET emails_sent = emails_sent + 1, last_activity = NOW() WHERE id = $1`, accountID)
+
+	return c.JSON(fiber.Map{"success": true, "ip": result.IP, "message": "Email sent via browser", "method": "browser"})
+}
+
 // Register web warmup routes
 func (s *Server) registerWebWarmupRoutes(api fiber.Router) {
 	// Initialize tables
@@ -342,9 +519,11 @@ func (s *Server) registerWebWarmupRoutes(api fiber.Router) {
 	// Accounts
 	webWarmup.Get("/accounts", s.listWebWarmupAccounts)
 	webWarmup.Post("/accounts", s.addWebWarmupAccount)
+	webWarmup.Post("/accounts/import", s.importWebWarmupAccounts) // Bulk import with token/client_id
 	webWarmup.Put("/accounts/:id", s.updateWebWarmupAccount)
 	webWarmup.Delete("/accounts/:id", s.deleteWebWarmupAccount)
 	webWarmup.Post("/accounts/:id/test", s.testWebWarmupAccount)
+	webWarmup.Post("/accounts/:id/send-test-email", s.sendTestWebWarmupEmail) // Send test email
 
 	// Stats & Settings
 	webWarmup.Get("/stats", s.getWebWarmupStats)
