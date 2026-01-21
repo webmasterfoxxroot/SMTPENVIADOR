@@ -2162,18 +2162,16 @@ func (s *Server) getWarmupActivity(c *fiber.Ctx) error {
 // WARMUP TEMPLATES HANDLERS
 // ============================================
 
-// listWarmupTemplates returns all warmup templates
+// listWarmupTemplates returns all warmup templates (visible to all users)
 func (s *Server) listWarmupTemplates(c *fiber.Ctx) error {
-	userID := getUserID(c)
-	// List global templates (user_id IS NULL) AND user's own templates
+	// All templates are visible to all users - admin manages them
 	rows, err := s.db.Query(`
 		SELECT id, COALESCE(subject, ''), COALESCE(body, ''),
 		       COALESCE(category, 'business'), COALESCE(template_type, 'send'),
 		       COALESCE(active, true), COALESCE(created_at, NOW())
 		FROM warmup_templates
-		WHERE user_id IS NULL OR user_id = $1
 		ORDER BY template_type, category, created_at
-	`, userID)
+	`)
 	if err != nil {
 		log.Printf("[Warmup API] listWarmupTemplates query error: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
