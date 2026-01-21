@@ -170,8 +170,8 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 	ctx, cancel := o.createBrowserContext(parentCtx)
 	defer cancel()
 
-	// Set timeout
-	ctx, cancelTimeout := context.WithTimeout(ctx, 90*time.Second)
+	// Set timeout - 3 minutes for the whole operation
+	ctx, cancelTimeout := context.WithTimeout(ctx, 180*time.Second)
 	defer cancelTimeout()
 
 	var currentURL string
@@ -206,7 +206,7 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 	log.Printf("[Web Browser] Waiting for page to load...")
 	err = chromedp.Run(ctx,
 		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.Sleep(8*time.Second),
+		chromedp.Sleep(3*time.Second),
 	)
 	if err != nil {
 		log.Printf("[Web Browser] Warning: WaitReady failed: %v", err)
@@ -228,7 +228,7 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 
 	var emailSelector string
 	for _, sel := range emailSelectors {
-		waitCtx, waitCancel := context.WithTimeout(ctx, 5*time.Second)
+		waitCtx, waitCancel := context.WithTimeout(ctx, 3*time.Second)
 		err = chromedp.Run(waitCtx,
 			chromedp.WaitVisible(sel, chromedp.ByQuery),
 		)
@@ -301,7 +301,7 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 	passwordSelectors := []string{`input[name="passwd"]`, `#i0118`, `input[type="password"]`}
 	var passwordSelector string
 	for _, sel := range passwordSelectors {
-		waitCtx, waitCancel := context.WithTimeout(ctx, 5*time.Second)
+		waitCtx, waitCancel := context.WithTimeout(ctx, 10*time.Second)
 		err = chromedp.Run(waitCtx, chromedp.WaitVisible(sel, chromedp.ByQuery))
 		waitCancel()
 		if err == nil {
