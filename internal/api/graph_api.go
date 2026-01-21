@@ -171,11 +171,12 @@ func (g *GraphAPIClient) RefreshAccessToken(ctx context.Context) error {
 	// Microsoft OAuth2 token endpoint for consumers
 	tokenURL := "https://login.live.com/oauth20_token.srf"
 
-	// Build the form data - don't specify scope to use the original scopes
+	// Build the form data - request outlook.office.com scopes (same as SMTP/IMAP tokens)
 	data := url.Values{}
 	data.Set("client_id", g.ClientID)
 	data.Set("grant_type", "refresh_token")
 	data.Set("refresh_token", g.RefreshToken)
+	data.Set("scope", "https://outlook.office.com/mail.send https://outlook.office.com/mail.readwrite offline_access")
 
 	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
@@ -319,8 +320,8 @@ func (g *GraphAPIClient) SendEmail(ctx context.Context, toEmail, subject, bodyCo
 		}, err
 	}
 
-	// Microsoft Graph API sendMail endpoint
-	graphURL := "https://graph.microsoft.com/v1.0/me/sendMail"
+	// Outlook REST API sendMail endpoint (accepts outlook.office.com scoped tokens)
+	graphURL := "https://outlook.office.com/api/v2.0/me/sendmail"
 
 	req, err := http.NewRequestWithContext(ctx, "POST", graphURL, bytes.NewReader(jsonData))
 	if err != nil {
@@ -402,7 +403,7 @@ func (g *GraphAPIClient) TestConnection(ctx context.Context) (*GraphAPIResult, e
 		}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://graph.microsoft.com/v1.0/me", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://outlook.office.com/api/v2.0/me", nil)
 	if err != nil {
 		return &GraphAPIResult{
 			Success: false,
