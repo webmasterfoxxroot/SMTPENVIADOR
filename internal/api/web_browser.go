@@ -323,19 +323,26 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 		return nil, fmt.Errorf("failed to enter password: %v", err)
 	}
 
-	// Click Sign in button
+	// Click Sign in button - use Enter key (more reliable)
 	log.Printf("[Web Browser] Clicking Sign in button...")
-	for _, sel := range buttonSelectors {
-		err = chromedp.Run(ctx, chromedp.Click(sel, chromedp.ByQuery))
-		if err == nil {
-			log.Printf("[Web Browser] Clicked sign in with selector: %s", sel)
-			break
+	err = chromedp.Run(ctx,
+		chromedp.SendKeys(passwordSelector, "\n", chromedp.ByQuery),
+	)
+	if err != nil {
+		log.Printf("[Web Browser] Enter key for sign in failed: %v, trying click...", err)
+		for _, sel := range buttonSelectors {
+			clickCtx, clickCancel := context.WithTimeout(ctx, 3*time.Second)
+			err = chromedp.Run(clickCtx, chromedp.Click(sel, chromedp.ByQuery))
+			clickCancel()
+			if err == nil {
+				log.Printf("[Web Browser] Clicked sign in with selector: %s", sel)
+				break
+			}
 		}
+	} else {
+		log.Printf("[Web Browser] Pressed Enter key to sign in")
 	}
 	chromedp.Run(ctx, chromedp.Sleep(5*time.Second))
-	if err != nil {
-		return nil, fmt.Errorf("failed to click sign in button: %v", err)
-	}
 
 	// Check current URL for FIDO/Passkey prompt
 	chromedp.Run(ctx, chromedp.Location(&currentURL))
