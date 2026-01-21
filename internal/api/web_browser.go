@@ -260,18 +260,41 @@ func (o *OutlookWebAutomation) TestLogin(parentCtx context.Context) (*BrowserRes
 	// Click Next button - try multiple selectors
 	log.Printf("[Web Browser] Clicking Next button...")
 	buttonSelectors := []string{`#idSIButton9`, `input[type="submit"]`, `button[type="submit"]`}
+	buttonClicked := false
 	for _, sel := range buttonSelectors {
 		err = chromedp.Run(ctx, chromedp.Click(sel, chromedp.ByQuery))
 		if err == nil {
 			log.Printf("[Web Browser] Clicked button with selector: %s", sel)
+			buttonClicked = true
 			break
 		}
+		log.Printf("[Web Browser] Button selector %s failed: %v", sel, err)
 	}
-	chromedp.Run(ctx, chromedp.Sleep(4*time.Second))
+
+	// If no button worked, try JavaScript click
+	if !buttonClicked {
+		log.Printf("[Web Browser] Trying JavaScript click on submit button...")
+		err = chromedp.Run(ctx, chromedp.Evaluate(`
+			var btn = document.querySelector('input[type="submit"]') ||
+			          document.querySelector('button[type="submit"]') ||
+			          document.querySelector('#idSIButton9');
+			if (btn) { btn.click(); true; } else { false; }
+		`, nil))
+		if err != nil {
+			log.Printf("[Web Browser] JavaScript click failed: %v", err)
+		} else {
+			log.Printf("[Web Browser] JavaScript click executed")
+		}
+	}
+
+	chromedp.Run(ctx, chromedp.Sleep(5*time.Second))
 
 	// Check current URL
 	chromedp.Run(ctx, chromedp.Location(&currentURL))
 	log.Printf("[Web Browser] URL after email: %s", currentURL)
+
+	// Capture debug after clicking next
+	captureDebugInfo(ctx, "after_next_click")
 
 	// Wait for password field - try multiple selectors
 	log.Printf("[Web Browser] Waiting for password field...")
