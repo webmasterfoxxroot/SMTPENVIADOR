@@ -380,6 +380,7 @@ func (s *Server) setupRoutes() {
 	warmup.Post("/seeds/test-connection", s.testSeedConnectionPreview) // Test before saving
 	warmup.Post("/seeds/verify-all", s.verifyAllSeeds)                 // Verify all seeds
 	warmup.Delete("/seeds/with-errors", s.deleteErrorSeeds)            // Delete all error seeds
+	warmup.Post("/seeds/fix-orphaned", s.fixOrphanedSeeds)             // Fix seeds with NULL user_id
 	warmup.Put("/seeds/:id", s.updateWarmupSeed)
 	warmup.Delete("/seeds/:id", s.deleteWarmupSeed)
 	warmup.Post("/seeds/:id/test", s.testWarmupSeed)

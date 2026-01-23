@@ -1482,6 +1482,44 @@ func (s *Server) deleteWarmupSeed(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Seed removed"})
 }
 
+// fixOrphanedSeeds assigns all seeds with NULL user_id to the current user
+func (s *Server) fixOrphanedSeeds(c *fiber.Ctx) error {
+	userID := getUserID(c)
+	if userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "User not authenticated"})
+	}
+
+	// First, check how many orphaned seeds exist
+	var orphanCount int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE user_id IS NULL`).Scan(&orphanCount)
+	if err != nil {
+		log.Printf("[Warmup API] fixOrphanedSeeds count error: %v", err)
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	if orphanCount == 0 {
+		return c.JSON(fiber.Map{
+			"message": "No orphaned seeds found",
+			"fixed":   0,
+		})
+	}
+
+	// Update all orphaned seeds to belong to the current user
+	result, err := s.db.Exec(`UPDATE warmup_seeds SET user_id = $1 WHERE user_id IS NULL`, userID)
+	if err != nil {
+		log.Printf("[Warmup API] fixOrphanedSeeds update error: %v", err)
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	log.Printf("[Warmup API] Fixed %d orphaned seeds for user %s", rowsAffected, userID)
+
+	return c.JSON(fiber.Map{
+		"message": fmt.Sprintf("Fixed %d orphaned seeds", rowsAffected),
+		"fixed":   rowsAffected,
+	})
+}
+
 // testWarmupSeed tests IMAP connection for a seed (with OAuth2 support)
 func (s *Server) testWarmupSeed(c *fiber.Ctx) error {
 	userID := getUserID(c)

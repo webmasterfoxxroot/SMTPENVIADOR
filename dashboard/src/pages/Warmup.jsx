@@ -2001,6 +2001,7 @@ function Warmup() {
 
   const [verifyingAllSeeds, setVerifyingAllSeeds] = useState(false)
   const [deletingErrorSeeds, setDeletingErrorSeeds] = useState(false)
+  const [fixingOrphanedSeeds, setFixingOrphanedSeeds] = useState(false)
 
   const verifyAllSeeds = async () => {
     if (!confirm('Verificar login de todas as seeds? Isso pode demorar alguns minutos.')) return
@@ -2032,6 +2033,23 @@ function Warmup() {
       toast.error('Erro ao excluir seeds')
     } finally {
       setDeletingErrorSeeds(false)
+    }
+  }
+
+  const fixOrphanedSeeds = async () => {
+    setFixingOrphanedSeeds(true)
+    try {
+      const res = await api.post('/warmup/seeds/fix-orphaned')
+      if (res.data.fixed > 0) {
+        toast.success(res.data.message)
+        fetchAll()
+      } else {
+        toast.info('Nenhuma seed órfã encontrada')
+      }
+    } catch (error) {
+      toast.error('Erro ao reparar seeds')
+    } finally {
+      setFixingOrphanedSeeds(false)
     }
   }
 
@@ -2517,6 +2535,15 @@ function Warmup() {
                 <Mail className="w-16 h-16 mx-auto mb-4 opacity-30" />
                 <p className="text-lg">Nenhuma conta seed cadastrada</p>
                 <p className="text-sm mt-2">Adicione contas seed para receber emails de warmup</p>
+                <button
+                  onClick={fixOrphanedSeeds}
+                  disabled={fixingOrphanedSeeds}
+                  className="mt-4 flex items-center gap-2 px-4 py-2 mx-auto bg-yellow-50 text-yellow-700 rounded-lg hover:bg-yellow-100 transition-colors disabled:opacity-50"
+                  title="Recuperar seeds que perderam associação com o usuário"
+                >
+                  {fixingOrphanedSeeds ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                  Reparar Seeds Perdidas
+                </button>
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-4">
