@@ -2447,6 +2447,17 @@ function Warmup() {
                         {smtp.status === 'active' ? 'Ativo' : 'Pausado'}
                       </span>
                       <button
+                        onClick={() => toggleInternalWarmup(smtp.id)}
+                        className={`px-2 py-1 rounded-lg text-xs font-medium transition-colors ${
+                          smtp.internal_warmup
+                            ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 hover:bg-purple-200'
+                            : 'bg-gray-100 dark:bg-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-200'
+                        }`}
+                        title={smtp.internal_warmup ? 'Desativar aquecimento interno' : 'Ativar aquecimento interno (SMTP↔SMTP)'}
+                      >
+                        {smtp.internal_warmup ? '🔄 Interno ON' : '🔄 Interno'}
+                      </button>
+                      <button
                         onClick={() => triggerWarmup(smtp.id)}
                         className="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg"
                         title="Enviar email"
