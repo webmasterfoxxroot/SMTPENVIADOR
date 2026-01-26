@@ -1588,6 +1588,93 @@ func (s *Server) toggleWarmupSeed(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"status": newStatus, "message": "Seed status updated"})
 }
 
+// batchPauseSeeds pauses multiple seeds at once
+func (s *Server) batchPauseSeeds(c *fiber.Ctx) error {
+	userID := getUserID(c)
+
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	if len(req.IDs) == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "No seeds selected"})
+	}
+
+	// Pause all selected seeds
+	count := 0
+	for _, id := range req.IDs {
+		result, err := s.db.Exec(`UPDATE warmup_seeds SET status = 'paused' WHERE id = $1 AND user_id = $2`, id, userID)
+		if err == nil {
+			if rows, _ := result.RowsAffected(); rows > 0 {
+				count++
+			}
+		}
+	}
+
+	return c.JSON(fiber.Map{"message": fmt.Sprintf("%d seeds pausadas", count), "count": count})
+}
+
+// batchActivateSeeds activates multiple seeds at once
+func (s *Server) batchActivateSeeds(c *fiber.Ctx) error {
+	userID := getUserID(c)
+
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	if len(req.IDs) == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "No seeds selected"})
+	}
+
+	// Activate all selected seeds
+	count := 0
+	for _, id := range req.IDs {
+		result, err := s.db.Exec(`UPDATE warmup_seeds SET status = 'active' WHERE id = $1 AND user_id = $2`, id, userID)
+		if err == nil {
+			if rows, _ := result.RowsAffected(); rows > 0 {
+				count++
+			}
+		}
+	}
+
+	return c.JSON(fiber.Map{"message": fmt.Sprintf("%d seeds ativadas", count), "count": count})
+}
+
+// batchDeleteSeeds deletes multiple seeds at once
+func (s *Server) batchDeleteSeeds(c *fiber.Ctx) error {
+	userID := getUserID(c)
+
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	if len(req.IDs) == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "No seeds selected"})
+	}
+
+	// Delete all selected seeds
+	count := 0
+	for _, id := range req.IDs {
+		result, err := s.db.Exec(`DELETE FROM warmup_seeds WHERE id = $1 AND user_id = $2`, id, userID)
+		if err == nil {
+			if rows, _ := result.RowsAffected(); rows > 0 {
+				count++
+			}
+		}
+	}
+
+	return c.JSON(fiber.Map{"message": fmt.Sprintf("%d seeds excluídas", count), "count": count})
+}
+
 // verifyAllSeeds tests IMAP connection for all seeds and marks errors
 func (s *Server) verifyAllSeeds(c *fiber.Ctx) error {
 	userID := getUserID(c)
