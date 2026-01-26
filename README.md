@@ -27,7 +27,7 @@ Sistema de envio de emails em alto volume com suporte a múltiplos servidores SM
 **Uma linha só!** Instala Docker, configura tudo e inicia o sistema:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/webmasterfoxxroot/SMTPENVIADOR/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/webmasterfoxxroot/SMTPENVIADOR/claude/smtp-bulk-email-sender-pz4HS/install.sh | sudo bash
 ```
 
 O instalador automaticamente:
