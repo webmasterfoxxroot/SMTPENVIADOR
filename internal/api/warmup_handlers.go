@@ -4671,25 +4671,39 @@ func (s *Server) processIMAPInteractions() {
 	// Count active seeds
 	var activeSeeds int
 	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'active'`).Scan(&activeSeeds)
-	log.Printf("[Warmup IMAP] Checking %d active seed inboxes...", activeSeeds)
 
 	if activeSeeds == 0 {
-		log.Println("[Warmup IMAP] No active seeds to check")
+		// Silent skip when no active seeds
 		return
 	}
 
-	// Get all active seeds with OAuth credentials
+	// Get max seeds to process per cycle (default 10)
+	maxSeedsPerCycle := s.getWarmupSettingInt("imap_seeds_per_cycle", 10)
+	// Get delay between each seed connection (default 3 seconds)
+	delayBetweenSeeds := s.getWarmupSettingInt("imap_delay_seconds", 3)
+
+	log.Printf("[Warmup IMAP] Processing up to %d seeds (of %d active), %ds delay between each", maxSeedsPerCycle, activeSeeds, delayBetweenSeeds)
+
+	// Get seeds with OAuth credentials - limit to maxSeedsPerCycle and rotate using offset
+	seedBatchMutex.Lock()
+	offset := seedBatchOffset
+	seedBatchOffset = (seedBatchOffset + maxSeedsPerCycle) % max(activeSeeds, 1)
+	seedBatchMutex.Unlock()
+
 	rows, err := s.db.Query(`
 		SELECT id, email, password, imap_host, imap_port, use_tls,
 		       COALESCE(imap_tls_mode, 'tls'), COALESCE(oauth_token, ''), COALESCE(oauth_client_id, '')
 		FROM warmup_seeds WHERE status = 'active'
-	`)
+		ORDER BY last_check ASC NULLS FIRST
+		LIMIT $1 OFFSET $2
+	`, maxSeedsPerCycle, offset)
 	if err != nil {
 		log.Printf("[Warmup IMAP] Error: %v", err)
 		return
 	}
 	defer rows.Close()
 
+	processedCount := 0
 	for rows.Next() {
 		var seedID, email, password, imapHost string
 		var imapPort int
@@ -4698,9 +4712,20 @@ func (s *Server) processIMAPInteractions() {
 
 		rows.Scan(&seedID, &email, &password, &imapHost, &imapPort, &useTLS, &tlsMode, &oauthToken, &oauthClientID)
 
-		log.Printf("[Warmup IMAP] Processing inbox for %s", email)
-		go s.processOneSeedInboxWithOAuth(seedID, email, password, imapHost, imapPort, tlsMode, oauthToken, oauthClientID)
+		log.Printf("[Warmup IMAP] [%d/%d] Processing: %s", processedCount+1, maxSeedsPerCycle, email)
+
+		// Process SEQUENTIALLY (not in parallel) to avoid rate limits
+		s.processOneSeedInboxWithOAuth(seedID, email, password, imapHost, imapPort, tlsMode, oauthToken, oauthClientID)
+
+		processedCount++
+
+		// Delay between each seed to avoid rate limiting
+		if processedCount < maxSeedsPerCycle {
+			time.Sleep(time.Duration(delayBetweenSeeds) * time.Second)
+		}
 	}
+
+	log.Printf("[Warmup IMAP] Completed: processed %d seeds", processedCount)
 }
 
 func (s *Server) processOneSeedInboxWithOAuth(seedID, email, password, imapHost string, imapPort int, tlsMode, oauthToken, oauthClientID string) {
