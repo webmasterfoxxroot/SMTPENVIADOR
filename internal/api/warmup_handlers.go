@@ -4906,8 +4906,8 @@ func (s *Server) processInternalWarmup() {
 
 	log.Printf("[Internal Warmup] Found %d SMTPs with internal warmup enabled", len(smtps))
 
-	if len(smtps) < 1 {
-		log.Printf("[Internal Warmup] No SMTPs with internal warmup enabled")
+	if len(smtps) < 2 {
+		log.Printf("[Internal Warmup] Need at least 2 SMTPs for internal warmup (SMTP1 → SMTP2), have %d", len(smtps))
 		return
 	}
 
@@ -4929,24 +4929,9 @@ func (s *Server) processInternalWarmup() {
 		}
 	}
 
-	if len(activeSmtps) < 1 {
-		log.Printf("[Internal Warmup] No SMTPs within active hours")
+	if len(activeSmtps) < 2 {
+		log.Printf("[Internal Warmup] Need at least 2 SMTPs within active hours for cross-SMTP warmup, have %d", len(activeSmtps))
 		return
-	}
-
-	// If only 1 SMTP, check if it has at least 2 senders with IMAP
-	if len(activeSmtps) == 1 {
-		var senderCount int
-		s.db.QueryRow(`
-			SELECT COUNT(*) FROM smtp_senders
-			WHERE smtp_id = $1 AND active = true
-			AND imap_host IS NOT NULL AND imap_host != ''
-		`, activeSmtps[0].SMTPID).Scan(&senderCount)
-		if senderCount < 2 {
-			log.Printf("[Internal Warmup] Single SMTP mode requires at least 2 senders with IMAP configured, have %d", senderCount)
-			return
-		}
-		log.Printf("[Internal Warmup] Single SMTP mode: %d senders will exchange emails", senderCount)
 	}
 
 	// Process each SMTP - calculate how many to send based on schedule
@@ -5018,25 +5003,19 @@ func (s *Server) processInternalWarmup() {
 				return // Exit entire function
 			}
 
-			// Pick destination SMTP (different if available, same if only 1 SMTP)
+			// Pick a DIFFERENT SMTP as destination
 			var toSMTP smtpInfo
-			if len(activeSmtps) == 1 {
-				// Only 1 SMTP - use same SMTP (senders will send to each other)
-				toSMTP = fromSMTP
-			} else {
-				// Multiple SMTPs - pick a different one
-				found := false
-				for j := 0; j < 10; j++ {
-					idx := rand.Intn(len(activeSmtps))
-					if activeSmtps[idx].SMTPID != fromSMTP.SMTPID {
-						toSMTP = activeSmtps[idx]
-						found = true
-						break
-					}
+			found := false
+			for j := 0; j < 10; j++ {
+				idx := rand.Intn(len(activeSmtps))
+				if activeSmtps[idx].SMTPID != fromSMTP.SMTPID {
+					toSMTP = activeSmtps[idx]
+					found = true
+					break
 				}
-				if !found {
-					continue
-				}
+			}
+			if !found {
+				continue
 			}
 
 			// Get a sender from the FROM SMTP
@@ -5051,26 +5030,14 @@ func (s *Server) processInternalWarmup() {
 				continue
 			}
 
-			// Get a sender from the TO SMTP (must have IMAP configured, and different from sender if same SMTP)
+			// Get a sender from the TO SMTP (must have IMAP configured)
 			var toSenderID, toSenderEmail string
-			if toSMTP.SMTPID == fromSMTP.SMTPID {
-				// Same SMTP - pick a DIFFERENT sender
-				err = s.db.QueryRow(`
-					SELECT id, email FROM smtp_senders
-					WHERE smtp_id = $1 AND active = true
-					AND imap_host IS NOT NULL AND imap_host != ''
-					AND id != $2
-					ORDER BY RANDOM() LIMIT 1
-				`, toSMTP.SMTPID, fromSenderID).Scan(&toSenderID, &toSenderEmail)
-			} else {
-				// Different SMTP - any sender is fine
-				err = s.db.QueryRow(`
-					SELECT id, email FROM smtp_senders
-					WHERE smtp_id = $1 AND active = true
-					AND imap_host IS NOT NULL AND imap_host != ''
-					ORDER BY RANDOM() LIMIT 1
-				`, toSMTP.SMTPID).Scan(&toSenderID, &toSenderEmail)
-			}
+			err = s.db.QueryRow(`
+				SELECT id, email FROM smtp_senders
+				WHERE smtp_id = $1 AND active = true
+				AND imap_host IS NOT NULL AND imap_host != ''
+				ORDER BY RANDOM() LIMIT 1
+			`, toSMTP.SMTPID).Scan(&toSenderID, &toSenderEmail)
 			if err != nil {
 				continue
 			}
