@@ -2093,7 +2093,7 @@ function Warmup() {
       }))
 
       try {
-        const res = await api.post(`/warmup/seeds/${seedId}/clean`)
+        const res = await api.post(`/warmup/seeds/${seedId}/clean`, {}, { timeout: 120000 }) // 2 minutes timeout
         results.push({
           email: seed?.email,
           success: true,
@@ -2105,7 +2105,7 @@ function Warmup() {
           email: seed?.email,
           success: false,
           deleted: 0,
-          message: error.response?.data?.error || 'Erro ao limpar'
+          message: error.response?.data?.error || error.message || 'Erro ao limpar'
         })
       }
 
