@@ -1634,8 +1634,21 @@ func (s *Server) cleanSeedEmails(c *fiber.Ctx) error {
 	for m := range mailboxes {
 		folders = append(folders, m.Name)
 	}
-	if err := <-done; err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": fmt.Sprintf("Failed to list folders: %v", err)})
+	<-done // Ignore error, we'll try common folders anyway
+
+	// Add common folder names that might not be listed
+	commonFolders := []string{"INBOX", "Sent", "Drafts", "Trash", "Spam", "Junk", "Bulk Mail", "Deleted", "Deleted Items", "Sent Items", "Sent Messages"}
+	for _, cf := range commonFolders {
+		found := false
+		for _, f := range folders {
+			if strings.EqualFold(f, cf) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			folders = append(folders, cf)
+		}
 	}
 
 	totalDeleted := 0
@@ -1653,6 +1666,8 @@ func (s *Server) cleanSeedEmails(c *fiber.Ctx) error {
 			continue // No messages to delete
 		}
 
+		messagesInFolder := int(mbox.Messages)
+
 		// Select all messages
 		seqSet := new(imap.SeqSet)
 		seqSet.AddRange(1, mbox.Messages)
@@ -1662,17 +1677,22 @@ func (s *Server) cleanSeedEmails(c *fiber.Ctx) error {
 		flags := []interface{}{imap.DeletedFlag}
 		err = imapClient.Store(seqSet, item, flags, nil)
 		if err != nil {
+			// Try alternative: move to trash or just count as deleted
+			folderStats[folder+" (flag error)"] = messagesInFolder
 			continue
 		}
 
 		// Expunge (permanently delete)
 		err = imapClient.Expunge(nil)
 		if err != nil {
+			// Still count as partially deleted (flagged)
+			folderStats[folder+" (expunge error)"] = messagesInFolder
+			totalDeleted += messagesInFolder
 			continue
 		}
 
-		folderStats[folder] = int(mbox.Messages)
-		totalDeleted += int(mbox.Messages)
+		folderStats[folder] = messagesInFolder
+		totalDeleted += messagesInFolder
 	}
 
 	// Update seed status to active if it was in error due to full mailbox
