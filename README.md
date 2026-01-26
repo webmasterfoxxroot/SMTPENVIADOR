@@ -22,12 +22,27 @@ Sistema de envio de emails em alto volume com suporte a múltiplos servidores SM
 
 ## Instalação Rápida
 
-### Com Docker (Recomendado)
+### Instalação Automática (Recomendado)
+
+**Uma linha só!** Instala Docker, configura tudo e inicia o sistema:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/webmasterfoxxroot/SMTPENVIADOR/main/install.sh | sudo bash
+```
+
+O instalador automaticamente:
+- Instala Docker (se necessário)
+- Clona o repositório em `/opt/smtpenviador`
+- Gera senhas seguras aleatórias
+- Configura o banco de dados
+- Inicia todos os containers
+
+### Instalação Manual
 
 ```bash
 # Clone o repositório
-git clone https://github.com/seu-usuario/smtpenviador.git
-cd smtpenviador
+git clone https://github.com/webmasterfoxxroot/SMTPENVIADOR.git
+cd SMTPENVIADOR
 
 # Copie o arquivo de ambiente
 cp .env.example .env
@@ -36,7 +51,7 @@ cp .env.example .env
 nano .env
 
 # Inicie os containers
-docker-compose up -d
+docker compose up -d
 ```
 
 ### Acesso
@@ -206,5 +221,5 @@ MIT License
 
 ## Suporte
 
-- Issues: https://github.com/seu-usuario/smtpenviador/issues
+- Issues: https://github.com/webmasterfoxxroot/SMTPENVIADOR/issues
 - Email: suporte@smtpenviador.com
