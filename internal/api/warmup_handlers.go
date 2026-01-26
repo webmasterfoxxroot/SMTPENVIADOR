@@ -2228,6 +2228,51 @@ func (s *Server) getWarmupDiagnostic(c *fiber.Ctx) error {
 		})
 	}
 
+	// IMAP Status - check seeds last_check and errors
+	var seedsWithError, seedsCheckedRecently, seedsNeverChecked int
+	var commonErrors []string
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE status = 'error' AND user_id = $1`, userID).Scan(&seedsWithError)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE last_check > NOW() - INTERVAL '1 hour' AND user_id = $1`, userID).Scan(&seedsCheckedRecently)
+	s.db.QueryRow(`SELECT COUNT(*) FROM warmup_seeds WHERE last_check IS NULL AND user_id = $1`, userID).Scan(&seedsNeverChecked)
+
+	// Get common errors
+	errorRows, _ := s.db.Query(`
+		SELECT COALESCE(SUBSTRING(error_message, 1, 50), 'Unknown'), COUNT(*)
+		FROM warmup_seeds WHERE status = 'error' AND user_id = $1
+		GROUP BY SUBSTRING(error_message, 1, 50)
+		ORDER BY COUNT(*) DESC LIMIT 5
+	`, userID)
+	defer errorRows.Close()
+	for errorRows.Next() {
+		var errMsg string
+		var count int
+		errorRows.Scan(&errMsg, &count)
+		commonErrors = append(commonErrors, fmt.Sprintf("%s (%d)", errMsg, count))
+	}
+
+	// Get warmup emails stats for this user
+	var emailsSent, emailsVerified, emailsInInbox, emailsInSpam int
+	s.db.QueryRow(`
+		SELECT COUNT(*),
+		       SUM(CASE WHEN verified = true THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN status = 'opened' THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN landed_in_spam = true THEN 1 ELSE 0 END)
+		FROM warmup_emails e
+		JOIN warmup_smtps w ON e.warmup_smtp_id = w.id
+		WHERE w.user_id = $1
+	`, userID).Scan(&emailsSent, &emailsVerified, &emailsInInbox, &emailsInSpam)
+
+	// IMAP issues
+	if seedsWithError > 0 {
+		issues = append(issues, fmt.Sprintf("IMAP: %d seeds com erro de login", seedsWithError))
+	}
+	if seedsNeverChecked > 0 {
+		issues = append(issues, fmt.Sprintf("IMAP: %d seeds nunca foram verificadas", seedsNeverChecked))
+	}
+	if seedsCheckedRecently == 0 && activeSeeds > 0 {
+		issues = append(issues, "IMAP: Nenhuma seed foi verificada na última hora")
+	}
+
 	return c.JSON(fiber.Map{
 		"timestamp":      now.Format("2006-01-02 15:04:05"),
 		"current_hour":   currentHour,
@@ -2244,6 +2289,16 @@ func (s *Server) getWarmupDiagnostic(c *fiber.Ctx) error {
 			"smtps_in_hours":      internalInValidHours,
 			"senders_with_imap":   sendersWithIMAP,
 			"sent_today":          sentTodayInternal,
+		},
+		"imap_status": fiber.Map{
+			"seeds_with_error":      seedsWithError,
+			"seeds_checked_recently": seedsCheckedRecently,
+			"seeds_never_checked":    seedsNeverChecked,
+			"common_errors":          commonErrors,
+			"emails_sent":            emailsSent,
+			"emails_verified":        emailsVerified,
+			"emails_in_inbox":        emailsInInbox,
+			"emails_in_spam":         emailsInSpam,
 		},
 		"smtp_details": smtpDetails,
 		"issues":       issues,
