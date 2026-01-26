@@ -3096,8 +3096,7 @@ func (s *Server) startWarmupEngine() {
 	log.Println("[Warmup Engine] Starting...")
 
 	// Run all tasks immediately on startup (in goroutines)
-	// DISABLED: IMAP check causes too many simultaneous connections to Outlook/Hotmail
-	// go s.safeRun("Initial IMAP Check", s.processIMAPInteractions)
+	go s.safeRun("Initial IMAP Check", s.processIMAPInteractions)
 	go s.safeRun("Initial Internal Warmup", s.processInternalWarmup)
 	go s.safeRun("Initial Internal IMAP", s.processInternalWarmupIMAP)
 	go s.safeRun("Initial External Warmup", s.processWarmupEmails)
@@ -3107,18 +3106,17 @@ func (s *Server) startWarmupEngine() {
 	imapInterval := s.getWarmupSettingInt("imap_check_interval", 5)
 	internalCycleInterval := s.getWarmupSettingInt("internal_cycle_minutes", 2)
 
-	log.Printf("[Warmup Engine] Intervals: External=1m, Seed→SMTP=3m, Internal=%dm, InternalIMAP=%dm (Seed IMAP disabled)", internalCycleInterval, imapInterval)
+	log.Printf("[Warmup Engine] Intervals: External=1m, Seed→SMTP=3m, Internal=%dm, SeedIMAP=%dm, InternalIMAP=%dm", internalCycleInterval, imapInterval, imapInterval)
 
 	// Create all tickers
 	externalTicker := time.NewTicker(1 * time.Minute)
-	// DISABLED: IMAP check causes too many simultaneous connections to Outlook/Hotmail
-	// imapTicker := time.NewTicker(time.Duration(imapInterval) * time.Minute)
+	imapTicker := time.NewTicker(time.Duration(imapInterval) * time.Minute)
 	seedToSMTPTicker := time.NewTicker(3 * time.Minute)
 	internalWarmupTicker := time.NewTicker(time.Duration(internalCycleInterval) * time.Minute)
 	internalImapTicker := time.NewTicker(time.Duration(imapInterval) * time.Minute)
 
 	defer externalTicker.Stop()
-	// defer imapTicker.Stop() // DISABLED
+	defer imapTicker.Stop()
 	defer seedToSMTPTicker.Stop()
 	defer internalWarmupTicker.Stop()
 	defer internalImapTicker.Stop()
@@ -3134,10 +3132,9 @@ func (s *Server) startWarmupEngine() {
 			lastTick = time.Now()
 			go s.safeRun("External Warmup (SMTP→Seeds)", s.processWarmupEmails)
 
-		// DISABLED: IMAP check causes too many simultaneous connections to Outlook/Hotmail
-		// case <-imapTicker.C:
-		// 	lastTick = time.Now()
-		// 	go s.safeRun("IMAP Interactions", s.processIMAPInteractions)
+		case <-imapTicker.C:
+			lastTick = time.Now()
+			go s.safeRun("Seed IMAP Check", s.processIMAPInteractions)
 
 		case <-seedToSMTPTicker.C:
 			lastTick = time.Now()
