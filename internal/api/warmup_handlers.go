@@ -2957,7 +2957,7 @@ func (s *Server) processWarmupEmails() {
 		now.Format("15:04:05"), currentHour, activeSMTPs, activeSeeds, activeTemplates)
 
 	if activeSeeds == 0 {
-		log.Printf("[Warmup Engine] No active seeds available - cannot send warmup emails")
+		// Silent skip - external warmup requires seeds, but internal warmup doesn't
 		return
 	}
 	if activeTemplates == 0 {
@@ -3126,7 +3126,7 @@ func (s *Server) sendWarmupEmail(warmupID, smtpID, userID, host string, port int
 	`, userID).Scan(&seedID, &seedEmail)
 
 	if err != nil {
-		log.Printf("[Warmup] No active seeds available")
+		// Silent return - already logged at engine level
 		return
 	}
 
