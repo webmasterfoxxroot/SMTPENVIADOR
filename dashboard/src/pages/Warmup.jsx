@@ -2002,6 +2002,72 @@ function Warmup() {
   const [verifyingAllSeeds, setVerifyingAllSeeds] = useState(false)
   const [deletingErrorSeeds, setDeletingErrorSeeds] = useState(false)
   const [fixingOrphanedSeeds, setFixingOrphanedSeeds] = useState(false)
+  const [selectedSeeds, setSelectedSeeds] = useState([])
+  const [batchLoading, setBatchLoading] = useState(false)
+
+  // Toggle seed selection
+  const toggleSeedSelection = (id) => {
+    setSelectedSeeds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    )
+  }
+
+  // Select/deselect all seeds
+  const toggleSelectAllSeeds = () => {
+    if (selectedSeeds.length === seeds.length) {
+      setSelectedSeeds([])
+    } else {
+      setSelectedSeeds(seeds.map(s => s.id))
+    }
+  }
+
+  // Batch pause seeds
+  const batchPauseSeeds = async () => {
+    if (selectedSeeds.length === 0) return
+    if (!confirm(`Pausar ${selectedSeeds.length} seeds selecionadas?`)) return
+    setBatchLoading(true)
+    try {
+      const res = await api.post('/warmup/seeds/batch-pause', { ids: selectedSeeds })
+      toast.success(res.data.message)
+      setSelectedSeeds([])
+      fetchAll()
+    } catch (error) {
+      toast.error('Erro ao pausar seeds')
+    }
+    setBatchLoading(false)
+  }
+
+  // Batch activate seeds
+  const batchActivateSeeds = async () => {
+    if (selectedSeeds.length === 0) return
+    if (!confirm(`Ativar ${selectedSeeds.length} seeds selecionadas?`)) return
+    setBatchLoading(true)
+    try {
+      const res = await api.post('/warmup/seeds/batch-activate', { ids: selectedSeeds })
+      toast.success(res.data.message)
+      setSelectedSeeds([])
+      fetchAll()
+    } catch (error) {
+      toast.error('Erro ao ativar seeds')
+    }
+    setBatchLoading(false)
+  }
+
+  // Batch delete seeds
+  const batchDeleteSeeds = async () => {
+    if (selectedSeeds.length === 0) return
+    if (!confirm(`EXCLUIR ${selectedSeeds.length} seeds selecionadas? Esta ação não pode ser desfeita!`)) return
+    setBatchLoading(true)
+    try {
+      const res = await api.post('/warmup/seeds/batch-delete', { ids: selectedSeeds })
+      toast.success(res.data.message)
+      setSelectedSeeds([])
+      fetchAll()
+    } catch (error) {
+      toast.error('Erro ao excluir seeds')
+    }
+    setBatchLoading(false)
+  }
 
   const verifyAllSeeds = async () => {
     if (!confirm('Verificar login de todas as seeds? Isso pode demorar alguns minutos.')) return
@@ -2503,8 +2569,54 @@ function Warmup() {
         <div className="space-y-6">
           <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-gray-900 dark:text-white">Contas Seed (IMAP)</h3>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3">
+                <h3 className="font-semibold text-gray-900 dark:text-white">Contas Seed (IMAP)</h3>
+                {seeds.length > 0 && (
+                  <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedSeeds.length === seeds.length && seeds.length > 0}
+                      onChange={toggleSelectAllSeeds}
+                      className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    Selecionar Todos ({selectedSeeds.length}/{seeds.length})
+                  </label>
+                )}
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Batch actions - only show when seeds are selected */}
+                {selectedSeeds.length > 0 && (
+                  <>
+                    <button
+                      onClick={batchActivateSeeds}
+                      disabled={batchLoading}
+                      className="flex items-center gap-2 px-3 py-2 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition-colors disabled:opacity-50"
+                      title="Ativar seeds selecionadas"
+                    >
+                      {batchLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                      Ativar ({selectedSeeds.length})
+                    </button>
+                    <button
+                      onClick={batchPauseSeeds}
+                      disabled={batchLoading}
+                      className="flex items-center gap-2 px-3 py-2 bg-yellow-50 text-yellow-600 rounded-lg hover:bg-yellow-100 transition-colors disabled:opacity-50"
+                      title="Pausar seeds selecionadas"
+                    >
+                      {batchLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Pause className="w-4 h-4" />}
+                      Pausar ({selectedSeeds.length})
+                    </button>
+                    <button
+                      onClick={batchDeleteSeeds}
+                      disabled={batchLoading}
+                      className="flex items-center gap-2 px-3 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50"
+                      title="Excluir seeds selecionadas"
+                    >
+                      {batchLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                      Excluir ({selectedSeeds.length})
+                    </button>
+                    <div className="w-px h-6 bg-gray-300 dark:bg-gray-600"></div>
+                  </>
+                )}
                 <button
                   onClick={verifyAllSeeds}
                   disabled={verifyingAllSeeds}
@@ -2560,10 +2672,17 @@ function Warmup() {
               <div className="grid grid-cols-2 gap-4">
                 {seeds.map(seed => (
                   <div key={seed.id} className={`p-4 border rounded-xl transition-colors ${
+                    selectedSeeds.includes(seed.id) ? 'border-blue-400 dark:border-blue-500 bg-blue-50/30 dark:bg-blue-900/20' :
                     seed.status === 'error' ? 'border-red-300 dark:border-red-800 bg-red-50/30 dark:bg-red-900/20' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
                   }`}>
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedSeeds.includes(seed.id)}
+                          onChange={() => toggleSeedSelection(seed.id)}
+                          className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
                         <span className={`px-2 py-1 rounded text-xs font-medium ${
                           seed.status === 'active' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' :
                           seed.status === 'error' ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400' :

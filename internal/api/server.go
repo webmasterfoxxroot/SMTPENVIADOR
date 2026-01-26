@@ -381,6 +381,9 @@ func (s *Server) setupRoutes() {
 	warmup.Post("/seeds/verify-all", s.verifyAllSeeds)                 // Verify all seeds
 	warmup.Delete("/seeds/with-errors", s.deleteErrorSeeds)            // Delete all error seeds
 	warmup.Post("/seeds/fix-orphaned", s.fixOrphanedSeeds)             // Fix seeds with NULL user_id
+	warmup.Post("/seeds/batch-pause", s.batchPauseSeeds)              // Pause selected seeds
+	warmup.Post("/seeds/batch-activate", s.batchActivateSeeds)        // Activate selected seeds
+	warmup.Post("/seeds/batch-delete", s.batchDeleteSeeds)            // Delete selected seeds
 	warmup.Put("/seeds/:id", s.updateWarmupSeed)
 	warmup.Delete("/seeds/:id", s.deleteWarmupSeed)
 	warmup.Post("/seeds/:id/test", s.testWarmupSeed)
