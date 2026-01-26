@@ -2069,6 +2069,63 @@ function Warmup() {
     setBatchLoading(false)
   }
 
+  // State for cleaning emails
+  const [cleaningEmails, setCleaningEmails] = useState(false)
+  const [cleanProgress, setCleanProgress] = useState({ current: 0, total: 0, email: '', results: [] })
+
+  // Batch clean emails from seeds
+  const batchCleanEmails = async () => {
+    if (selectedSeeds.length === 0) return
+    if (!confirm(`Limpar TODOS os emails de ${selectedSeeds.length} seeds selecionadas?\n\nIsso vai excluir todos os emails de:\n- Caixa de entrada\n- Spam\n- Lixeira\n- Enviados\n- Todas as pastas\n\nEsta ação não pode ser desfeita!`)) return
+
+    setCleaningEmails(true)
+    setCleanProgress({ current: 0, total: selectedSeeds.length, email: '', results: [] })
+
+    const results = []
+    for (let i = 0; i < selectedSeeds.length; i++) {
+      const seedId = selectedSeeds[i]
+      const seed = seeds.find(s => s.id === seedId)
+
+      setCleanProgress(prev => ({
+        ...prev,
+        current: i + 1,
+        email: seed?.email || 'Processando...'
+      }))
+
+      try {
+        const res = await api.post(`/warmup/seeds/${seedId}/clean`)
+        results.push({
+          email: seed?.email,
+          success: true,
+          deleted: res.data.total_deleted,
+          message: res.data.message
+        })
+      } catch (error) {
+        results.push({
+          email: seed?.email,
+          success: false,
+          deleted: 0,
+          message: error.response?.data?.error || 'Erro ao limpar'
+        })
+      }
+
+      setCleanProgress(prev => ({ ...prev, results: [...results] }))
+
+      // Small delay between requests to avoid overwhelming the server
+      if (i < selectedSeeds.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500))
+      }
+    }
+
+    const successCount = results.filter(r => r.success).length
+    const totalDeleted = results.reduce((sum, r) => sum + r.deleted, 0)
+
+    toast.success(`Limpeza concluída! ${successCount}/${results.length} seeds, ${totalDeleted} emails excluídos`)
+    setSelectedSeeds([])
+    setCleaningEmails(false)
+    fetchAll()
+  }
+
   const verifyAllSeeds = async () => {
     if (!confirm('Verificar login de todas as seeds? Isso pode demorar alguns minutos.')) return
     setVerifyingAllSeeds(true)
@@ -2607,12 +2664,21 @@ function Warmup() {
                     </button>
                     <button
                       onClick={batchDeleteSeeds}
-                      disabled={batchLoading}
+                      disabled={batchLoading || cleaningEmails}
                       className="flex items-center gap-2 px-3 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50"
                       title="Excluir seeds selecionadas"
                     >
                       {batchLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                       Excluir ({selectedSeeds.length})
+                    </button>
+                    <button
+                      onClick={batchCleanEmails}
+                      disabled={batchLoading || cleaningEmails}
+                      className="flex items-center gap-2 px-3 py-2 bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100 transition-colors disabled:opacity-50"
+                      title="Limpar todos os emails das seeds selecionadas"
+                    >
+                      {cleaningEmails ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
+                      Limpar Emails ({selectedSeeds.length})
                     </button>
                     <div className="w-px h-6 bg-gray-300 dark:bg-gray-600"></div>
                   </>
@@ -2653,6 +2719,55 @@ function Warmup() {
                 </button>
               </div>
             </div>
+
+            {/* Progress panel for cleaning emails */}
+            {cleaningEmails && (
+              <div className="mb-4 p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-xl">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="font-semibold text-purple-900 dark:text-purple-300 flex items-center gap-2">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Limpando emails das seeds...
+                  </h4>
+                  <span className="text-sm font-medium text-purple-700 dark:text-purple-400">
+                    {cleanProgress.current}/{cleanProgress.total}
+                  </span>
+                </div>
+
+                {/* Progress bar */}
+                <div className="w-full bg-purple-200 dark:bg-purple-800 rounded-full h-3 mb-3">
+                  <div
+                    className="bg-purple-600 h-3 rounded-full transition-all duration-300"
+                    style={{ width: `${(cleanProgress.current / cleanProgress.total) * 100}%` }}
+                  ></div>
+                </div>
+
+                <p className="text-sm text-purple-700 dark:text-purple-400 mb-3">
+                  Processando: <span className="font-medium">{cleanProgress.email}</span>
+                </p>
+
+                {/* Results list */}
+                {cleanProgress.results.length > 0 && (
+                  <div className="max-h-40 overflow-y-auto space-y-1 text-xs">
+                    {cleanProgress.results.map((result, idx) => (
+                      <div
+                        key={idx}
+                        className={`flex items-center justify-between p-2 rounded ${
+                          result.success
+                            ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                            : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+                        }`}
+                      >
+                        <span className="truncate flex-1">{result.email}</span>
+                        <span className="ml-2 font-medium">
+                          {result.success ? `✓ ${result.deleted} emails` : `✗ ${result.message}`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {seeds.length === 0 ? (
               <div className="text-center py-12 text-gray-500 dark:text-gray-400">
                 <Mail className="w-16 h-16 mx-auto mb-4 opacity-30" />
