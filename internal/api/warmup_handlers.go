@@ -1613,7 +1613,7 @@ func (s *Server) cleanSeedEmails(c *fiber.Ctx) error {
 
 	// Login with OAuth2 or password
 	if oauthToken.Valid && oauthToken.String != "" {
-		saslClient := sasl.NewXoauth2Client(email, oauthToken.String)
+		saslClient := newXOAuth2Client(email, oauthToken.String)
 		err = imapClient.Authenticate(saslClient)
 	} else {
 		err = imapClient.Login(email, password)
