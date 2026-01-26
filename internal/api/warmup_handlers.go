@@ -1567,6 +1567,125 @@ func (s *Server) testWarmupSeed(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Connection successful"})
 }
 
+// cleanSeedEmails connects to a seed via IMAP and deletes all emails from all folders
+func (s *Server) cleanSeedEmails(c *fiber.Ctx) error {
+	userID := getUserID(c)
+	id := c.Params("id")
+
+	var email, password, imapHost string
+	var imapPort int
+	var imapTLSMode, oauthToken, oauthClientID sql.NullString
+
+	err := s.db.QueryRow(`
+		SELECT email, password, imap_host, imap_port, COALESCE(imap_tls_mode, 'tls'), oauth_token, oauth_client_id
+		FROM warmup_seeds WHERE id = $1 AND user_id = $2
+	`, id, userID).Scan(&email, &password, &imapHost, &imapPort, &imapTLSMode, &oauthToken, &oauthClientID)
+
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Seed not found"})
+	}
+
+	tlsMode := "tls"
+	if imapTLSMode.Valid && imapTLSMode.String != "" {
+		tlsMode = imapTLSMode.String
+	}
+
+	// Connect to IMAP
+	var imapClient *client.Client
+	addr := fmt.Sprintf("%s:%d", imapHost, imapPort)
+
+	switch tlsMode {
+	case "tls", "ssl":
+		imapClient, err = client.DialTLS(addr, &tls.Config{InsecureSkipVerify: true})
+	case "starttls":
+		imapClient, err = client.Dial(addr)
+		if err == nil {
+			err = imapClient.StartTLS(&tls.Config{InsecureSkipVerify: true})
+		}
+	default:
+		imapClient, err = client.Dial(addr)
+	}
+
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": fmt.Sprintf("Failed to connect: %v", err)})
+	}
+	defer imapClient.Logout()
+
+	// Login with OAuth2 or password
+	if oauthToken.Valid && oauthToken.String != "" {
+		saslClient := sasl.NewXoauth2Client(email, oauthToken.String)
+		err = imapClient.Authenticate(saslClient)
+	} else {
+		err = imapClient.Login(email, password)
+	}
+
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": fmt.Sprintf("Login failed: %v", err)})
+	}
+
+	// List all mailboxes/folders
+	mailboxes := make(chan *imap.MailboxInfo, 100)
+	done := make(chan error, 1)
+	go func() {
+		done <- imapClient.List("", "*", mailboxes)
+	}()
+
+	var folders []string
+	for m := range mailboxes {
+		folders = append(folders, m.Name)
+	}
+	if err := <-done; err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": fmt.Sprintf("Failed to list folders: %v", err)})
+	}
+
+	totalDeleted := 0
+	folderStats := make(map[string]int)
+
+	// Delete emails from each folder
+	for _, folder := range folders {
+		// Select folder
+		mbox, err := imapClient.Select(folder, false)
+		if err != nil {
+			continue // Skip folders we can't access
+		}
+
+		if mbox.Messages == 0 {
+			continue // No messages to delete
+		}
+
+		// Select all messages
+		seqSet := new(imap.SeqSet)
+		seqSet.AddRange(1, mbox.Messages)
+
+		// Mark all as deleted
+		item := imap.FormatFlagsOp(imap.AddFlags, true)
+		flags := []interface{}{imap.DeletedFlag}
+		err = imapClient.Store(seqSet, item, flags, nil)
+		if err != nil {
+			continue
+		}
+
+		// Expunge (permanently delete)
+		err = imapClient.Expunge(nil)
+		if err != nil {
+			continue
+		}
+
+		folderStats[folder] = int(mbox.Messages)
+		totalDeleted += int(mbox.Messages)
+	}
+
+	// Update seed status to active if it was in error due to full mailbox
+	s.db.Exec(`UPDATE warmup_seeds SET status = 'active', error_message = NULL, last_check = NOW() WHERE id = $1 AND user_id = $2 AND status = 'error'`, id, userID)
+
+	return c.JSON(fiber.Map{
+		"message":       fmt.Sprintf("Deleted %d emails from %s", totalDeleted, email),
+		"total_deleted": totalDeleted,
+		"folders":       folderStats,
+		"email":         email,
+	})
+}
+
 // toggleWarmupSeed toggles a seed between active and paused
 func (s *Server) toggleWarmupSeed(c *fiber.Ctx) error {
 	userID := getUserID(c)
