@@ -215,6 +215,12 @@ func (p *SMTPPool) GetAllActiveSMTPs() []*SMTPConnection {
 	return result
 }
 
+// GetNextIndex returns the next round-robin index (atomically incremented)
+// Used for fair SMTP rotation when multiple SMTPs have equal capacity
+func (p *SMTPPool) GetNextIndex() int {
+	return int(p.current.Add(1))
+}
+
 // GetNextSender returns the next sender for this SMTP (round-robin)
 func (s *SMTPConnection) GetNextSender() *SMTPSender {
 	s.mu.Lock()
