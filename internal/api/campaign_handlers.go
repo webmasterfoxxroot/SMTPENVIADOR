@@ -610,6 +610,10 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 		WHERE id = $2
 	`, count, id)
 
+	// Set campaign status in Redis cache (ensures workers know it's running)
+	s.queue.SetCampaignStatus(id, "running")
+	log.Printf("[Campaign %s] Started with %d emails queued", id[:8], count)
+
 	return c.JSON(fiber.Map{
 		"message":       "Campaign started",
 		"emails_queued": count,
@@ -634,6 +638,11 @@ func (s *Server) pauseCampaign(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Campaign is not running"})
 	}
 
+	// CRITICAL: Set campaign status in Redis cache immediately
+	// This ensures workers stop sending emails for this campaign
+	s.queue.SetCampaignStatus(id, "paused")
+	log.Printf("[Campaign %s] Paused - workers will stop sending", id[:8])
+
 	return c.JSON(fiber.Map{"message": "Campaign paused"})
 }
 
@@ -655,9 +664,14 @@ func (s *Server) resumeCampaign(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Campaign is not paused"})
 	}
 
+	// CRITICAL: Clear campaign paused status from Redis cache
+	// This allows workers to resume sending emails for this campaign
+	s.queue.SetCampaignStatus(id, "running")
+	log.Printf("[Campaign %s] Resumed - workers will start sending", id[:8])
+
 	// Re-queue pending emails
 	count := s.requeuePendingEmails(id)
-	log.Printf("[Campaign %s] Resumed and re-queued %d pending emails", id[:8], count)
+	log.Printf("[Campaign %s] Re-queued %d pending emails", id[:8], count)
 
 	return c.JSON(fiber.Map{
 		"message":  "Campaign resumed",
@@ -819,6 +833,11 @@ func (s *Server) cancelCampaign(c *fiber.Ctx) error {
 	if rows == 0 {
 		return c.Status(400).JSON(fiber.Map{"error": "Campaign cannot be cancelled"})
 	}
+
+	// CRITICAL: Set campaign status in Redis cache immediately
+	// This ensures workers stop sending emails for this campaign
+	s.queue.SetCampaignStatus(id, "cancelled")
+	log.Printf("[Campaign %s] Cancelled - workers will stop sending", id[:8])
 
 	// Delete pending queue items
 	s.db.Exec(`DELETE FROM campaign_emails WHERE campaign_id = $1 AND status = 'queued'`, id)
@@ -1044,6 +1063,8 @@ func (s *Server) autoStartCampaignByID(id string) {
 	if err != nil {
 		fmt.Printf("[AutoStart] Error updating campaign %s status: %v\n", id, err)
 	} else {
+		// Set campaign status in Redis cache
+		s.queue.SetCampaignStatus(id, "running")
 		fmt.Printf("[AutoStart] Campaign %s started successfully!\n", id)
 	}
 }
@@ -1278,6 +1299,9 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 	// Update campaign status
 	s.db.Exec(`UPDATE campaigns SET status = 'running', started_at = NOW(), total_emails = $1 WHERE id = $2`, count, id)
 
+	// Set campaign status in Redis cache
+	s.queue.SetCampaignStatus(id, "running")
+
 	return c.JSON(fiber.Map{
 		"message":       "Campaign resend started",
 		"emails_queued": count,
@@ -1344,6 +1368,8 @@ func (s *Server) resendToFailed(c *fiber.Ctx) error {
 	// Update campaign status
 	if count > 0 {
 		s.db.Exec(`UPDATE campaigns SET status = 'running' WHERE id = $1`, id)
+		// Set campaign status in Redis cache
+		s.queue.SetCampaignStatus(id, "running")
 	}
 
 	return c.JSON(fiber.Map{
@@ -1412,6 +1438,8 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 	// Update campaign status
 	if count > 0 {
 		s.db.Exec(`UPDATE campaigns SET status = 'running' WHERE id = $1`, id)
+		// Set campaign status in Redis cache
+		s.queue.SetCampaignStatus(id, "running")
 	}
 
 	return c.JSON(fiber.Map{

@@ -496,6 +496,46 @@ func (m *Manager) GetWarmupQueueLength() (int64, error) {
 	return m.client.LLen(m.ctx, QueueWarmup).Result()
 }
 
+// ==================== CAMPAIGN STATUS CACHE ====================
+
+const (
+	// CampaignStatusKey is the prefix for campaign status cache in Redis
+	CampaignStatusKey = "smtpenviador:campaign:status"
+	// Campaign status cache TTL (1 hour)
+	CampaignStatusTTL = 1 * time.Hour
+)
+
+// SetCampaignStatus sets the campaign status in Redis cache
+// This should be called when campaign status changes (pause, resume, etc.)
+func (m *Manager) SetCampaignStatus(campaignID, status string) error {
+	key := fmt.Sprintf("%s:%s", CampaignStatusKey, campaignID)
+	return m.client.Set(m.ctx, key, status, CampaignStatusTTL).Err()
+}
+
+// GetCampaignStatus gets the campaign status from Redis cache
+// Returns empty string if not cached
+func (m *Manager) GetCampaignStatus(campaignID string) string {
+	key := fmt.Sprintf("%s:%s", CampaignStatusKey, campaignID)
+	status, err := m.client.Get(m.ctx, key).Result()
+	if err == redis.Nil || err != nil {
+		return "" // Not cached
+	}
+	return status
+}
+
+// IsCampaignPaused checks if a campaign is paused (using Redis cache)
+// Returns true if campaign is paused, false otherwise
+func (m *Manager) IsCampaignPaused(campaignID string) bool {
+	status := m.GetCampaignStatus(campaignID)
+	return status == "paused"
+}
+
+// ClearCampaignStatus removes the campaign status from cache
+func (m *Manager) ClearCampaignStatus(campaignID string) error {
+	key := fmt.Sprintf("%s:%s", CampaignStatusKey, campaignID)
+	return m.client.Del(m.ctx, key).Err()
+}
+
 // ==================== COMBINED STATS ====================
 
 // GetAllQueueLengths returns lengths for all queues

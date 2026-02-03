@@ -274,6 +274,24 @@ func (w *Worker) processWarmupJob() {
 
 // processJobWithQueue processes a job using the specified queue for retries
 func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
+	// CRITICAL: Check if campaign is paused or cancelled BEFORE sending
+	// This prevents emails from being sent when user pauses/cancels the campaign
+	if queueType == "campaign" && job.CampaignID != "" {
+		status := w.queue.GetCampaignStatus(job.CampaignID)
+		if status == "paused" {
+			// Campaign is paused - push job back to queue and wait
+			w.pushToQueue(job, queueType)
+			// Sleep briefly to avoid busy-loop
+			time.Sleep(2 * time.Second)
+			return
+		}
+		if status == "cancelled" {
+			// Campaign is cancelled - discard the job (don't requeue)
+			w.updateEmailStatus(job.ID, "cancelled", "Campaign cancelled")
+			return
+		}
+	}
+
 	// Check job age - if job is too old and has been retried many times, skip it
 	if job.Retries > 10 {
 		log.Printf("⚠️ Worker %d: Job for %s exceeded max retries (%d), marking as failed", w.id, job.To, job.Retries)
@@ -535,6 +553,8 @@ func (w *Worker) checkCampaignCompletion(campaignID string) {
 			SET status = 'completed', completed_at = NOW()
 			WHERE id = $1
 		`, campaignID)
+		// Update Redis cache to mark campaign as completed
+		w.queue.SetCampaignStatus(campaignID, "completed")
 		log.Printf("🏁 Campaign %s completed: %d sent, %d failed", campaignID, sentCount, failedCount)
 	}
 }
