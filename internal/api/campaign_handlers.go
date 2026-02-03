@@ -743,8 +743,8 @@ func (s *Server) requeuePendingEmails(campaignID string) int {
 	defer rows.Close()
 
 	count := 0
-	batchSize := 1000
-	batch := make([]*queue.EmailJob, 0, batchSize)
+	processBatchSize := 1000
+	batch := make([]*queue.EmailJob, 0, processBatchSize)
 
 	for rows.Next() {
 		var id, emailID, email string
@@ -784,12 +784,12 @@ func (s *Server) requeuePendingEmails(campaignID string) int {
 		count++
 
 		// Push batch to queue
-		if len(batch) >= batchSize {
+		if len(batch) >= processBatchSize {
 			for _, j := range batch {
 				s.queue.PushCampaign(j)
 			}
 			log.Printf("[Requeue %s] Queued %d emails...", campaignID[:8], count)
-			batch = make([]*queue.EmailJob, 0, batchSize)
+			batch = make([]*queue.EmailJob, 0, processBatchSize)
 		}
 	}
 
