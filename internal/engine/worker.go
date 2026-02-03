@@ -146,6 +146,14 @@ func (w *Worker) processJob() {
 		return
 	}
 
+	// Check campaign batch limit (for slow sending)
+	if job.BatchInterval > 0 && !w.queue.CheckCampaignBatchLimit(job.CampaignID, job.BatchSize, job.BatchInterval) {
+		// Batch limit reached, push back and wait
+		w.queue.Push(job)
+		time.Sleep(500 * time.Millisecond)
+		return
+	}
+
 	// Process variables in content
 	htmlContent := w.processVariables(job.HTMLContent, job.Variables, job.To, job.ToName)
 	textContent := w.processVariables(job.TextContent, job.Variables, job.To, job.ToName)
@@ -211,6 +219,10 @@ func (w *Worker) processJob() {
 
 	// Success - increment rate limit AFTER successful send
 	w.queue.IncrementRateLimit(smtp.ID)
+	// Increment campaign batch counter for slow sending
+	if job.BatchInterval > 0 {
+		w.queue.IncrementCampaignBatchCount(job.CampaignID, job.BatchInterval)
+	}
 	w.stats.TotalSent.Add(1)
 	w.queue.IncrementStat("sent", 1)
 	w.updateEmailStatus(job.ID, "sent", "")
@@ -328,6 +340,14 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 		return
 	}
 
+	// Check campaign batch limit (for slow sending)
+	if job.BatchInterval > 0 && !w.queue.CheckCampaignBatchLimit(job.CampaignID, job.BatchSize, job.BatchInterval) {
+		// Batch limit reached, push back and wait
+		w.pushToQueue(job, queueType)
+		time.Sleep(500 * time.Millisecond)
+		return
+	}
+
 	// Process variables in content
 	htmlContent := w.processVariables(job.HTMLContent, job.Variables, job.To, job.ToName)
 	textContent := w.processVariables(job.TextContent, job.Variables, job.To, job.ToName)
@@ -391,6 +411,10 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 
 	// Success - increment rate limit for THIS queue type AFTER successful send
 	w.queue.IncrementRateLimitForType(smtp.ID, queueType)
+	// Increment campaign batch counter for slow sending
+	if job.BatchInterval > 0 {
+		w.queue.IncrementCampaignBatchCount(job.CampaignID, job.BatchInterval)
+	}
 	w.stats.TotalSent.Add(1)
 	w.queue.IncrementStat("sent", 1)
 	w.updateEmailStatus(job.ID, "sent", "")
