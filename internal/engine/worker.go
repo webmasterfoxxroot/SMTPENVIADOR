@@ -299,13 +299,18 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 		allowedSMTPIDs[id] = true
 	}
 
-	// Get all active SMTPs and find the one with most remaining capacity
+	// Get all active SMTPs and find the ones with capacity, then use round-robin
 	var smtp *SMTPConnection
 	var sender *SMTPSender
 	allSMTPs := w.smtpPool.GetAllActiveSMTPs()
 
 	if len(allSMTPs) > 0 {
-		var bestCapacity int64 = -1
+		// Collect all valid SMTPs with their capacity
+		type smtpCandidate struct {
+			smtp     *SMTPConnection
+			capacity int64
+		}
+		var validSMTPs []smtpCandidate
 
 		for _, candidate := range allSMTPs {
 			// User isolation: ONLY use SMTPs specified in the job (MANDATORY)
@@ -321,16 +326,36 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 			// Get remaining capacity for this SMTP
 			capacity := w.queue.GetSMTPRemainingCapacity(candidate.ID, candidate.MaxPerMinute, queueType)
 
-			// Choose SMTP with most remaining capacity
-			if capacity > bestCapacity {
-				// Get sender for this SMTP
-				candidateSender := candidate.GetNextSender()
-				if candidateSender == nil {
-					continue
-				}
-				bestCapacity = capacity
-				smtp = candidate
+			// Only include if has capacity
+			if capacity > 0 {
+				validSMTPs = append(validSMTPs, smtpCandidate{smtp: candidate, capacity: capacity})
+			}
+		}
+
+		// If we have valid SMTPs, use round-robin to select one
+		// This ensures rotation even when capacities are equal
+		if len(validSMTPs) > 0 {
+			// Get round-robin index from pool (increments atomically)
+			rrIndex := w.smtpPool.GetNextIndex()
+			selectedIdx := rrIndex % len(validSMTPs)
+			selected := validSMTPs[selectedIdx]
+
+			// Get sender for this SMTP (also rotates via GetNextSender)
+			candidateSender := selected.smtp.GetNextSender()
+			if candidateSender != nil {
+				smtp = selected.smtp
 				sender = candidateSender
+			} else {
+				// If selected SMTP has no sender, try others
+				for i := 0; i < len(validSMTPs); i++ {
+					idx := (selectedIdx + i) % len(validSMTPs)
+					candidateSender = validSMTPs[idx].smtp.GetNextSender()
+					if candidateSender != nil {
+						smtp = validSMTPs[idx].smtp
+						sender = candidateSender
+						break
+					}
+				}
 			}
 		}
 	}
