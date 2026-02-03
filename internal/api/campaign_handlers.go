@@ -50,6 +50,31 @@ func (s *Server) getTrackingDomainForCampaign(campaignID string) string {
 	return s.getTrackingDomain()
 }
 
+// getUserActiveSMTPIDs returns all active SMTP IDs for a specific user
+// This ensures user isolation - users can only use their own SMTPs
+func (s *Server) getUserActiveSMTPIDs(userID string) []string {
+	rows, err := s.db.Query(`SELECT id FROM smtp_servers WHERE active = true AND user_id = $1`, userID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var smtpIDs []string
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		smtpIDs = append(smtpIDs, id)
+	}
+	return smtpIDs
+}
+
+// getUserIDFromCampaign returns the user_id that owns a campaign
+func (s *Server) getUserIDFromCampaign(campaignID string) string {
+	var userID string
+	s.db.QueryRow(`SELECT user_id FROM campaigns WHERE id = $1`, campaignID).Scan(&userID)
+	return userID
+}
+
 // ensureCampaignEmailsUpdated ensures the campaign_emails table has the email column
 func (s *Server) ensureCampaignEmailsUpdated() {
 	// Check if email column exists
@@ -200,7 +225,7 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "At least one list is required"})
 	}
 
-	// Handle SMTP selection - if smtp_ids provided, validate them; otherwise use all active SMTPs
+	// Handle SMTP selection - if smtp_ids provided, validate them; otherwise use ALL active SMTPs of THIS user
 	smtpIDs := req.SmtpIDs
 	var smtpCount int
 
@@ -223,8 +248,21 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 			return c.Status(400).JSON(fiber.Map{"error": "Alguns SMTPs selecionados são inválidos ou inativos."})
 		}
 	} else {
-		// No SMTPs selected - use all active SMTPs for this user
-		s.db.QueryRow(`SELECT COUNT(*) FROM smtp_servers WHERE active = true AND user_id = $1`, userID).Scan(&smtpCount)
+		// No SMTPs selected - use ALL active SMTPs of THIS user (NEVER from other users)
+		rows, err := s.db.Query(`SELECT id FROM smtp_servers WHERE active = true AND user_id = $1`, userID)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Erro ao buscar SMTPs"})
+		}
+		defer rows.Close()
+
+		smtpIDs = make([]string, 0)
+		for rows.Next() {
+			var id string
+			rows.Scan(&id)
+			smtpIDs = append(smtpIDs, id)
+		}
+
+		smtpCount = len(smtpIDs)
 		if smtpCount == 0 {
 			return c.Status(400).JSON(fiber.Map{"error": "Nenhum SMTP ativo disponível. Adicione um SMTP antes de criar campanhas."})
 		}
@@ -505,12 +543,20 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 		listIDs[i] = strings.TrimSpace(listIDs[i])
 	}
 
-	// Parse SMTP IDs for user isolation
+	// Parse SMTP IDs for user isolation - ALWAYS use only user's SMTPs
 	var smtpIDs []string
 	if smtpIDsStr.Valid && smtpIDsStr.String != "" {
 		smtpIDs = strings.Split(smtpIDsStr.String, ",")
 		for i := range smtpIDs {
 			smtpIDs[i] = strings.TrimSpace(smtpIDs[i])
+		}
+	}
+
+	// If no SMTPs specified, get ALL active SMTPs for THIS user (NEVER from other users)
+	if len(smtpIDs) == 0 {
+		smtpIDs = s.getUserActiveSMTPIDs(userID)
+		if len(smtpIDs) == 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "Nenhum SMTP ativo disponível para este usuário."})
 		}
 	}
 
@@ -846,14 +892,15 @@ func (s *Server) cancelSchedule(c *fiber.Ctx) error {
 func (s *Server) autoStartCampaignByID(id string) {
 	fmt.Printf("[AutoStart] autoStartCampaignByID called for campaign %s\n", id)
 
-	// Get campaign details - include list_ids and smtp_ids for multiple list/smtp support
-	var listID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	// Get campaign details - include list_ids, smtp_ids and user_id for isolation
+	var listID, fromEmail, fromName, replyTo, subject, htmlContent, textContent, userID string
 	var listIDsStr, smtpIDsStr sql.NullString
 	var trackOpens, trackClicks bool
 	err := s.db.QueryRow(`
-		SELECT list_id, COALESCE(list_ids, ''), COALESCE(smtp_ids, ''), from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
+		SELECT list_id, COALESCE(list_ids, ''), COALESCE(smtp_ids, ''), from_email, from_name, reply_to, subject,
+		       html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true), user_id
 		FROM campaigns WHERE id = $1 AND status = 'draft'
-	`, id).Scan(&listID, &listIDsStr, &smtpIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
+	`, id).Scan(&listID, &listIDsStr, &smtpIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks, &userID)
 
 	if err != nil {
 		fmt.Printf("[AutoStart] Error getting campaign %s: %v\n", id, err)
@@ -882,7 +929,16 @@ func (s *Server) autoStartCampaignByID(id string) {
 		}
 	}
 
-	fmt.Printf("[AutoStart] Campaign %s - Lists: %v, From: %s\n", id, listIDs, fromEmail)
+	// If no SMTPs specified, get ALL active SMTPs for the campaign owner (NEVER from other users)
+	if len(smtpIDs) == 0 {
+		smtpIDs = s.getUserActiveSMTPIDs(userID)
+		if len(smtpIDs) == 0 {
+			fmt.Printf("[AutoStart] Campaign %s has no active SMTPs for user - skipping\n", id)
+			return
+		}
+	}
+
+	fmt.Printf("[AutoStart] Campaign %s - Lists: %v, SMTPs: %d, From: %s\n", id, listIDs, len(smtpIDs), fromEmail)
 
 	if len(listIDs) == 0 {
 		fmt.Printf("[AutoStart] Campaign %s has no lists, skipping\n", id)
@@ -1080,6 +1136,14 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 		}
 	}
 
+	// If no SMTPs specified, get ALL active SMTPs for THIS user (NEVER from other users)
+	if len(smtpIDs) == 0 {
+		smtpIDs = s.getUserActiveSMTPIDs(userID)
+		if len(smtpIDs) == 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "Nenhum SMTP ativo disponível para este usuário."})
+		}
+	}
+
 	// Get tracking domain for campaign owner
 	trackingDomain := s.getTrackingDomainForCampaign(id)
 
@@ -1156,6 +1220,14 @@ func (s *Server) resendToFailed(c *fiber.Ctx) error {
 		}
 	}
 
+	// If no SMTPs specified, get ALL active SMTPs for THIS user (NEVER from other users)
+	if len(smtpIDs) == 0 {
+		smtpIDs = s.getUserActiveSMTPIDs(userID)
+		if len(smtpIDs) == 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "Nenhum SMTP ativo disponível para este usuário."})
+		}
+	}
+
 	// Get tracking domain for campaign owner
 	trackingDomain := s.getTrackingDomainForCampaign(id)
 
@@ -1211,6 +1283,14 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 		smtpIDs = strings.Split(smtpIDsStr.String, ",")
 		for i := range smtpIDs {
 			smtpIDs[i] = strings.TrimSpace(smtpIDs[i])
+		}
+	}
+
+	// If no SMTPs specified, get ALL active SMTPs for THIS user (NEVER from other users)
+	if len(smtpIDs) == 0 {
+		smtpIDs = s.getUserActiveSMTPIDs(userID)
+		if len(smtpIDs) == 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "Nenhum SMTP ativo disponível para este usuário."})
 		}
 	}
 

@@ -144,14 +144,15 @@ func (s *Server) checkAndStartScheduledCampaigns() {
 
 // startScheduledCampaign starts a scheduled campaign
 func (s *Server) startScheduledCampaign(id string) {
-	// Get campaign details
-	var listID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	// Get campaign details including user_id for SMTP isolation
+	var listID, fromEmail, fromName, replyTo, subject, htmlContent, textContent, userID string
 	var smtpIDsStr sql.NullString
 	var trackOpens, trackClicks bool
 	err := s.db.QueryRow(`
-		SELECT list_id, COALESCE(smtp_ids, ''), from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
+		SELECT list_id, COALESCE(smtp_ids, ''), from_email, from_name, reply_to, subject, html_content, text_content,
+		       COALESCE(track_opens, true), COALESCE(track_clicks, true), user_id
 		FROM campaigns WHERE id = $1 AND status = 'scheduled'
-	`, id).Scan(&listID, &smtpIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
+	`, id).Scan(&listID, &smtpIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks, &userID)
 
 	if err != nil {
 		fmt.Printf("[Scheduler] Error getting campaign %s: %v\n", id, err)
@@ -164,6 +165,15 @@ func (s *Server) startScheduledCampaign(id string) {
 		smtpIDs = strings.Split(smtpIDsStr.String, ",")
 		for i := range smtpIDs {
 			smtpIDs[i] = strings.TrimSpace(smtpIDs[i])
+		}
+	}
+
+	// If no SMTPs specified, get ALL active SMTPs for the campaign owner (NEVER from other users)
+	if len(smtpIDs) == 0 {
+		smtpIDs = s.getUserActiveSMTPIDs(userID)
+		if len(smtpIDs) == 0 {
+			fmt.Printf("[Scheduler] Campaign %s has no active SMTPs for user %s - skipping\n", id, userID)
+			return
 		}
 	}
 
