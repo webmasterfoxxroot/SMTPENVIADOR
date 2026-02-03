@@ -387,9 +387,21 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 	// Check and acquire campaign batch slot atomically (for slow sending)
 	// TryAcquireCampaignBatchSlot is atomic - prevents race condition with multiple workers
 	if job.BatchInterval > 0 && !w.queue.TryAcquireCampaignBatchSlot(job.CampaignID, job.BatchSize, job.BatchInterval) {
-		// Batch limit reached, push back and wait
+		// Batch limit reached, push back and wait until next batch interval
 		w.pushToQueue(job, queueType)
-		time.Sleep(500 * time.Millisecond)
+		// Calculate time until next batch interval to avoid busy-looping
+		// This is crucial for CPU efficiency when many workers compete for few slots
+		intervalSecs := int64(job.BatchInterval)
+		currentInterval := time.Now().Unix() / intervalSecs
+		nextIntervalStart := (currentInterval + 1) * intervalSecs
+		waitTime := time.Until(time.Unix(nextIntervalStart, 0))
+		if waitTime < 100*time.Millisecond {
+			waitTime = 100 * time.Millisecond
+		}
+		if waitTime > 5*time.Second {
+			waitTime = 5 * time.Second
+		}
+		time.Sleep(waitTime)
 		return
 	}
 
