@@ -338,12 +338,24 @@ func (m *Manager) GetSMTPRemainingCapacity(smtpID string, maxPerMinute int, queu
 
 // ==================== CAMPAIGN QUEUE (DEDICATED) ====================
 
-// PushCampaign adds an email job to the campaign queue
+// PushCampaign adds an email job to the campaign-specific queue
+// Each campaign has its own queue for fair processing
 func (m *Manager) PushCampaign(job *EmailJob) error {
 	data, err := json.Marshal(job)
 	if err != nil {
 		return fmt.Errorf("failed to marshal job: %w", err)
 	}
+
+	// Use campaign-specific queue for fair distribution
+	if job.CampaignID != "" {
+		campaignQueue := fmt.Sprintf("%s:%s", QueueCampaign, job.CampaignID)
+		// Register this campaign as active
+		m.client.SAdd(m.ctx, "smtpenviador:active_campaigns", job.CampaignID)
+		m.client.Expire(m.ctx, "smtpenviador:active_campaigns", 24*time.Hour)
+		return m.client.LPush(m.ctx, campaignQueue, data).Err()
+	}
+
+	// Fallback to main queue if no campaign ID
 	return m.client.LPush(m.ctx, QueueCampaign, data).Err()
 }
 
@@ -356,13 +368,52 @@ func (m *Manager) PushCampaignPriority(job *EmailJob) error {
 	return m.client.LPush(m.ctx, QueueCampaignPriority, data).Err()
 }
 
-// PopCampaign gets the next job from campaign queue only
-// Also checks legacy queue for backwards compatibility
-// Uses BRPOP for efficient blocking - waits up to 1 second for a job
+// PopCampaign gets the next job using round-robin across all active campaigns
+// This ensures fair processing - all campaigns get equal opportunity
 func (m *Manager) PopCampaign() (*EmailJob, error) {
-	// Use BRPOP to efficiently wait for jobs from multiple queues
-	// Priority: CampaignPriority > Campaign > Legacy
-	result, err := m.client.BRPop(m.ctx, 1*time.Second, QueueCampaignPriority, QueueCampaign, QueueEmails).Result()
+	// First check priority queue
+	data, err := m.client.RPop(m.ctx, QueueCampaignPriority).Bytes()
+	if err == nil {
+		var job EmailJob
+		if err := json.Unmarshal(data, &job); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal job: %w", err)
+		}
+		return &job, nil
+	}
+
+	// Get all active campaign queues and check them in round-robin fashion
+	campaigns, err := m.client.SMembers(m.ctx, "smtpenviador:active_campaigns").Result()
+	if err == nil && len(campaigns) > 0 {
+		// Use atomic counter for round-robin across workers
+		idx, _ := m.client.Incr(m.ctx, "smtpenviador:campaign_rr_index").Result()
+
+		// Try each campaign queue starting from round-robin index
+		for i := 0; i < len(campaigns); i++ {
+			campaignIdx := (int(idx) + i) % len(campaigns)
+			campaignID := campaigns[campaignIdx]
+			campaignQueue := fmt.Sprintf("%s:%s", QueueCampaign, campaignID)
+
+			data, err := m.client.RPop(m.ctx, campaignQueue).Bytes()
+			if err == nil {
+				var job EmailJob
+				if err := json.Unmarshal(data, &job); err != nil {
+					continue
+				}
+				return &job, nil
+			}
+
+			// If queue is empty, remove from active campaigns
+			if err == redis.Nil {
+				qLen, _ := m.client.LLen(m.ctx, campaignQueue).Result()
+				if qLen == 0 {
+					m.client.SRem(m.ctx, "smtpenviador:active_campaigns", campaignID)
+				}
+			}
+		}
+	}
+
+	// Fallback: check main campaign queue and legacy queue
+	result, err := m.client.BRPop(m.ctx, 1*time.Second, QueueCampaign, QueueEmails).Result()
 	if err == redis.Nil {
 		return nil, nil // No jobs available after timeout
 	}
@@ -382,17 +433,35 @@ func (m *Manager) PopCampaign() (*EmailJob, error) {
 	return &job, nil
 }
 
-// GetCampaignQueueLength returns the length of the campaign queue
+// GetCampaignQueueLength returns the total length of all campaign queues
 func (m *Manager) GetCampaignQueueLength() (int64, error) {
+	var total int64
+
+	// Count main queue
 	normal, err := m.client.LLen(m.ctx, QueueCampaign).Result()
-	if err != nil {
-		return 0, err
+	if err == nil {
+		total += normal
 	}
+
+	// Count priority queue
 	priority, err := m.client.LLen(m.ctx, QueueCampaignPriority).Result()
-	if err != nil {
-		return 0, err
+	if err == nil {
+		total += priority
 	}
-	return normal + priority, nil
+
+	// Count all campaign-specific queues
+	campaigns, err := m.client.SMembers(m.ctx, "smtpenviador:active_campaigns").Result()
+	if err == nil {
+		for _, campaignID := range campaigns {
+			campaignQueue := fmt.Sprintf("%s:%s", QueueCampaign, campaignID)
+			qLen, err := m.client.LLen(m.ctx, campaignQueue).Result()
+			if err == nil {
+				total += qLen
+			}
+		}
+	}
+
+	return total, nil
 }
 
 // ==================== WARMUP QUEUE (DEDICATED) ====================
