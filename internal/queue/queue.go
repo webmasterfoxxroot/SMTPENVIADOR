@@ -349,9 +349,9 @@ func (m *Manager) PushCampaign(job *EmailJob) error {
 	// Use campaign-specific queue for fair distribution
 	if job.CampaignID != "" {
 		campaignQueue := fmt.Sprintf("%s:%s", QueueCampaign, job.CampaignID)
-		// Register this campaign as active
+		// Register this campaign as active (with short TTL to auto-cleanup)
 		m.client.SAdd(m.ctx, "smtpenviador:active_campaigns", job.CampaignID)
-		m.client.Expire(m.ctx, "smtpenviador:active_campaigns", 24*time.Hour)
+		m.client.Expire(m.ctx, "smtpenviador:active_campaigns", 1*time.Hour)
 		return m.client.LPush(m.ctx, campaignQueue, data).Err()
 	}
 
@@ -369,59 +369,52 @@ func (m *Manager) PushCampaignPriority(job *EmailJob) error {
 }
 
 // PopCampaign gets the next job using round-robin across all active campaigns
-// This ensures fair processing - all campaigns get equal opportunity
+// Uses efficient BRPOP to avoid busy-loop when no jobs available
 func (m *Manager) PopCampaign() (*EmailJob, error) {
-	// First check priority queue
-	data, err := m.client.RPop(m.ctx, QueueCampaignPriority).Bytes()
-	if err == nil {
+	// Get all active campaign queues
+	campaigns, err := m.client.SMembers(m.ctx, "smtpenviador:active_campaigns").Result()
+	if err != nil || len(campaigns) == 0 {
+		// No active campaigns, use blocking pop on legacy queues
+		result, err := m.client.BRPop(m.ctx, 1*time.Second, QueueCampaignPriority, QueueCampaign, QueueEmails).Result()
+		if err == redis.Nil {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to pop job: %w", err)
+		}
+		if len(result) < 2 {
+			return nil, nil
+		}
 		var job EmailJob
-		if err := json.Unmarshal(data, &job); err != nil {
+		if err := json.Unmarshal([]byte(result[1]), &job); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal job: %w", err)
 		}
 		return &job, nil
 	}
 
-	// Get all active campaign queues and check them in round-robin fashion
-	campaigns, err := m.client.SMembers(m.ctx, "smtpenviador:active_campaigns").Result()
-	if err == nil && len(campaigns) > 0 {
-		// Use atomic counter for round-robin across workers
-		idx, _ := m.client.Incr(m.ctx, "smtpenviador:campaign_rr_index").Result()
+	// Build list of all queues to check (priority + campaign-specific + legacy)
+	queues := make([]string, 0, len(campaigns)+3)
+	queues = append(queues, QueueCampaignPriority) // Priority first
 
-		// Try each campaign queue starting from round-robin index
-		for i := 0; i < len(campaigns); i++ {
-			campaignIdx := (int(idx) + i) % len(campaigns)
-			campaignID := campaigns[campaignIdx]
-			campaignQueue := fmt.Sprintf("%s:%s", QueueCampaign, campaignID)
-
-			data, err := m.client.RPop(m.ctx, campaignQueue).Bytes()
-			if err == nil {
-				var job EmailJob
-				if err := json.Unmarshal(data, &job); err != nil {
-					continue
-				}
-				return &job, nil
-			}
-
-			// If queue is empty, remove from active campaigns
-			if err == redis.Nil {
-				qLen, _ := m.client.LLen(m.ctx, campaignQueue).Result()
-				if qLen == 0 {
-					m.client.SRem(m.ctx, "smtpenviador:active_campaigns", campaignID)
-				}
-			}
-		}
+	// Add campaign-specific queues in round-robin order
+	idx, _ := m.client.Incr(m.ctx, "smtpenviador:campaign_rr_index").Result()
+	for i := 0; i < len(campaigns); i++ {
+		campaignIdx := (int(idx) + i) % len(campaigns)
+		campaignQueue := fmt.Sprintf("%s:%s", QueueCampaign, campaigns[campaignIdx])
+		queues = append(queues, campaignQueue)
 	}
 
-	// Fallback: check main campaign queue and legacy queue
-	result, err := m.client.BRPop(m.ctx, 1*time.Second, QueueCampaign, QueueEmails).Result()
+	// Add legacy queues as fallback
+	queues = append(queues, QueueCampaign, QueueEmails)
+
+	// Use BRPOP on all queues - efficient blocking wait
+	result, err := m.client.BRPop(m.ctx, 1*time.Second, queues...).Result()
 	if err == redis.Nil {
-		return nil, nil // No jobs available after timeout
+		return nil, nil // No jobs available
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to pop campaign job: %w", err)
+		return nil, fmt.Errorf("failed to pop job: %w", err)
 	}
-
-	// BRPop returns [queue_name, value]
 	if len(result) < 2 {
 		return nil, nil
 	}
