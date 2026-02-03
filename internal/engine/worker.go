@@ -146,8 +146,9 @@ func (w *Worker) processJob() {
 		return
 	}
 
-	// Check campaign batch limit (for slow sending)
-	if job.BatchInterval > 0 && !w.queue.CheckCampaignBatchLimit(job.CampaignID, job.BatchSize, job.BatchInterval) {
+	// Check and acquire campaign batch slot atomically (for slow sending)
+	// TryAcquireCampaignBatchSlot is atomic - prevents race condition with multiple workers
+	if job.BatchInterval > 0 && !w.queue.TryAcquireCampaignBatchSlot(job.CampaignID, job.BatchSize, job.BatchInterval) {
 		// Batch limit reached, push back and wait
 		w.queue.Push(job)
 		time.Sleep(500 * time.Millisecond)
@@ -219,10 +220,7 @@ func (w *Worker) processJob() {
 
 	// Success - increment rate limit AFTER successful send
 	w.queue.IncrementRateLimit(smtp.ID)
-	// Increment campaign batch counter for slow sending
-	if job.BatchInterval > 0 {
-		w.queue.IncrementCampaignBatchCount(job.CampaignID, job.BatchInterval)
-	}
+	// NOTE: Batch counter is already incremented atomically by TryAcquireCampaignBatchSlot
 	w.stats.TotalSent.Add(1)
 	w.queue.IncrementStat("sent", 1)
 	w.updateEmailStatus(job.ID, "sent", "")
@@ -285,25 +283,33 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 		return
 	}
 
+	// CRITICAL: Job MUST have SMTPIDs for user isolation
+	// If empty, fail the job - this prevents using SMTPs from other users
+	if len(job.SMTPIDs) == 0 {
+		log.Printf("❌ Worker %d: Job for %s has no SMTPIDs - failing to prevent cross-user SMTP usage", w.id, job.To)
+		w.queue.PushFailed(job, "No SMTPIDs specified - user isolation error")
+		w.updateEmailStatus(job.ID, "failed", "Campanha sem SMTPs configurados")
+		w.updateCampaignFailedCount(job.CampaignID)
+		return
+	}
+
+	// Build allowed SMTP ID map for quick lookup (user isolation)
+	allowedSMTPIDs := make(map[string]bool)
+	for _, id := range job.SMTPIDs {
+		allowedSMTPIDs[id] = true
+	}
+
 	// Get all active SMTPs and find the one with most remaining capacity
 	var smtp *SMTPConnection
 	var sender *SMTPSender
 	allSMTPs := w.smtpPool.GetAllActiveSMTPs()
 
-	// Build allowed SMTP ID map for quick lookup (user isolation)
-	allowedSMTPIDs := make(map[string]bool)
-	if len(job.SMTPIDs) > 0 {
-		for _, id := range job.SMTPIDs {
-			allowedSMTPIDs[id] = true
-		}
-	}
-
 	if len(allSMTPs) > 0 {
 		var bestCapacity int64 = -1
 
 		for _, candidate := range allSMTPs {
-			// User isolation: only use SMTPs specified in the job
-			if len(allowedSMTPIDs) > 0 && !allowedSMTPIDs[candidate.ID] {
+			// User isolation: ONLY use SMTPs specified in the job (MANDATORY)
+			if !allowedSMTPIDs[candidate.ID] {
 				continue // Skip - not allowed for this user/campaign
 			}
 
@@ -353,8 +359,9 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 		return
 	}
 
-	// Check campaign batch limit (for slow sending)
-	if job.BatchInterval > 0 && !w.queue.CheckCampaignBatchLimit(job.CampaignID, job.BatchSize, job.BatchInterval) {
+	// Check and acquire campaign batch slot atomically (for slow sending)
+	// TryAcquireCampaignBatchSlot is atomic - prevents race condition with multiple workers
+	if job.BatchInterval > 0 && !w.queue.TryAcquireCampaignBatchSlot(job.CampaignID, job.BatchSize, job.BatchInterval) {
 		// Batch limit reached, push back and wait
 		w.pushToQueue(job, queueType)
 		time.Sleep(500 * time.Millisecond)
@@ -424,10 +431,7 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 
 	// Success - increment rate limit for THIS queue type AFTER successful send
 	w.queue.IncrementRateLimitForType(smtp.ID, queueType)
-	// Increment campaign batch counter for slow sending
-	if job.BatchInterval > 0 {
-		w.queue.IncrementCampaignBatchCount(job.CampaignID, job.BatchInterval)
-	}
+	// NOTE: Batch counter is already incremented atomically by TryAcquireCampaignBatchSlot
 	w.stats.TotalSent.Add(1)
 	w.queue.IncrementStat("sent", 1)
 	w.updateEmailStatus(job.ID, "sent", "")

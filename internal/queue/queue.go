@@ -242,6 +242,7 @@ func (m *Manager) IncrementRateLimitForType(smtpID string, queueType string) {
 
 // CheckCampaignBatchLimit checks if a campaign can send based on batch_size and batch_interval
 // Returns true if can send, false if should wait
+// DEPRECATED: Use TryAcquireCampaignBatchSlot for atomic operation to prevent race conditions
 func (m *Manager) CheckCampaignBatchLimit(campaignID string, batchSize, batchInterval int) bool {
 	if batchInterval <= 0 {
 		return true // No interval = unlimited
@@ -255,7 +256,54 @@ func (m *Manager) CheckCampaignBatchLimit(campaignID string, batchSize, batchInt
 	return count < int64(batchSize)
 }
 
+// TryAcquireCampaignBatchSlot atomically tries to acquire a slot in the batch
+// Returns true if slot acquired, false if batch is full for this interval
+// This is ATOMIC and safe for concurrent workers (no race condition)
+func (m *Manager) TryAcquireCampaignBatchSlot(campaignID string, batchSize, batchInterval int) bool {
+	if batchInterval <= 0 {
+		return true // No interval = unlimited
+	}
+
+	// Key format: batch:campaignID:intervalNumber
+	intervalNum := time.Now().Unix() / int64(batchInterval)
+	key := fmt.Sprintf("batch:%s:%d", campaignID, intervalNum)
+
+	// Lua script for atomic check-and-increment
+	// This script:
+	// 1. Gets the current count
+	// 2. If count < batchSize, increments and returns 1 (success)
+	// 3. If count >= batchSize, returns 0 (batch full)
+	// All operations are atomic within Redis
+	luaScript := `
+		local key = KEYS[1]
+		local batchSize = tonumber(ARGV[1])
+		local ttl = tonumber(ARGV[2])
+
+		local current = tonumber(redis.call('GET', key) or '0')
+
+		if current < batchSize then
+			local newCount = redis.call('INCR', key)
+			if newCount == 1 then
+				redis.call('EXPIRE', key, ttl)
+			end
+			return 1
+		end
+
+		return 0
+	`
+
+	ttl := batchInterval * 2 // Expiry = 2x interval
+	result, err := m.client.Eval(m.ctx, luaScript, []string{key}, batchSize, ttl).Int64()
+	if err != nil {
+		// On error, fall back to non-atomic check (better than blocking everything)
+		return m.CheckCampaignBatchLimit(campaignID, batchSize, batchInterval)
+	}
+
+	return result == 1
+}
+
 // IncrementCampaignBatchCount increments the batch counter for a campaign
+// DEPRECATED: Use TryAcquireCampaignBatchSlot which does increment atomically
 func (m *Manager) IncrementCampaignBatchCount(campaignID string, batchInterval int) {
 	if batchInterval <= 0 {
 		return // No tracking needed
