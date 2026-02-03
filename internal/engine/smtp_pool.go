@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/smtp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -343,7 +344,13 @@ func (s *SMTPConnection) Send(params SendParams) error {
 func (s *SMTPConnection) buildMessage(params SendParams) []byte {
 	// Generate unique boundary and message ID (ASCII only)
 	boundary := fmt.Sprintf("=_%d_%d_=", time.Now().UnixNano(), time.Now().Unix())
-	messageID := fmt.Sprintf("<%d.%d@%s>", time.Now().UnixNano(), time.Now().Unix(), s.Host)
+
+	// Extract domain from sender email for Message-ID
+	messageIDDomain := s.Host
+	if parts := strings.Split(params.From, "@"); len(parts) == 2 {
+		messageIDDomain = parts[1]
+	}
+	messageID := fmt.Sprintf("<%d.%d@%s>", time.Now().UnixNano(), time.Now().Unix(), messageIDDomain)
 
 	// Build message like Roundcube does
 	var message string

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/smtp"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -526,7 +527,13 @@ SMTP Enviador - Sistema de Email Marketing
 
 	// Build message exactly like campaigns do (from smtp_pool.go)
 	boundary := fmt.Sprintf("=_%d_%d_=", time.Now().UnixNano(), time.Now().Unix())
-	messageID := fmt.Sprintf("<%d.%d@%s>", time.Now().UnixNano(), time.Now().Unix(), host)
+
+	// Extract domain from sender email for Message-ID
+	messageIDDomain := host
+	if parts := strings.Split(fromEmail, "@"); len(parts) == 2 {
+		messageIDDomain = parts[1]
+	}
+	messageID := fmt.Sprintf("<%d.%d@%s>", time.Now().UnixNano(), time.Now().Unix(), messageIDDomain)
 
 	var message string
 	message += fmt.Sprintf("From: %s <%s>\r\n", encodeRFC2047(fromName), fromEmail)
