@@ -290,10 +290,23 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 	var sender *SMTPSender
 	allSMTPs := w.smtpPool.GetAllActiveSMTPs()
 
+	// Build allowed SMTP ID map for quick lookup (user isolation)
+	allowedSMTPIDs := make(map[string]bool)
+	if len(job.SMTPIDs) > 0 {
+		for _, id := range job.SMTPIDs {
+			allowedSMTPIDs[id] = true
+		}
+	}
+
 	if len(allSMTPs) > 0 {
 		var bestCapacity int64 = -1
 
 		for _, candidate := range allSMTPs {
+			// User isolation: only use SMTPs specified in the job
+			if len(allowedSMTPIDs) > 0 && !allowedSMTPIDs[candidate.ID] {
+				continue // Skip - not allowed for this user/campaign
+			}
+
 			// Check rate limits for THIS queue type (campaign/warmup have separate limits)
 			if !w.queue.CheckBothRateLimitsForType(candidate.ID, candidate.MaxPerMinute, candidate.MaxPerHour, queueType) {
 				continue // Skip - no capacity

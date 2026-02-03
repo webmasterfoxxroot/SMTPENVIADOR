@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -145,15 +146,25 @@ func (s *Server) checkAndStartScheduledCampaigns() {
 func (s *Server) startScheduledCampaign(id string) {
 	// Get campaign details
 	var listID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	var smtpIDsStr sql.NullString
 	var trackOpens, trackClicks bool
 	err := s.db.QueryRow(`
-		SELECT list_id, from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
+		SELECT list_id, COALESCE(smtp_ids, ''), from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
 		FROM campaigns WHERE id = $1 AND status = 'scheduled'
-	`, id).Scan(&listID, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
+	`, id).Scan(&listID, &smtpIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
 
 	if err != nil {
 		fmt.Printf("[Scheduler] Error getting campaign %s: %v\n", id, err)
 		return
+	}
+
+	// Parse SMTP IDs for user isolation
+	var smtpIDs []string
+	if smtpIDsStr.Valid && smtpIDsStr.String != "" {
+		smtpIDs = strings.Split(smtpIDsStr.String, ",")
+		for i := range smtpIDs {
+			smtpIDs[i] = strings.TrimSpace(smtpIDs[i])
+		}
 	}
 
 	// Get tracking domain for campaign owner
@@ -169,7 +180,7 @@ func (s *Server) startScheduledCampaign(id string) {
 		if err != nil {
 			fmt.Printf("[Scheduler] Error getting emails from ClickHouse: %v\n", err)
 		} else {
-			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0)
+			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0, smtpIDs)
 		}
 	}
 
@@ -184,7 +195,7 @@ func (s *Server) startScheduledCampaign(id string) {
 			return
 		}
 		defer rows.Close()
-		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0)
+		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0, smtpIDs)
 	}
 
 	fmt.Printf("[Scheduler] Queued %d emails for campaign %s\n", count, id)
