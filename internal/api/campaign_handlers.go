@@ -920,20 +920,30 @@ func (s *Server) autoStartCampaignByID(id string) {
 		listIDs[i] = strings.TrimSpace(listIDs[i])
 	}
 
-	// Parse SMTP IDs for user isolation
+	// Parse SMTP IDs for user isolation - verify they still exist and are active
 	var smtpIDs []string
 	if smtpIDsStr.Valid && smtpIDsStr.String != "" {
-		smtpIDs = strings.Split(smtpIDsStr.String, ",")
-		for i := range smtpIDs {
-			smtpIDs[i] = strings.TrimSpace(smtpIDs[i])
+		rawIDs := strings.Split(smtpIDsStr.String, ",")
+		// Verify each SMTP ID is still active
+		for _, rawID := range rawIDs {
+			trimmedID := strings.TrimSpace(rawID)
+			if trimmedID != "" {
+				var exists bool
+				s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM smtp_servers WHERE id = $1 AND active = true AND user_id = $2)`, trimmedID, userID).Scan(&exists)
+				if exists {
+					smtpIDs = append(smtpIDs, trimmedID)
+				}
+			}
 		}
 	}
 
-	// If no SMTPs specified, get ALL active SMTPs for the campaign owner (NEVER from other users)
+	// If no valid SMTPs from saved list, get ALL active SMTPs for the campaign owner
 	if len(smtpIDs) == 0 {
 		smtpIDs = s.getUserActiveSMTPIDs(userID)
 		if len(smtpIDs) == 0 {
-			fmt.Printf("[AutoStart] Campaign %s has no active SMTPs for user - skipping\n", id)
+			fmt.Printf("[AutoStart] Campaign %s has no active SMTPs for user - cancelling auto-start\n", id)
+			// Clear auto_start_at to stop scheduler from retrying infinitely
+			s.db.Exec(`UPDATE campaigns SET auto_start_at = NULL WHERE id = $1`, id)
 			return
 		}
 	}
@@ -941,7 +951,9 @@ func (s *Server) autoStartCampaignByID(id string) {
 	fmt.Printf("[AutoStart] Campaign %s - Lists: %v, SMTPs: %d, From: %s\n", id, listIDs, len(smtpIDs), fromEmail)
 
 	if len(listIDs) == 0 {
-		fmt.Printf("[AutoStart] Campaign %s has no lists, skipping\n", id)
+		fmt.Printf("[AutoStart] Campaign %s has no lists - cancelling auto-start\n", id)
+		// Clear auto_start_at to stop scheduler from retrying infinitely
+		s.db.Exec(`UPDATE campaigns SET auto_start_at = NULL WHERE id = $1`, id)
 		return
 	}
 
@@ -981,14 +993,21 @@ func (s *Server) autoStartCampaignByID(id string) {
 
 		rows, err := s.db.Query(query, args...)
 		if err != nil {
-			fmt.Printf("[AutoStart] Error getting emails for campaign %s: %v\n", id, err)
+			fmt.Printf("[AutoStart] Error getting emails for campaign %s: %v - cancelling auto-start\n", id, err)
+			// Clear auto_start_at to stop scheduler from retrying infinitely
+			s.db.Exec(`UPDATE campaigns SET auto_start_at = NULL WHERE id = $1`, id)
 			return
 		}
 		defer rows.Close()
 		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0, smtpIDs)
 	}
 
-	fmt.Printf("[AutoStart] Queued %d emails for campaign %s\n", count, id)
+	// If no emails were queued, still start the campaign but log warning
+	if count == 0 {
+		fmt.Printf("[AutoStart] WARNING: Campaign %s has 0 emails to queue - starting anyway\n", id)
+	} else {
+		fmt.Printf("[AutoStart] Queued %d emails for campaign %s\n", count, id)
+	}
 
 	// Update campaign status
 	_, err = s.db.Exec(`
@@ -1053,23 +1072,43 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Nenhum SMTP ativo disponível. Adicione um SMTP antes de clonar campanhas."})
 	}
 
-	// Get original campaign
+	// Get original campaign - include list_ids and smtp_ids for complete clone
 	var name, subject, fromName, fromEmail, replyTo, htmlContent, textContent, listID string
-	var sendRate int
+	var listIDsStr, smtpIDsStr sql.NullString
+	var sendRate, threads, batchSize, batchInterval int
 	var trackOpens, trackClicks bool
 	err := s.db.QueryRow(`
-		SELECT name, subject, from_name, from_email, reply_to, html_content, text_content, list_id, send_rate, COALESCE(track_opens, true), COALESCE(track_clicks, true)
+		SELECT name, subject, from_name, from_email, reply_to, html_content, text_content,
+		       list_id, COALESCE(list_ids, ''), COALESCE(smtp_ids, ''), send_rate,
+		       COALESCE(threads, 10), COALESCE(batch_size, 1), COALESCE(batch_interval, 0),
+		       COALESCE(track_opens, true), COALESCE(track_clicks, true)
 		FROM campaigns WHERE id = $1 AND user_id = $2
-	`, id, userID).Scan(&name, &subject, &fromName, &fromEmail, &replyTo, &htmlContent, &textContent, &listID, &sendRate, &trackOpens, &trackClicks)
+	`, id, userID).Scan(&name, &subject, &fromName, &fromEmail, &replyTo, &htmlContent, &textContent,
+		&listID, &listIDsStr, &smtpIDsStr, &sendRate,
+		&threads, &batchSize, &batchInterval,
+		&trackOpens, &trackClicks)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
 	}
 
-	// Get email count from list - try ClickHouse first
+	// Parse list IDs - use list_ids if available, otherwise use list_id
+	var listIDs []string
+	if listIDsStr.Valid && listIDsStr.String != "" {
+		listIDs = strings.Split(listIDsStr.String, ",")
+	} else if listID != "" {
+		listIDs = []string{listID}
+	}
+
+	// Trim whitespace from list IDs
+	for i := range listIDs {
+		listIDs[i] = strings.TrimSpace(listIDs[i])
+	}
+	listIDsStrFinal := strings.Join(listIDs, ",")
+
+	// Get email count from all lists - try ClickHouse first
 	var totalEmails int
-	listIDs := []string{listID}
-	if s.ch != nil {
+	if s.ch != nil && len(listIDs) > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		count, err := s.ch.GetEmailCountForCampaign(ctx, listIDs)
 		cancel()
@@ -1077,13 +1116,26 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 			totalEmails = int(count)
 		}
 	}
-	if totalEmails == 0 {
-		// Use LEFT JOIN for better performance
-		s.db.QueryRow(`
+	if totalEmails == 0 && len(listIDs) > 0 {
+		// Use LEFT JOIN for better performance with all lists
+		placeholders := make([]string, len(listIDs))
+		args := make([]interface{}, len(listIDs))
+		for i, lid := range listIDs {
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+			args[i] = lid
+		}
+		query := fmt.Sprintf(`
 			SELECT COUNT(*) FROM emails e
 			LEFT JOIN blacklist b ON LOWER(e.email) = LOWER(b.email)
-			WHERE e.list_id = $1 AND e.valid = true AND e.bounced = false AND e.unsubscribed = false AND b.email IS NULL
-		`, listID).Scan(&totalEmails)
+			WHERE e.list_id IN (%s) AND e.valid = true AND e.bounced = false AND e.unsubscribed = false AND b.email IS NULL
+		`, strings.Join(placeholders, ","))
+		s.db.QueryRow(query, args...).Scan(&totalEmails)
+	}
+
+	// Use first list_id for backwards compatibility
+	firstListID := ""
+	if len(listIDs) > 0 {
+		firstListID = listIDs[0]
 	}
 
 	// Create new campaign with "Copy of" prefix as draft with auto_start_at = NOW() + 60 seconds (UTC)
@@ -1091,10 +1143,20 @@ func (s *Server) cloneCampaign(c *fiber.Ctx) error {
 	newName := "Cópia de " + name
 	autoStartAt := time.Now().UTC().Add(60 * time.Second)
 
+	// Include list_ids, smtp_ids, threads, batch_size, batch_interval in clone
+	smtpIDsStrFinal := ""
+	if smtpIDsStr.Valid {
+		smtpIDsStrFinal = smtpIDsStr.String
+	}
+
 	_, err = s.db.Exec(`
-		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to, html_content, text_content, list_id, send_rate, track_opens, track_clicks, total_emails, status, auto_start_at, user_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'draft', $14, $15)
-	`, newID, newName, subject, fromName, fromEmail, replyTo, htmlContent, textContent, listID, sendRate, trackOpens, trackClicks, totalEmails, autoStartAt, userID)
+		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to, html_content, text_content,
+		                       list_id, list_ids, smtp_ids, send_rate, threads, batch_size, batch_interval,
+		                       track_opens, track_clicks, total_emails, status, auto_start_at, user_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, 'draft', $19, $20)
+	`, newID, newName, subject, fromName, fromEmail, replyTo, htmlContent, textContent,
+		firstListID, listIDsStrFinal, smtpIDsStrFinal, sendRate, threads, batchSize, batchInterval,
+		trackOpens, trackClicks, totalEmails, autoStartAt, userID)
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to clone campaign"})
