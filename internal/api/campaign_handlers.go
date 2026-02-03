@@ -470,16 +470,16 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 
 	// Get campaign details
 	var listID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string
-	var listIDsStr sql.NullString
+	var listIDsStr, smtpIDsStr sql.NullString
 	var status string
 	var trackOpens, trackClicks bool
 	var batchSize, batchInterval int
 	err := s.db.QueryRow(`
-		SELECT list_id, COALESCE(list_ids, ''), from_email, from_name, reply_to, subject, html_content, text_content, status,
+		SELECT list_id, COALESCE(list_ids, ''), COALESCE(smtp_ids, ''), from_email, from_name, reply_to, subject, html_content, text_content, status,
 		       COALESCE(track_opens, true), COALESCE(track_clicks, true),
 		       COALESCE(batch_size, 1), COALESCE(batch_interval, 0)
 		FROM campaigns WHERE id = $1 AND user_id = $2
-	`, id, userID).Scan(&listID, &listIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &status, &trackOpens, &trackClicks, &batchSize, &batchInterval)
+	`, id, userID).Scan(&listID, &listIDsStr, &smtpIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &status, &trackOpens, &trackClicks, &batchSize, &batchInterval)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
@@ -505,6 +505,15 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 		listIDs[i] = strings.TrimSpace(listIDs[i])
 	}
 
+	// Parse SMTP IDs for user isolation
+	var smtpIDs []string
+	if smtpIDsStr.Valid && smtpIDsStr.String != "" {
+		smtpIDs = strings.Split(smtpIDsStr.String, ",")
+		for i := range smtpIDs {
+			smtpIDs[i] = strings.TrimSpace(smtpIDs[i])
+		}
+	}
+
 	// Log batch settings
 	if batchInterval > 0 {
 		log.Printf("[Campaign %s] Batch mode: %d emails every %d seconds (~%d/min)", id[:8], batchSize, batchInterval, (batchSize*60)/batchInterval)
@@ -520,7 +529,7 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 		if err != nil {
 			log.Printf("❌ Failed to get emails from ClickHouse: %v", err)
 		} else {
-			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, batchSize, batchInterval)
+			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, batchSize, batchInterval, smtpIDs)
 		}
 	}
 
@@ -546,7 +555,7 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 		}
 		defer rows.Close()
 
-		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, batchSize, batchInterval)
+		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, batchSize, batchInterval, smtpIDs)
 	}
 
 	// Update campaign status
@@ -837,14 +846,14 @@ func (s *Server) cancelSchedule(c *fiber.Ctx) error {
 func (s *Server) autoStartCampaignByID(id string) {
 	fmt.Printf("[AutoStart] autoStartCampaignByID called for campaign %s\n", id)
 
-	// Get campaign details - include list_ids for multiple list support
+	// Get campaign details - include list_ids and smtp_ids for multiple list/smtp support
 	var listID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string
-	var listIDsStr sql.NullString
+	var listIDsStr, smtpIDsStr sql.NullString
 	var trackOpens, trackClicks bool
 	err := s.db.QueryRow(`
-		SELECT list_id, COALESCE(list_ids, ''), from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
+		SELECT list_id, COALESCE(list_ids, ''), COALESCE(smtp_ids, ''), from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
 		FROM campaigns WHERE id = $1 AND status = 'draft'
-	`, id).Scan(&listID, &listIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
+	`, id).Scan(&listID, &listIDsStr, &smtpIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
 
 	if err != nil {
 		fmt.Printf("[AutoStart] Error getting campaign %s: %v\n", id, err)
@@ -862,6 +871,15 @@ func (s *Server) autoStartCampaignByID(id string) {
 	// Trim whitespace from list IDs
 	for i := range listIDs {
 		listIDs[i] = strings.TrimSpace(listIDs[i])
+	}
+
+	// Parse SMTP IDs for user isolation
+	var smtpIDs []string
+	if smtpIDsStr.Valid && smtpIDsStr.String != "" {
+		smtpIDs = strings.Split(smtpIDsStr.String, ",")
+		for i := range smtpIDs {
+			smtpIDs[i] = strings.TrimSpace(smtpIDs[i])
+		}
 	}
 
 	fmt.Printf("[AutoStart] Campaign %s - Lists: %v, From: %s\n", id, listIDs, fromEmail)
@@ -884,7 +902,7 @@ func (s *Server) autoStartCampaignByID(id string) {
 		if err != nil {
 			fmt.Printf("[AutoStart] Error getting emails from ClickHouse: %v\n", err)
 		} else {
-			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0)
+			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0, smtpIDs)
 		}
 	}
 
@@ -911,7 +929,7 @@ func (s *Server) autoStartCampaignByID(id string) {
 			return
 		}
 		defer rows.Close()
-		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0)
+		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0, smtpIDs)
 	}
 
 	fmt.Printf("[AutoStart] Queued %d emails for campaign %s\n", count, id)
@@ -1042,14 +1060,24 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 
 	// Get campaign details
 	var listID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	var smtpIDsStr sql.NullString
 	var trackOpens, trackClicks bool
 	err := s.db.QueryRow(`
-		SELECT list_id, from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
+		SELECT list_id, COALESCE(smtp_ids, ''), from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
 		FROM campaigns WHERE id = $1 AND user_id = $2
-	`, id, userID).Scan(&listID, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
+	`, id, userID).Scan(&listID, &smtpIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
+	}
+
+	// Parse SMTP IDs for user isolation
+	var smtpIDs []string
+	if smtpIDsStr.Valid && smtpIDsStr.String != "" {
+		smtpIDs = strings.Split(smtpIDsStr.String, ",")
+		for i := range smtpIDs {
+			smtpIDs[i] = strings.TrimSpace(smtpIDs[i])
+		}
 	}
 
 	// Get tracking domain for campaign owner
@@ -1072,7 +1100,7 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 		if err != nil {
 			log.Printf("❌ Failed to get emails from ClickHouse: %v", err)
 		} else {
-			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0)
+			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0, smtpIDs)
 		}
 	}
 
@@ -1089,7 +1117,7 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch emails"})
 		}
 		defer rows.Close()
-		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0)
+		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0, smtpIDs)
 	}
 
 	// Update campaign status
@@ -1108,14 +1136,24 @@ func (s *Server) resendToFailed(c *fiber.Ctx) error {
 
 	// Get campaign details
 	var fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	var smtpIDsStr sql.NullString
 	var trackOpens, trackClicks bool
 	err := s.db.QueryRow(`
-		SELECT from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
+		SELECT COALESCE(smtp_ids, ''), from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
 		FROM campaigns WHERE id = $1 AND user_id = $2
-	`, id, userID).Scan(&fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
+	`, id, userID).Scan(&smtpIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
+	}
+
+	// Parse SMTP IDs for user isolation
+	var smtpIDs []string
+	if smtpIDsStr.Valid && smtpIDsStr.String != "" {
+		smtpIDs = strings.Split(smtpIDsStr.String, ",")
+		for i := range smtpIDs {
+			smtpIDs[i] = strings.TrimSpace(smtpIDs[i])
+		}
 	}
 
 	// Get tracking domain for campaign owner
@@ -1136,7 +1174,7 @@ func (s *Server) resendToFailed(c *fiber.Ctx) error {
 	// Delete old failed records
 	s.db.Exec(`DELETE FROM campaign_emails WHERE campaign_id = $1 AND status = 'failed'`, id)
 
-	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0)
+	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0, smtpIDs)
 
 	// Update campaign status
 	if count > 0 {
@@ -1156,14 +1194,24 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 
 	// Get campaign details
 	var fromEmail, fromName, replyTo, subject, htmlContent, textContent string
+	var smtpIDsStr sql.NullString
 	var trackOpens, trackClicks bool
 	err := s.db.QueryRow(`
-		SELECT from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
+		SELECT COALESCE(smtp_ids, ''), from_email, from_name, reply_to, subject, html_content, text_content, COALESCE(track_opens, true), COALESCE(track_clicks, true)
 		FROM campaigns WHERE id = $1 AND user_id = $2
-	`, id, userID).Scan(&fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
+	`, id, userID).Scan(&smtpIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &trackOpens, &trackClicks)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
+	}
+
+	// Parse SMTP IDs for user isolation
+	var smtpIDs []string
+	if smtpIDsStr.Valid && smtpIDsStr.String != "" {
+		smtpIDs = strings.Split(smtpIDsStr.String, ",")
+		for i := range smtpIDs {
+			smtpIDs[i] = strings.TrimSpace(smtpIDs[i])
+		}
 	}
 
 	// Get tracking domain for campaign owner
@@ -1184,7 +1232,7 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 	// Delete old sent records for non-openers
 	s.db.Exec(`DELETE FROM campaign_emails WHERE campaign_id = $1 AND status = 'sent' AND opened_at IS NULL`, id)
 
-	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0)
+	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0, smtpIDs)
 
 	// Update campaign status
 	if count > 0 {
@@ -1199,7 +1247,7 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 
 // queueEmails is a helper to queue emails from a rows result
 // Now processes in batches for better performance
-func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string, trackOpens, trackClicks bool, trackingDomain string, sendBatchSize, sendBatchInterval int) int {
+func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string, trackOpens, trackClicks bool, trackingDomain string, sendBatchSize, sendBatchInterval int, smtpIDs []string) int {
 	count := 0
 	processBatchSize := 1000
 	batch := make([]*queue.EmailJob, 0, processBatchSize)
@@ -1235,6 +1283,7 @@ func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, re
 			ID:             uuid.New().String(),
 			CampaignID:     campaignID,
 			EmailID:        emailID,
+			SMTPIDs:        smtpIDs,
 			To:             email,
 			ToName:         nameStr,
 			From:           fromEmail,
@@ -1315,7 +1364,7 @@ func (s *Server) processBatch(batch []*queue.EmailJob, campaignID string) {
 
 // queueClickHouseEmails is a helper to queue emails from ClickHouse results
 // Now processes in batches for better performance
-func (s *Server) queueClickHouseEmails(emails []clickhouse.CampaignEmail, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string, trackOpens, trackClicks bool, trackingDomain string, sendBatchSize, sendBatchInterval int) int {
+func (s *Server) queueClickHouseEmails(emails []clickhouse.CampaignEmail, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string, trackOpens, trackClicks bool, trackingDomain string, sendBatchSize, sendBatchInterval int, smtpIDs []string) int {
 	count := 0
 	processBatchSize := 1000
 	batch := make([]*queue.EmailJob, 0, processBatchSize)
@@ -1342,6 +1391,7 @@ func (s *Server) queueClickHouseEmails(emails []clickhouse.CampaignEmail, campai
 			ID:             uuid.New().String(),
 			CampaignID:     campaignID,
 			EmailID:        e.ID,
+			SMTPIDs:        smtpIDs,
 			To:             e.Email,
 			ToName:         e.Name,
 			From:           fromEmail,

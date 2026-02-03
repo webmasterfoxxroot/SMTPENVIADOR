@@ -32,6 +32,7 @@ type EmailJob struct {
 	CampaignID     string            `json:"campaign_id"`
 	EmailID        string            `json:"email_id"`
 	SMTPID         string            `json:"smtp_id"`
+	SMTPIDs        []string          `json:"smtp_ids"`         // Allowed SMTPs for this job (user isolation)
 	To             string            `json:"to"`
 	ToName         string            `json:"to_name"`
 	From           string            `json:"from"`
