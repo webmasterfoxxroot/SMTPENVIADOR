@@ -884,7 +884,7 @@ func (s *Server) autoStartCampaignByID(id string) {
 		if err != nil {
 			fmt.Printf("[AutoStart] Error getting emails from ClickHouse: %v\n", err)
 		} else {
-			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0)
 		}
 	}
 
@@ -911,7 +911,7 @@ func (s *Server) autoStartCampaignByID(id string) {
 			return
 		}
 		defer rows.Close()
-		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0)
 	}
 
 	fmt.Printf("[AutoStart] Queued %d emails for campaign %s\n", count, id)
@@ -1072,7 +1072,7 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 		if err != nil {
 			log.Printf("❌ Failed to get emails from ClickHouse: %v", err)
 		} else {
-			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0)
 		}
 	}
 
@@ -1089,7 +1089,7 @@ func (s *Server) resendCampaign(c *fiber.Ctx) error {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch emails"})
 		}
 		defer rows.Close()
-		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0)
 	}
 
 	// Update campaign status
@@ -1136,7 +1136,7 @@ func (s *Server) resendToFailed(c *fiber.Ctx) error {
 	// Delete old failed records
 	s.db.Exec(`DELETE FROM campaign_emails WHERE campaign_id = $1 AND status = 'failed'`, id)
 
-	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0)
 
 	// Update campaign status
 	if count > 0 {
@@ -1184,7 +1184,7 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 	// Delete old sent records for non-openers
 	s.db.Exec(`DELETE FROM campaign_emails WHERE campaign_id = $1 AND status = 'sent' AND opened_at IS NULL`, id)
 
-	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+	count := s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0)
 
 	// Update campaign status
 	if count > 0 {

@@ -169,7 +169,7 @@ func (s *Server) startScheduledCampaign(id string) {
 		if err != nil {
 			fmt.Printf("[Scheduler] Error getting emails from ClickHouse: %v\n", err)
 		} else {
-			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0)
 		}
 	}
 
@@ -184,7 +184,7 @@ func (s *Server) startScheduledCampaign(id string) {
 			return
 		}
 		defer rows.Close()
-		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, 1, 0)
 	}
 
 	fmt.Printf("[Scheduler] Queued %d emails for campaign %s\n", count, id)
