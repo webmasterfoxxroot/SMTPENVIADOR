@@ -19,6 +19,7 @@ function CampaignEdit() {
   const [form, setForm] = useState({
     name: '',
     from_name: '',
+    reply_to: '',
     subject: '',
     html_content: '',
     text_content: '',
@@ -595,6 +596,20 @@ function CampaignEdit() {
               />
               <p className="text-xs text-gray-500 mt-1">
                 Nome que aparece no campo "De:" do email. O email sera do SMTP.
+              </p>
+            </div>
+
+            <div>
+              <label className="label">Email de Resposta (opcional)</label>
+              <input
+                type="email"
+                value={form.reply_to}
+                onChange={(e) => setForm({ ...form, reply_to: e.target.value })}
+                className="input"
+                placeholder="respostas@empresa.com"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Se preenchido, as respostas irao para este email. Deixe vazio para usar o email do SMTP.
               </p>
             </div>
 
