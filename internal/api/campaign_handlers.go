@@ -72,24 +72,30 @@ func (s *Server) ensureCampaignEmailsUpdated() {
 			log.Println("[Migration] Added email and recipient_name columns to campaign_emails")
 		}
 	}
+
+	// Add batch_size and batch_interval columns to campaigns table for rate limiting
+	s.db.Exec(`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS batch_size INT DEFAULT 1`)
+	s.db.Exec(`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS batch_interval INT DEFAULT 0`)
 }
 
 type CampaignRequest struct {
-	Name        string     `json:"name"`
-	Subject     string     `json:"subject"`
-	FromName    string     `json:"from_name"`
-	FromEmail   string     `json:"from_email"`
-	ReplyTo     string     `json:"reply_to"`
-	HTMLContent string     `json:"html_content"`
-	TextContent string     `json:"text_content"`
-	ListID      string     `json:"list_id"`  // For backwards compatibility
-	ListIDs     []string   `json:"list_ids"` // Multiple lists support
-	SmtpIDs     []string   `json:"smtp_ids"` // Multiple SMTPs support
-	SendRate    int        `json:"send_rate"`
-	Threads     int        `json:"threads"`  // Number of parallel threads/workers (1-100)
-	ScheduledAt *time.Time `json:"scheduled_at"`
-	TrackOpens  bool       `json:"track_opens"`
-	TrackClicks bool       `json:"track_clicks"`
+	Name          string     `json:"name"`
+	Subject       string     `json:"subject"`
+	FromName      string     `json:"from_name"`
+	FromEmail     string     `json:"from_email"`
+	ReplyTo       string     `json:"reply_to"`
+	HTMLContent   string     `json:"html_content"`
+	TextContent   string     `json:"text_content"`
+	ListID        string     `json:"list_id"`  // For backwards compatibility
+	ListIDs       []string   `json:"list_ids"` // Multiple lists support
+	SmtpIDs       []string   `json:"smtp_ids"` // Multiple SMTPs support
+	SendRate      int        `json:"send_rate"`
+	Threads       int        `json:"threads"`        // Number of parallel threads/workers (1-100)
+	BatchSize     int        `json:"batch_size"`     // Emails per batch (default 1)
+	BatchInterval int        `json:"batch_interval"` // Seconds between batches (default 0 = no limit)
+	ScheduledAt   *time.Time `json:"scheduled_at"`
+	TrackOpens    bool       `json:"track_opens"`
+	TrackClicks   bool       `json:"track_clicks"`
 }
 
 // listCampaigns returns all campaigns
@@ -267,16 +273,30 @@ func (s *Server) createCampaign(c *fiber.Ctx) error {
 		threads = 100 // Max limit
 	}
 
+	// Validate batch_size (default 1)
+	batchSize := req.BatchSize
+	if batchSize <= 0 {
+		batchSize = 1
+	}
+
+	// Validate batch_interval (default 0 = no limit)
+	batchInterval := req.BatchInterval
+	if batchInterval < 0 {
+		batchInterval = 0
+	}
+
 	// Insert campaign as draft with auto_start_at = NOW() + 60 seconds (in UTC)
 	// Use first list_id for backwards compatibility, store all in list_ids
 	autoStartAt := time.Now().UTC().Add(60 * time.Second)
 	_, err := s.db.Exec(`
 		INSERT INTO campaigns (id, name, subject, from_name, from_email, reply_to,
 		                       html_content, text_content, list_id, list_ids, smtp_ids, send_rate, threads,
+		                       batch_size, batch_interval,
 		                       scheduled_at, track_opens, track_clicks, total_emails, status, auto_start_at, user_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'draft', $18, $19)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 'draft', $20, $21)
 	`, id, req.Name, req.Subject, req.FromName, req.FromEmail, req.ReplyTo,
 		req.HTMLContent, req.TextContent, listIDs[0], listIDsStr, smtpIDsStr, req.SendRate, threads,
+		batchSize, batchInterval,
 		req.ScheduledAt, req.TrackOpens, req.TrackClicks, totalEmails, autoStartAt, userID)
 
 	if err != nil {
@@ -453,10 +473,13 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 	var listIDsStr sql.NullString
 	var status string
 	var trackOpens, trackClicks bool
+	var batchSize, batchInterval int
 	err := s.db.QueryRow(`
-		SELECT list_id, COALESCE(list_ids, ''), from_email, from_name, reply_to, subject, html_content, text_content, status, COALESCE(track_opens, true), COALESCE(track_clicks, true)
+		SELECT list_id, COALESCE(list_ids, ''), from_email, from_name, reply_to, subject, html_content, text_content, status,
+		       COALESCE(track_opens, true), COALESCE(track_clicks, true),
+		       COALESCE(batch_size, 1), COALESCE(batch_interval, 0)
 		FROM campaigns WHERE id = $1 AND user_id = $2
-	`, id, userID).Scan(&listID, &listIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &status, &trackOpens, &trackClicks)
+	`, id, userID).Scan(&listID, &listIDsStr, &fromEmail, &fromName, &replyTo, &subject, &htmlContent, &textContent, &status, &trackOpens, &trackClicks, &batchSize, &batchInterval)
 
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Campaign not found"})
@@ -482,6 +505,11 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 		listIDs[i] = strings.TrimSpace(listIDs[i])
 	}
 
+	// Log batch settings
+	if batchInterval > 0 {
+		log.Printf("[Campaign %s] Batch mode: %d emails every %d seconds (~%d/min)", id[:8], batchSize, batchInterval, (batchSize*60)/batchInterval)
+	}
+
 	// Queue emails - try ClickHouse first, then PostgreSQL
 	count := 0
 	if s.ch != nil {
@@ -492,7 +520,7 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 		if err != nil {
 			log.Printf("❌ Failed to get emails from ClickHouse: %v", err)
 		} else {
-			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+			count = s.queueClickHouseEmails(chEmails, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, batchSize, batchInterval)
 		}
 	}
 
@@ -518,7 +546,7 @@ func (s *Server) startCampaign(c *fiber.Ctx) error {
 		}
 		defer rows.Close()
 
-		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain)
+		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, batchSize, batchInterval)
 	}
 
 	// Update campaign status
@@ -1171,10 +1199,10 @@ func (s *Server) resendToNonOpeners(c *fiber.Ctx) error {
 
 // queueEmails is a helper to queue emails from a rows result
 // Now processes in batches for better performance
-func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string, trackOpens, trackClicks bool, trackingDomain string) int {
+func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string, trackOpens, trackClicks bool, trackingDomain string, sendBatchSize, sendBatchInterval int) int {
 	count := 0
-	batchSize := 1000
-	batch := make([]*queue.EmailJob, 0, batchSize)
+	processBatchSize := 1000
+	batch := make([]*queue.EmailJob, 0, processBatchSize)
 
 	for rows.Next() {
 		var emailID, email string
@@ -1219,6 +1247,8 @@ func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, re
 			TrackOpens:     trackOpens,
 			TrackClicks:    trackClicks,
 			TrackingDomain: trackingDomain,
+			BatchSize:      sendBatchSize,
+			BatchInterval:  sendBatchInterval,
 			CreatedAt:      time.Now(),
 		}
 
@@ -1226,10 +1256,10 @@ func (s *Server) queueEmails(rows *sql.Rows, campaignID, fromEmail, fromName, re
 		count++
 
 		// Process batch when full
-		if len(batch) >= batchSize {
+		if len(batch) >= processBatchSize {
 			s.processBatch(batch, campaignID)
 			log.Printf("[Campaign %s] Queued %d emails...", campaignID[:8], count)
-			batch = make([]*queue.EmailJob, 0, batchSize)
+			batch = make([]*queue.EmailJob, 0, processBatchSize)
 		}
 	}
 
@@ -1285,10 +1315,10 @@ func (s *Server) processBatch(batch []*queue.EmailJob, campaignID string) {
 
 // queueClickHouseEmails is a helper to queue emails from ClickHouse results
 // Now processes in batches for better performance
-func (s *Server) queueClickHouseEmails(emails []clickhouse.CampaignEmail, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string, trackOpens, trackClicks bool, trackingDomain string) int {
+func (s *Server) queueClickHouseEmails(emails []clickhouse.CampaignEmail, campaignID, fromEmail, fromName, replyTo, subject, htmlContent, textContent string, trackOpens, trackClicks bool, trackingDomain string, sendBatchSize, sendBatchInterval int) int {
 	count := 0
-	batchSize := 1000
-	batch := make([]*queue.EmailJob, 0, batchSize)
+	processBatchSize := 1000
+	batch := make([]*queue.EmailJob, 0, processBatchSize)
 
 	for _, e := range emails {
 		variables := make(map[string]string)
@@ -1324,6 +1354,8 @@ func (s *Server) queueClickHouseEmails(emails []clickhouse.CampaignEmail, campai
 			TrackOpens:     trackOpens,
 			TrackClicks:    trackClicks,
 			TrackingDomain: trackingDomain,
+			BatchSize:      sendBatchSize,
+			BatchInterval:  sendBatchInterval,
 			CreatedAt:      time.Now(),
 		}
 
@@ -1331,10 +1363,10 @@ func (s *Server) queueClickHouseEmails(emails []clickhouse.CampaignEmail, campai
 		count++
 
 		// Process batch when full
-		if len(batch) >= batchSize {
+		if len(batch) >= processBatchSize {
 			s.processBatch(batch, campaignID)
 			log.Printf("[Campaign %s] Queued %d emails from ClickHouse...", campaignID[:8], count)
-			batch = make([]*queue.EmailJob, 0, batchSize)
+			batch = make([]*queue.EmailJob, 0, processBatchSize)
 		}
 	}
 

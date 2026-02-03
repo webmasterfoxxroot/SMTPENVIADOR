@@ -26,6 +26,8 @@ function CampaignEdit() {
     smtp_ids: [],
     send_rate: 0,
     threads: 10,
+    batch_size: 1,
+    batch_interval: 1,
     track_opens: true,
     track_clicks: true
   })
@@ -313,14 +315,36 @@ function CampaignEdit() {
               <p className="text-xs text-gray-500 mt-1">1-100 workers paralelos</p>
             </div>
             <div>
-              <label className="label">Taxa de Envio (emails/min, 0 = ilimitado)</label>
+              <label className="label">Emails por lote</label>
               <input
                 type="number"
-                value={form.send_rate}
-                onChange={(e) => setForm({ ...form, send_rate: parseInt(e.target.value) || 0 })}
+                value={form.batch_size}
+                onChange={(e) => setForm({ ...form, batch_size: Math.max(1, parseInt(e.target.value) || 1) })}
+                className="input"
+                min="1"
+              />
+              <p className="text-xs text-gray-500 mt-1">Quantos emails enviar antes de pausar</p>
+            </div>
+            <div>
+              <label className="label">Intervalo entre lotes (segundos)</label>
+              <input
+                type="number"
+                value={form.batch_interval}
+                onChange={(e) => setForm({ ...form, batch_interval: Math.max(0, parseInt(e.target.value) || 0) })}
                 className="input"
                 min="0"
               />
+              <p className="text-xs text-gray-500 mt-1">0 = sem pausa (máxima velocidade)</p>
+            </div>
+            <div className="col-span-3 bg-blue-50 rounded-lg p-3">
+              <p className="text-sm text-blue-800">
+                <strong>Velocidade estimada:</strong>{' '}
+                {form.batch_interval === 0 ? (
+                  'Máxima velocidade (sem limite)'
+                ) : (
+                  `~${Math.round((form.batch_size / form.batch_interval) * 60)} emails/min (${form.batch_size} email${form.batch_size > 1 ? 's' : ''} a cada ${form.batch_interval}s)`
+                )}
+              </p>
             </div>
           </div>
 

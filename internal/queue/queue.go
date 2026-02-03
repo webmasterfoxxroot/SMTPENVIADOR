@@ -44,6 +44,8 @@ type EmailJob struct {
 	TrackOpens     bool              `json:"track_opens"`
 	TrackClicks    bool              `json:"track_clicks"`
 	TrackingDomain string            `json:"tracking_domain"`
+	BatchSize      int               `json:"batch_size"`      // Emails per batch
+	BatchInterval  int               `json:"batch_interval"`  // Seconds between batches
 	Retries        int               `json:"retries"`
 	CreatedAt      time.Time         `json:"created_at"`
 }
@@ -234,6 +236,36 @@ func (m *Manager) IncrementRateLimitForType(smtpID string, queueType string) {
 	count, _ = m.client.Incr(m.ctx, keyHour).Result()
 	if count == 1 {
 		m.client.Expire(m.ctx, keyHour, 2*time.Hour)
+	}
+}
+
+// CheckCampaignBatchLimit checks if a campaign can send based on batch_size and batch_interval
+// Returns true if can send, false if should wait
+func (m *Manager) CheckCampaignBatchLimit(campaignID string, batchSize, batchInterval int) bool {
+	if batchInterval <= 0 {
+		return true // No interval = unlimited
+	}
+
+	// Key format: batch:campaignID:intervalNumber
+	intervalNum := time.Now().Unix() / int64(batchInterval)
+	key := fmt.Sprintf("batch:%s:%d", campaignID, intervalNum)
+	count, _ := m.client.Get(m.ctx, key).Int64()
+
+	return count < int64(batchSize)
+}
+
+// IncrementCampaignBatchCount increments the batch counter for a campaign
+func (m *Manager) IncrementCampaignBatchCount(campaignID string, batchInterval int) {
+	if batchInterval <= 0 {
+		return // No tracking needed
+	}
+
+	intervalNum := time.Now().Unix() / int64(batchInterval)
+	key := fmt.Sprintf("batch:%s:%d", campaignID, intervalNum)
+	count, _ := m.client.Incr(m.ctx, key).Result()
+	if count == 1 {
+		// Set expiry to 2x interval to ensure cleanup
+		m.client.Expire(m.ctx, key, time.Duration(batchInterval*2)*time.Second)
 	}
 }
 
