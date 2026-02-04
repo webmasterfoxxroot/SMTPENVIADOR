@@ -153,19 +153,31 @@ func isAdmin(c *fiber.Ctx) bool {
 	return false
 }
 
-// resetAdmin resets admin password (temporary endpoint)
+// resetAdmin creates first admin user (only works when no users exist)
 func (s *Server) resetAdmin(c *fiber.Ctx) error {
+	// SECURITY: Only allow if NO users exist in the database
+	var userCount int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&userCount)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to check users"})
+	}
+
+	if userCount > 0 {
+		return c.Status(403).JSON(fiber.Map{
+			"error": "Setup already completed. Users already exist in the system.",
+		})
+	}
+
 	// Generate hash for admin123
 	hash, err := bcrypt.GenerateFromPassword([]byte("admin123"), 10)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to generate hash"})
 	}
 
-	// Update or insert admin user
+	// Create first admin user
 	_, err = s.db.Exec(`
 		INSERT INTO users (id, email, password_hash, name, role, active)
 		VALUES (gen_random_uuid(), 'admin@admin.com', $1, 'Admin', 'admin', true)
-		ON CONFLICT (email) DO UPDATE SET password_hash = $1, active = true
 	`, string(hash))
 
 	if err != nil {
@@ -173,7 +185,7 @@ func (s *Server) resetAdmin(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"message":  "Admin password reset to: admin123",
+		"message":  "Admin user created successfully! Please change the password after login.",
 		"email":    "admin@admin.com",
 		"password": "admin123",
 	})
