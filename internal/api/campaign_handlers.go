@@ -1024,6 +1024,20 @@ func (s *Server) autoStartCampaignByID(id string) {
 	// Get tracking domain for campaign owner
 	trackingDomain := s.getTrackingDomainForCampaign(id)
 
+	// UPDATE STATUS TO RUNNING IMMEDIATELY before queueing
+	// This ensures the UI shows "Enviando" right away
+	_, err = s.db.Exec(`
+		UPDATE campaigns SET status = 'running', started_at = NOW(), auto_start_at = NULL
+		WHERE id = $1
+	`, id)
+	if err != nil {
+		fmt.Printf("[AutoStart] Error setting campaign %s to running: %v\n", id, err)
+		return
+	}
+	// Set campaign status in Redis cache immediately
+	s.queue.SetCampaignStatus(id, "running")
+	fmt.Printf("[AutoStart] Campaign %s status set to RUNNING - starting queue...\n", id)
+
 	// Queue emails - try ClickHouse first, then PostgreSQL
 	count := 0
 
@@ -1066,24 +1080,19 @@ func (s *Server) autoStartCampaignByID(id string) {
 		count = s.queueEmails(rows, id, fromEmail, fromName, replyTo, subject, htmlContent, textContent, trackOpens, trackClicks, trackingDomain, batchSize, batchInterval, smtpIDs)
 	}
 
-	// If no emails were queued, still start the campaign but log warning
+	// If no emails were queued, log warning
 	if count == 0 {
-		fmt.Printf("[AutoStart] WARNING: Campaign %s has 0 emails to queue - starting anyway\n", id)
+		fmt.Printf("[AutoStart] WARNING: Campaign %s has 0 emails to queue\n", id)
 	} else {
 		fmt.Printf("[AutoStart] Queued %d emails for campaign %s\n", count, id)
 	}
 
-	// Update campaign status
-	_, err = s.db.Exec(`
-		UPDATE campaigns SET status = 'running', started_at = NOW(), total_emails = $1, auto_start_at = NULL
-		WHERE id = $2
-	`, count, id)
+	// Update total_emails count (status already set to running above)
+	_, err = s.db.Exec(`UPDATE campaigns SET total_emails = $1 WHERE id = $2`, count, id)
 	if err != nil {
-		fmt.Printf("[AutoStart] Error updating campaign %s status: %v\n", id, err)
+		fmt.Printf("[AutoStart] Error updating campaign %s total_emails: %v\n", id, err)
 	} else {
-		// Set campaign status in Redis cache
-		s.queue.SetCampaignStatus(id, "running")
-		fmt.Printf("[AutoStart] Campaign %s started successfully!\n", id)
+		fmt.Printf("[AutoStart] Campaign %s queue complete - %d emails ready to send!\n", id, count)
 	}
 }
 
