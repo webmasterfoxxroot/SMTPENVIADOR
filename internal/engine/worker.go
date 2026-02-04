@@ -239,8 +239,12 @@ func (w *Worker) processCampaignJob() {
 	// Get job from CAMPAIGN queue only (BRPOP waits for jobs efficiently)
 	job, err := w.queue.PopCampaign()
 	if err != nil {
-		log.Printf("⚠️ Campaign Worker %d: Failed to pop job: %v", w.id, err)
-		time.Sleep(500 * time.Millisecond)
+		// Log only occasionally to avoid log spam during connection issues
+		if w.id == 0 {
+			log.Printf("⚠️ Campaign Worker %d: Failed to pop job: %v", w.id, err)
+		}
+		// Wait longer on Redis errors to allow recovery
+		time.Sleep(2 * time.Second)
 		return
 	}
 
@@ -258,8 +262,12 @@ func (w *Worker) processWarmupJob() {
 	// Get job from WARMUP queue only (BRPOP waits for jobs efficiently)
 	job, err := w.queue.PopWarmup()
 	if err != nil {
-		log.Printf("⚠️ Warmup Worker %d: Failed to pop job: %v", w.id, err)
-		time.Sleep(500 * time.Millisecond)
+		// Log only occasionally to avoid log spam during connection issues
+		if w.id == 0 {
+			log.Printf("⚠️ Warmup Worker %d: Failed to pop job: %v", w.id, err)
+		}
+		// Wait longer on Redis errors to allow recovery
+		time.Sleep(2 * time.Second)
 		return
 	}
 

@@ -706,6 +706,19 @@ func (s *Server) requeueCampaign(c *fiber.Ctx) error {
 
 // requeuePendingEmails re-queues all emails with status 'queued' for a campaign
 func (s *Server) requeuePendingEmails(campaignID string) int {
+	// Check if requeue is already in progress for this campaign (prevent duplicate requeue)
+	requeueKey := fmt.Sprintf("smtpenviador:requeue:lock:%s", campaignID)
+	if s.queue.IsRequeueInProgress(requeueKey) {
+		log.Printf("[Requeue %s] Skipping - requeue already in progress", campaignID[:8])
+		return 0
+	}
+
+	// Set requeue lock (expires in 5 minutes)
+	if err := s.queue.SetRequeueLock(requeueKey); err != nil {
+		log.Printf("⚠️ [Requeue %s] Failed to set lock: %v", campaignID[:8], err)
+	}
+	defer s.queue.ClearRequeueLock(requeueKey)
+
 	// Get campaign details including batch settings and SMTP IDs
 	var fromEmail, fromName, replyTo, subject, htmlContent, textContent, userID string
 	var smtpIDsStr sql.NullString
@@ -757,7 +770,7 @@ func (s *Server) requeuePendingEmails(campaignID string) int {
 	defer rows.Close()
 
 	count := 0
-	processBatchSize := 1000
+	processBatchSize := 5000 // Larger batch for pipeline efficiency
 	batch := make([]*queue.EmailJob, 0, processBatchSize)
 
 	for rows.Next() {
@@ -797,19 +810,24 @@ func (s *Server) requeuePendingEmails(campaignID string) int {
 		batch = append(batch, job)
 		count++
 
-		// Push batch to queue
+		// Push batch to queue using pipeline (much faster)
 		if len(batch) >= processBatchSize {
-			for _, j := range batch {
-				s.queue.PushCampaign(j)
+			if err := s.queue.PushCampaignBatch(batch); err != nil {
+				log.Printf("❌ [Requeue %s] Failed to push batch: %v", campaignID[:8], err)
+			} else {
+				log.Printf("[Requeue %s] Queued %d emails...", campaignID[:8], count)
 			}
-			log.Printf("[Requeue %s] Queued %d emails...", campaignID[:8], count)
 			batch = make([]*queue.EmailJob, 0, processBatchSize)
+			// Small pause to avoid overwhelming Redis
+			time.Sleep(50 * time.Millisecond)
 		}
 	}
 
-	// Push remaining batch
-	for _, j := range batch {
-		s.queue.PushCampaign(j)
+	// Push remaining batch using pipeline
+	if len(batch) > 0 {
+		if err := s.queue.PushCampaignBatch(batch); err != nil {
+			log.Printf("❌ [Requeue %s] Failed to push final batch: %v", campaignID[:8], err)
+		}
 	}
 
 	log.Printf("[Requeue %s] Total re-queued: %d emails", campaignID[:8], count)
