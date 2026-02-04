@@ -32,7 +32,7 @@ type EmailJob struct {
 	CampaignID     string            `json:"campaign_id"`
 	EmailID        string            `json:"email_id"`
 	SMTPID         string            `json:"smtp_id"`
-	SMTPIDs        []string          `json:"smtp_ids"`         // Allowed SMTPs for this job (user isolation)
+	SMTPIDs        []string          `json:"smtp_ids"` // Allowed SMTPs for this job (user isolation)
 	To             string            `json:"to"`
 	ToName         string            `json:"to_name"`
 	From           string            `json:"from"`
@@ -45,8 +45,8 @@ type EmailJob struct {
 	TrackOpens     bool              `json:"track_opens"`
 	TrackClicks    bool              `json:"track_clicks"`
 	TrackingDomain string            `json:"tracking_domain"`
-	BatchSize      int               `json:"batch_size"`      // Emails per batch
-	BatchInterval  int               `json:"batch_interval"`  // Seconds between batches
+	BatchSize      int               `json:"batch_size"`     // Emails per batch
+	BatchInterval  int               `json:"batch_interval"` // Seconds between batches
 	Retries        int               `json:"retries"`
 	CreatedAt      time.Time         `json:"created_at"`
 }
@@ -58,12 +58,21 @@ type Manager struct {
 
 func Connect(cfg *config.Config) (*redis.Client, error) {
 	client := redis.NewClient(&redis.Options{
-		Addr:     fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort),
-		Password: cfg.RedisPassword,
-		DB:       0,
+		Addr:         fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort),
+		Password:     cfg.RedisPassword,
+		DB:           0,
+		PoolSize:     100,             // Connection pool size
+		MinIdleConns: 10,              // Minimum idle connections
+		DialTimeout:  5 * time.Second, // Connection timeout
+		ReadTimeout:  3 * time.Second, // Read timeout
+		WriteTimeout: 3 * time.Second, // Write timeout
+		PoolTimeout:  4 * time.Second, // Pool timeout
+		MaxRetries:   3,               // Max retries on failure
 	})
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	if err := client.Ping(ctx).Err(); err != nil {
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
@@ -368,6 +377,54 @@ func (m *Manager) PushCampaignPriority(job *EmailJob) error {
 	return m.client.LPush(m.ctx, QueueCampaignPriority, data).Err()
 }
 
+// PushCampaignBatch adds multiple email jobs to the campaign queue using pipeline
+// This is much more efficient than pushing one at a time for large batches
+func (m *Manager) PushCampaignBatch(jobs []*EmailJob) error {
+	if len(jobs) == 0 {
+		return nil
+	}
+
+	// Group jobs by campaign ID for efficient queueing
+	campaignJobs := make(map[string][]interface{})
+	for _, job := range jobs {
+		data, err := json.Marshal(job)
+		if err != nil {
+			continue
+		}
+		queueKey := QueueCampaign
+		if job.CampaignID != "" {
+			queueKey = fmt.Sprintf("%s:%s", QueueCampaign, job.CampaignID)
+		}
+		campaignJobs[queueKey] = append(campaignJobs[queueKey], data)
+	}
+
+	// Use pipeline for batch operations (much faster)
+	pipe := m.client.Pipeline()
+	campaignIDs := make([]string, 0)
+
+	for queueKey, data := range campaignJobs {
+		pipe.LPush(m.ctx, queueKey, data...)
+		// Extract campaign ID from queue key
+		if len(queueKey) > len(QueueCampaign)+1 {
+			campaignID := queueKey[len(QueueCampaign)+1:]
+			campaignIDs = append(campaignIDs, campaignID)
+		}
+	}
+
+	// Register all campaigns as active
+	if len(campaignIDs) > 0 {
+		campaignIDsInterface := make([]interface{}, len(campaignIDs))
+		for i, id := range campaignIDs {
+			campaignIDsInterface[i] = id
+		}
+		pipe.SAdd(m.ctx, "smtpenviador:active_campaigns", campaignIDsInterface...)
+		pipe.Expire(m.ctx, "smtpenviador:active_campaigns", 1*time.Hour)
+	}
+
+	_, err := pipe.Exec(m.ctx)
+	return err
+}
+
 // PopCampaign gets the next job using round-robin across all active campaigns
 // Uses efficient BRPOP to avoid busy-loop when no jobs available
 func (m *Manager) PopCampaign() (*EmailJob, error) {
@@ -494,6 +551,25 @@ func (m *Manager) PopWarmup() (*EmailJob, error) {
 // GetWarmupQueueLength returns the length of the warmup queue
 func (m *Manager) GetWarmupQueueLength() (int64, error) {
 	return m.client.LLen(m.ctx, QueueWarmup).Result()
+}
+
+// ==================== REQUEUE LOCK (PREVENT DUPLICATE REQUEUE) ====================
+
+// IsRequeueInProgress checks if a requeue operation is already in progress
+func (m *Manager) IsRequeueInProgress(lockKey string) bool {
+	exists, _ := m.client.Exists(m.ctx, lockKey).Result()
+	return exists > 0
+}
+
+// SetRequeueLock sets a lock to prevent duplicate requeue operations
+func (m *Manager) SetRequeueLock(lockKey string) error {
+	// Lock expires in 5 minutes (max time for requeue operation)
+	return m.client.Set(m.ctx, lockKey, "1", 5*time.Minute).Err()
+}
+
+// ClearRequeueLock removes the requeue lock
+func (m *Manager) ClearRequeueLock(lockKey string) error {
+	return m.client.Del(m.ctx, lockKey).Err()
 }
 
 // ==================== CAMPAIGN STATUS CACHE ====================
