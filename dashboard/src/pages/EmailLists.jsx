@@ -557,18 +557,17 @@ function SplitUploadModal({ groups, onClose, onUploadStarted, onCreateGroup }) {
                   if (val === '') {
                     setNumParts('')
                   } else {
-                    const num = parseInt(val)
-                    setNumParts(Math.min(50, num))
+                    setNumParts(parseInt(val))
                   }
                 }}
                 onBlur={(e) => {
                   const num = parseInt(e.target.value) || 2
-                  setNumParts(Math.max(2, Math.min(50, num)))
+                  setNumParts(Math.max(2, num))
                 }}
                 className="input"
-                placeholder="Ex: 10"
+                placeholder="Ex: 100"
               />
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">partes (2-50)</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">partes (mínimo 2)</p>
             </div>
             <div>
               <label className="label">Delimitador</label>
