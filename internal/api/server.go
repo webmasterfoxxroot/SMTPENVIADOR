@@ -24,11 +24,11 @@ import (
 type Server struct {
 	app          *fiber.App
 	cfg          *config.Config
-	db           *sql.DB                  // PostgreSQL for relational data
-	ch           *clickhouse.Client       // ClickHouse for bulk data (emails, blacklist)
+	db           *sql.DB            // PostgreSQL for relational data
+	ch           *clickhouse.Client // ClickHouse for bulk data (emails, blacklist)
 	queue        *queue.Manager
 	engine       *engine.Engine
-	batchUpdater *tracking.BatchUpdater   // Batch updater for tracking events
+	batchUpdater *tracking.BatchUpdater // Batch updater for tracking events
 }
 
 // NewServer creates a new API server
@@ -59,6 +59,9 @@ func NewServer(cfg *config.Config, db *sql.DB, ch *clickhouse.Client, q *queue.M
 
 	// Start background scheduler for auto-starting campaigns
 	go server.runAutoStartScheduler()
+
+	// Start background job to auto-requeue running campaigns with empty queues
+	go server.runAutoRequeueScheduler()
 
 	// Resume any pending/orphaned import jobs from before restart
 	go server.resumeOrphanedImportJobs()
@@ -112,6 +115,70 @@ func (s *Server) checkAndAutoStartCampaigns() {
 			s.autoStartCampaignByID(id)
 		}
 	}
+}
+
+// runAutoRequeueScheduler periodically checks for running campaigns with empty queues and requeues them
+func (s *Server) runAutoRequeueScheduler() {
+	// Wait 10 seconds on startup to let system stabilize
+	time.Sleep(10 * time.Second)
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.checkAndRequeueRunningCampaigns()
+	}
+}
+
+// checkAndRequeueRunningCampaigns finds running campaigns with pending emails but empty queues
+func (s *Server) checkAndRequeueRunningCampaigns() {
+	// Find campaigns that are "running" but have pending emails (sent_count < total_emails)
+	rows, err := s.db.Query(`
+		SELECT id, name, sent_count, failed_count, total_emails
+		FROM campaigns
+		WHERE status = 'running'
+		AND (sent_count + failed_count) < total_emails
+	`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id, name string
+		var sentCount, failedCount, totalEmails int
+
+		if err := rows.Scan(&id, &name, &sentCount, &failedCount, &totalEmails); err != nil {
+			continue
+		}
+
+		// Check if this campaign has emails in the Redis queue
+		queueLen := s.getCampaignQueueLength(id)
+		pending := totalEmails - sentCount - failedCount
+
+		// If queue is empty but there are pending emails, requeue
+		if queueLen == 0 && pending > 0 {
+			fmt.Printf("[AutoRequeue] Campaign %s (%s) has %d pending emails but empty queue - requeuing\n",
+				id[:8], name, pending)
+
+			// Set campaign status to running in Redis cache (in case it was lost)
+			s.queue.SetCampaignStatus(id, "running")
+
+			// Requeue pending emails
+			count := s.requeuePendingEmails(id)
+			fmt.Printf("[AutoRequeue] Campaign %s: requeued %d emails\n", id[:8], count)
+		}
+	}
+}
+
+// getCampaignQueueLength returns the number of emails in queue for a specific campaign
+func (s *Server) getCampaignQueueLength(campaignID string) int64 {
+	queueKey := fmt.Sprintf("smtpenviador:queue:campaign:%s", campaignID)
+	length, err := s.queue.GetQueueLengthByKey(queueKey)
+	if err != nil {
+		return 0
+	}
+	return length
 }
 
 // checkAndStartScheduledCampaigns checks for scheduled campaigns and starts them when time comes
@@ -402,13 +469,13 @@ func (s *Server) setupRoutes() {
 	warmup.Post("/seeds/verify-all", s.verifyAllSeeds)                 // Verify all seeds
 	warmup.Delete("/seeds/with-errors", s.deleteErrorSeeds)            // Delete all error seeds
 	warmup.Post("/seeds/fix-orphaned", s.fixOrphanedSeeds)             // Fix seeds with NULL user_id
-	warmup.Post("/seeds/batch-pause", s.batchPauseSeeds)              // Pause selected seeds
-	warmup.Post("/seeds/batch-activate", s.batchActivateSeeds)        // Activate selected seeds
-	warmup.Post("/seeds/batch-delete", s.batchDeleteSeeds)            // Delete selected seeds
+	warmup.Post("/seeds/batch-pause", s.batchPauseSeeds)               // Pause selected seeds
+	warmup.Post("/seeds/batch-activate", s.batchActivateSeeds)         // Activate selected seeds
+	warmup.Post("/seeds/batch-delete", s.batchDeleteSeeds)             // Delete selected seeds
 	warmup.Put("/seeds/:id", s.updateWarmupSeed)
 	warmup.Delete("/seeds/:id", s.deleteWarmupSeed)
 	warmup.Post("/seeds/:id/test", s.testWarmupSeed)
-	warmup.Post("/seeds/:id/clean", s.cleanSeedEmails)              // Clean all emails from seed
+	warmup.Post("/seeds/:id/clean", s.cleanSeedEmails) // Clean all emails from seed
 	warmup.Post("/seeds/:id/toggle", s.toggleWarmupSeed)
 	warmup.Post("/seeds/:id/trigger", s.triggerSeedSend)
 	warmup.Post("/check-imap", s.triggerIMAPCheck)

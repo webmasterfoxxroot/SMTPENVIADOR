@@ -553,6 +553,11 @@ func (m *Manager) GetWarmupQueueLength() (int64, error) {
 	return m.client.LLen(m.ctx, QueueWarmup).Result()
 }
 
+// GetQueueLengthByKey returns the length of a specific queue by key
+func (m *Manager) GetQueueLengthByKey(key string) (int64, error) {
+	return m.client.LLen(m.ctx, key).Result()
+}
+
 // ==================== REQUEUE LOCK (PREVENT DUPLICATE REQUEUE) ====================
 
 // IsRequeueInProgress checks if a requeue operation is already in progress
