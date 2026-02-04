@@ -155,6 +155,9 @@ CREATE TABLE campaigns (
     bounce_count INTEGER DEFAULT 0,
     unsubscribe_count INTEGER DEFAULT 0,
     send_rate INTEGER DEFAULT 0, -- emails per minute, 0 = unlimited
+    threads INTEGER DEFAULT 10, -- number of parallel threads/workers (1-100)
+    batch_size INTEGER DEFAULT 1, -- emails per batch
+    batch_interval INTEGER DEFAULT 0, -- interval between batches in ms
     track_opens BOOLEAN DEFAULT true, -- enable/disable open tracking
     track_clicks BOOLEAN DEFAULT true, -- enable/disable click tracking
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
