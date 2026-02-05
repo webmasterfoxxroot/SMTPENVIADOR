@@ -227,11 +227,9 @@ func (w *Worker) processJob() {
 	w.updateSMTPStats(smtp.ID, true)
 	w.updateCampaignSentCount(job.CampaignID)
 
-	// Log every 100 emails for monitoring (reduces log overhead)
+	// Log each email sent for real-time monitoring
 	sent := w.stats.TotalSent.Load()
-	if sent%100 == 0 {
-		log.Printf("✅ [%d] emails enviados (último: %s via %s)", sent, job.To, smtp.Name)
-	}
+	log.Printf("📧 ✅ %s via %s (total: %d)", job.To, smtp.Name, sent)
 }
 
 // processCampaignJob processes jobs from the CAMPAIGN queue only
@@ -286,6 +284,19 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 	// This prevents emails from being sent when user pauses/cancels the campaign
 	if queueType == "campaign" && job.CampaignID != "" {
 		status := w.queue.GetCampaignStatus(job.CampaignID)
+
+		// If Redis cache is empty, check database as fallback
+		// This handles Redis restart, key expiration, or cache miss
+		if status == "" {
+			var dbStatus string
+			err := w.db.QueryRow(`SELECT status FROM campaigns WHERE id = $1`, job.CampaignID).Scan(&dbStatus)
+			if err == nil && dbStatus != "" {
+				status = dbStatus
+				// Cache it in Redis for future checks
+				w.queue.SetCampaignStatus(job.CampaignID, status)
+			}
+		}
+
 		if status == "paused" {
 			// Campaign is paused - push job back to queue and wait
 			w.pushToQueue(job, queueType)
@@ -296,6 +307,12 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 		if status == "cancelled" {
 			// Campaign is cancelled - discard the job (don't requeue)
 			w.updateEmailStatus(job.ID, "cancelled", "Campaign cancelled")
+			return
+		}
+		if status == "draft" || status == "completed" {
+			// Campaign is not active - discard the job
+			w.pushToQueue(job, queueType)
+			time.Sleep(5 * time.Second)
 			return
 		}
 	}
@@ -501,15 +518,17 @@ func (w *Worker) processJobWithQueue(job *queue.EmailJob, queueType string) {
 	w.updateSMTPStats(smtp.ID, true)
 	w.updateCampaignSentCount(job.CampaignID)
 
-	// Log every 100 emails for monitoring (reduces log overhead)
+	// Log each email sent for real-time monitoring
 	sent := w.stats.TotalSent.Load()
-	if sent%100 == 0 {
-		prefix := "📧"
-		if queueType == "warmup" {
-			prefix = "🔥"
-		}
-		log.Printf("%s [%d] emails enviados (último: %s via %s)", prefix, sent, job.To, smtp.Name)
+	prefix := "📧"
+	if queueType == "warmup" {
+		prefix = "🔥"
 	}
+	campaignShort := ""
+	if len(job.CampaignID) >= 8 {
+		campaignShort = job.CampaignID[:8]
+	}
+	log.Printf("%s [%s] ✅ %s via %s (total: %d)", prefix, campaignShort, job.To, smtp.Name, sent)
 }
 
 // pushToQueue pushes a job back to the appropriate queue
